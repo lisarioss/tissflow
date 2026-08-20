@@ -24,6 +24,18 @@ db.exec(`
     role TEXT NOT NULL CHECK (role IN ('admin', 'faturamento', 'recepcao', 'medico')),
     UNIQUE (clinic_id, email)
   );
+  CREATE TABLE IF NOT EXISTS patients (
+    id TEXT PRIMARY KEY,
+    clinic_id TEXT NOT NULL REFERENCES clinics(id),
+    name TEXT NOT NULL,
+    birth_date TEXT NOT NULL,
+    insurer TEXT NOT NULL,
+    ans_code TEXT,
+    card_number TEXT NOT NULL,
+    plan TEXT NOT NULL,
+    plan_validity TEXT NOT NULL,
+    UNIQUE (clinic_id, card_number)
+  );
   CREATE TABLE IF NOT EXISTS guides (
     id TEXT PRIMARY KEY,
     clinic_id TEXT NOT NULL REFERENCES clinics(id),
@@ -47,6 +59,16 @@ db.exec(`
   );
 `);
 
+const guideColumns = db.prepare('PRAGMA table_info(guides)').all();
+if (!guideColumns.some(column => column.name === 'sessions_json')) {
+  db.exec("ALTER TABLE guides ADD COLUMN sessions_json TEXT NOT NULL DEFAULT '[]'");
+}
+db.prepare("UPDATE guides SET sessions_json = ? WHERE id = 'G-2026-00481' AND sessions_json = '[]'").run(JSON.stringify([
+  { date: '2026-08-05', start: '08:00', end: '09:00', type: 'Terapia ABA', procedure: '50000000 - Atendimento terapêutico ABA', professional: 'Marina Souza' },
+  { date: '2026-08-07', start: '08:00', end: '09:00', type: 'Terapia ABA', procedure: '50000000 - Atendimento terapêutico ABA', professional: 'Marina Souza' },
+  { date: '2026-08-12', start: '08:00', end: '09:00', type: 'Terapia ABA', procedure: '50000000 - Atendimento terapêutico ABA', professional: 'Marina Souza' }
+]));
+
 const clinicCount = db.prepare('SELECT COUNT(*) AS count FROM clinics').get().count;
 if (clinicCount === 0) {
   const insertClinic = db.prepare('INSERT INTO clinics (id, name, unit) VALUES (?, ?, ?)');
@@ -64,5 +86,10 @@ if (clinicCount === 0) {
   });
   seed();
 }
+
+const insertDemoPatient = db.prepare('INSERT OR IGNORE INTO patients (id, clinic_id, name, birth_date, insurer, ans_code, card_number, plan, plan_validity) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+insertDemoPatient.run('P-001', 'sabia', 'Helena Martins', '1988-03-14', 'Unimed', '004701', '0123456789012', 'Unimed Nacional Apartamento', '2027-12-31');
+insertDemoPatient.run('P-002', 'sabia', 'Rafael Nogueira', '2014-09-22', 'Bradesco Saúde', '005711', '9876543210001', 'Bradesco Efetivo', '2027-06-30');
+insertDemoPatient.run('P-003', 'sabia', 'Bianca Torres', '1992-11-08', 'SulAmérica', '006246', '2468135790004', 'SulAmérica Exato', '2026-12-31');
 
 module.exports = db;

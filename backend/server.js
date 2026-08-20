@@ -43,20 +43,47 @@ app.post('/api/auth/login', (req, res) => {
   res.json({ token, user: { id: user.id, name: user.name, email: user.email, role: user.role }, clinicId: user.clinic_id });
 });
 
-app.get('/api/guides', auth, (req, res) => {
-  const guides = db.prepare('SELECT id, patient, procedure, insurer, status, value_cents AS valueCents, created_at AS createdAt FROM guides WHERE clinic_id = ? ORDER BY created_at DESC').all(req.session.clinicId);
-  res.json(guides);
+app.get('/api/patients', auth, (req, res) => {
+  const patients = db.prepare('SELECT id, name, birth_date AS birthDate, insurer, ans_code AS ansCode, card_number AS cardNumber, plan, plan_validity AS planValidity FROM patients WHERE clinic_id = ? ORDER BY name').all(req.session.clinicId);
+  res.json(patients);
 });
 
-app.post('/api/guides', auth, (req, res) => {
-  const { id, patient, procedure, insurer, status = 'sent', value } = req.body;
-  if (!id || !patient || !procedure || !insurer) return res.status(400).json({ error: 'Paciente, procedimento, convênio e identificador são obrigatórios.' });
+app.post('/api/patients', auth, (req, res) => {
+  const { id, name, birthDate, insurer, ansCode, cardNumber, plan, planValidity } = req.body;
+  if (!id || !name || !birthDate || !insurer || !cardNumber || !plan || !planValidity) return res.status(400).json({ error: 'Nome, nascimento, convênio, carteira, plano e validade são obrigatórios.' });
   try {
-    db.prepare('INSERT INTO guides (id, clinic_id, patient, procedure, insurer, status, value_cents) VALUES (?, ?, ?, ?, ?, ?, ?)').run(id, req.session.clinicId, patient, procedure, insurer, status, moneyToCents(value));
+    db.prepare('INSERT INTO patients (id, clinic_id, name, birth_date, insurer, ans_code, card_number, plan, plan_validity) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, req.session.clinicId, name, birthDate, insurer, ansCode || '', cardNumber, plan, planValidity);
     res.status(201).json({ id });
   } catch (error) {
     res.status(409).json({ error: error.message });
   }
+});
+
+app.get('/api/guides', auth, (req, res) => {
+  const guides = db.prepare('SELECT id, patient, procedure, insurer, status, value_cents AS valueCents, sessions_json AS sessionsJson, created_at AS createdAt FROM guides WHERE clinic_id = ? ORDER BY created_at DESC').all(req.session.clinicId).map(guide => ({ ...guide, sessions: JSON.parse(guide.sessionsJson || '[]') }));
+  res.json(guides);
+});
+
+app.post('/api/guides', auth, (req, res) => {
+  const { id, patient, procedure, insurer, status = 'sent', value, sessions = [] } = req.body;
+  if (!id || !patient || !procedure || !insurer) return res.status(400).json({ error: 'Paciente, procedimento, convênio e identificador são obrigatórios.' });
+  try {
+    db.prepare('INSERT INTO guides (id, clinic_id, patient, procedure, insurer, status, value_cents, sessions_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(id, req.session.clinicId, patient, procedure, insurer, status, moneyToCents(value), JSON.stringify(sessions));
+    res.status(201).json({ id });
+  } catch (error) {
+    res.status(409).json({ error: error.message });
+  }
+});
+
+app.patch('/api/guides/:id/sessions/:index', auth, (req, res) => {
+  const guide = db.prepare('SELECT sessions_json FROM guides WHERE id = ? AND clinic_id = ?').get(req.params.id, req.session.clinicId);
+  if (!guide) return res.status(404).json({ error: 'Guia não encontrada.' });
+  const sessions = JSON.parse(guide.sessions_json || '[]');
+  const index = Number(req.params.index);
+  if (!sessions[index]) return res.status(404).json({ error: 'Atendimento não encontrado.' });
+  sessions[index].procedure = req.body.procedure;
+  db.prepare('UPDATE guides SET sessions_json = ?, procedure = ? WHERE id = ? AND clinic_id = ?').run(JSON.stringify(sessions), String(req.body.procedure || '').split(' - ')[1] || req.body.procedure, req.params.id, req.session.clinicId);
+  res.json({ id: req.params.id, index, procedure: sessions[index].procedure });
 });
 
 app.get('/api/invoices', auth, (req, res) => {

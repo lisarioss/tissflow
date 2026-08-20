@@ -32,6 +32,24 @@
 .guide-plan-header small { display:block; margin-top:4px; }
 .guide-code { margin-left:auto; color:var(--muted); font:10px 'DM Mono', monospace; }
 .guide-code b { color:var(--ink); }
+.session-entry { padding:16px; margin-top:4px; border:1px solid var(--line); border-radius:7px; background:#f8fbf9; }
+.session-entry .form-grid { margin-bottom:14px; }
+.session-list { margin-top:14px; border-top:1px solid var(--line); }
+.session-row { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 0; border-bottom:1px solid #eef1ef; }
+.session-row strong { display:block; font-size:11px; }
+.session-row small { font-size:10px; }
+.session-empty { color:var(--muted); font-size:10px; margin:14px 0 2px; }
+.folder-actions { display:flex; gap:9px; }
+.folder-summary { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:12px; margin-bottom:20px; }
+.folder-summary > div { background:#fff; border:1px solid var(--line); border-radius:7px; padding:15px; }
+.folder-summary span { display:block; color:var(--muted); font-size:10px; margin-bottom:7px; }
+.folder-summary strong { font-size:12px; }
+.folder-service { border:1px solid #dfe7e1; border-radius:5px; padding:8px; background:#fbfcfb; color:var(--ink); font:10px Manrope, sans-serif; }
+.patient-form { margin-top:24px; overflow:hidden; }
+.patient-form .panel-header { border-bottom:1px solid var(--line); }
+.patient-form .form-section { padding:20px 21px 0; margin:0; border:0; }
+@media (max-width:900px) { .folder-summary { grid-template-columns:repeat(2, minmax(0, 1fr)); } }
+@media (max-width:620px) { .folder-actions { margin-top:18px; } .folder-summary { grid-template-columns:1fr; } }
 @media (max-width:620px) { .guide-plan-header { align-items:flex-start; flex-wrap:wrap; } .guide-code { width:100%; margin-left:0; } }
 @media (max-width:900px) { .sidebar { width:205px; } .topbar { padding:0 24px; } .page { padding:32px 24px 45px; } .stats-grid { grid-template-columns:repeat(2,1fr); } .content-grid, .agenda-layout { grid-template-columns:1fr; } }
 @media (max-width:620px) { .sidebar { width:62px; padding:20px 8px; } .brand { padding:0 9px 30px; } .brand span:last-child, .workspace-switcher span:not(.avatar), .nav-label, .nav-item b, .nav-item { font-size:0; } .workspace-switcher { padding:9px; justify-content:center; } .workspace-switcher .chevron, .sidebar-bottom, .nav-item span { display:none; } .nav-item { display:grid; place-items:center; padding:11px; } .nav-item::first-letter { font-size:17px; } .brand-mark { margin:auto; } .topbar { padding:0 16px; } .user-button > span:not(.avatar) { display:none; } .page { padding:26px 16px 35px; } .page-heading { display:block; } .page-heading .primary-button { margin-top:18px; } h1 { font-size:25px; } .stats-grid { gap:9px; } .stat-card { padding:14px; } .stat-value { font-size:22px; } .form-grid, .appointment-fields { grid-template-columns:1fr; } .panel { overflow:hidden; } table { min-width:590px; } .panel:has(table) { overflow-x:auto; } .appointment-row { gap:11px; padding:14px; } .appointment-professional { display:none; } }

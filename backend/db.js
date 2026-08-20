@@ -1,6 +1,10 @@
 const Database = require('better-sqlite3');
 const bcrypt = require('bcryptjs');
 const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '.env') });
+
+const demoPassword = process.env.DEMO_PASSWORD;
+if (!demoPassword) throw new Error('DEMO_PASSWORD não configurado no arquivo backend/.env.');
 
 const db = new Database(path.join(__dirname, 'tiss-flow.db'));
 db.pragma('foreign_keys = ON');
@@ -52,9 +56,9 @@ if (clinicCount === 0) {
   const seed = db.transaction(() => {
     insertClinic.run('sabia', 'Clínica Sabiá', 'Unidade Centro');
     insertClinic.run('vital', 'Instituto Vital', 'Unidade Jardins');
-    insertUser.run('marina', 'sabia', 'Marina Souza', 'marina@clinicasabia.com.br', bcrypt.hashSync('demo123', 10), 'admin');
-    insertUser.run('fernando', 'sabia', 'Fernando Diniz', 'faturamento@clinicasabia.com.br', bcrypt.hashSync('demo123', 10), 'faturamento');
-    insertUser.run('paulo', 'vital', 'Paulo Mendes', 'paulo@institutovital.com.br', bcrypt.hashSync('demo123', 10), 'admin');
+    insertUser.run('marina', 'sabia', 'Marina Souza', 'marina@clinicasabia.com.br', bcrypt.hashSync(demoPassword, 10), 'admin');
+    insertUser.run('fernando', 'sabia', 'Fernando Diniz', 'faturamento@clinicasabia.com.br', bcrypt.hashSync(demoPassword, 10), 'faturamento');
+    insertUser.run('paulo', 'vital', 'Paulo Mendes', 'paulo@institutovital.com.br', bcrypt.hashSync(demoPassword, 10), 'admin');
     insertGuide.run('G-2026-00481', 'sabia', 'Helena Martins', 'Consulta ambulatorial', 'Unimed', 'approved', 18000);
     insertGuide.run('G-2026-00478', 'sabia', 'João Pedro Lima', 'Consulta ambulatorial', 'Amil', 'sent', 18000);
   });

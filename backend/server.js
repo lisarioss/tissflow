@@ -3,11 +3,14 @@ const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '.env') });
 const db = require('./db');
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
-const jwtSecret = process.env.JWT_SECRET || 'tiss-flow-development-secret';
+const jwtSecret = process.env.JWT_SECRET;
+
+if (!jwtSecret) throw new Error('JWT_SECRET não configurado no arquivo backend/.env.');
 
 app.use(cors());
 app.use(express.json());

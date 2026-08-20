@@ -21,6 +21,7 @@ No PowerShell do Windows, use `npm.cmd` caso a política de execução bloqueie 
 ```powershell
 cd backend
 npm.cmd install
+Copy-Item .env.example .env
 npm.cmd start
 ```
 

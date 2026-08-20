@@ -1,4 +1,5 @@
 backend/node_modules/
+backend/.env
 backend/tiss-flow.db
 *.db-wal
 *.db-shm

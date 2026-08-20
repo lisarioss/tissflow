@@ -28,6 +28,9 @@
 .report-payment-row time { color:var(--muted); font-size:10px; }
 .guide-plan-header { display:flex; align-items:center; gap:13px; padding:16px 18px; margin:-24px -24px 24px; border-bottom:1px solid var(--line); background:#f7faf8; }
 .plan-logo { min-width:112px; max-width:180px; padding:10px 12px; border-radius:6px; background:var(--green); color:white; text-align:center; font-size:12px; font-weight:800; letter-spacing:.4px; }
+.plan-logo img { display:block; width:150px; height:50px; object-fit:contain; border-radius:5px; }
+.plan-logo img[hidden] { display:none; }
+.plan-logo span[hidden] { display:none; }
 .guide-plan-header strong { display:block; font-size:13px; }
 .guide-plan-header small { display:block; margin-top:4px; }
 .guide-code { margin-left:auto; color:var(--muted); font:10px 'DM Mono', monospace; }

@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="TISS Flow - operação de faturamento para clínicas" />
+    <title>TISS Flow | Faturamento clínico</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <section class="login-screen" id="login-screen">
+      <div class="login-brand"><span class="brand-mark">+</span><span>TISS <em>flow</em></span></div>
+      <div class="login-panel">
+        <p class="eyebrow">Espaço seguro da clínica</p>
+        <h1>Entre na sua operação.</h1>
+        <p class="login-copy">Acesse guias, agenda e faturamento da sua clínica em um só lugar.</p>
+        <form id="login-form">
+          <div class="field"><label for="login-clinic">Clínica</label><select id="login-clinic" name="clinicId" required><option value="sabia">Clínica Sabiá</option><option value="vital">Instituto Vital</option></select></div>
+          <div class="field"><label for="login-email">E-mail</label><input id="login-email" name="email" type="email" value="marina@clinicasabia.com.br" required /></div>
+          <div class="field"><label for="login-password">Senha</label><input id="login-password" name="password" type="password" value="demo123" required /></div>
+          <button class="primary-button wide" type="submit">Entrar no espaço da clínica →</button>
+        </form>
+        <p class="login-hint">Demo: use qualquer e-mail e senha com 4 ou mais caracteres.</p>
+      </div>
+      <span class="login-footer">TISS flow · gestão clínica multiunidade</span>
+    </section>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand"><span class="brand-mark">+</span><span>TISS <em>flow</em></span></div>
+        <div class="workspace-switcher"><span class="avatar">CS</span><span><strong>Clínica Sabiá</strong><small>Unidade Centro</small></span><span class="chevron">⌄</span></div>
+        <nav class="nav" aria-label="Navegação principal">
+          <p class="nav-label">Operação</p>
+          <button class="nav-item active" data-view="overview"><span>◈</span> Visão geral</button>
+          <button class="nav-item" data-view="agenda"><span>◷</span> Agenda</button>
+          <button class="nav-item" data-view="guides"><span>▣</span> Guias TISS <b>12</b></button>
+          <button class="nav-item" data-view="patients"><span>◎</span> Pacientes</button>
+          <button class="nav-item" data-view="convenios"><span>◇</span> Convênios</button>
+          <p class="nav-label spaced">Gestão</p>
+          <button class="nav-item" data-view="reports"><span>↗</span> Relatórios</button>
+          <button class="nav-item" data-view="settings"><span>⚙</span> Configurações</button>
+        </nav>
+        <div class="sidebar-bottom"><div class="help-card"><span class="help-icon">?</span><div><strong>Precisa de ajuda?</strong><small>Fale com o suporte</small></div><span>›</span></div><div class="profile"><span class="avatar dark">MS</span><span><strong>Marina Souza</strong><small>Administradora</small></span><span class="more">•••</span></div></div>
+      </aside>
+
+      <main class="main-content">
+        <header class="topbar"><div class="breadcrumbs"><span>Clínica Sabiá</span><i>/</i><strong id="breadcrumb">Visão geral</strong></div><div class="top-actions"><button class="icon-button" aria-label="Notificações">♧<span class="notification-dot"></span></button><button class="user-button" data-action="logout" title="Encerrar sessão"><span class="avatar small">MS</span><span>Marina Souza</span><span>⌄</span></button></div></header>
+        <section class="page" id="app-view"></section>
+      </main>
+    </div>
+    <div class="toast" id="toast" role="status"></div>
+    <script src="app.js"></script>
+  </body>
+</html>

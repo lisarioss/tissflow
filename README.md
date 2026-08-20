@@ -4,7 +4,35 @@ Protótipo de portfólio para operação de faturamento clínico. A interface us
 
 ## Executar
 
-Abra `index.html` no navegador. Não há dependências ou dados reais.
+Para usar apenas a demonstração visual, abra `frontend/index.html` no navegador.
+
+Para iniciar a API local:
+
+É necessário ter o Node.js 20 LTS instalado e disponível no PATH. O projeto usa `better-sqlite3`, que ainda pode exigir compilação manual no Node 24.
+
+```bash
+cd backend
+npm install
+npm start
+```
+
+No PowerShell do Windows, use `npm.cmd` caso a política de execução bloqueie o `npm.ps1`:
+
+```powershell
+cd backend
+npm.cmd install
+npm.cmd start
+```
+
+A API ficará disponível em `http://localhost:3000` e servirá o front-end automaticamente. O banco SQLite `backend/tiss-flow.db` é criado na primeira execução.
+
+## Estrutura
+
+```text
+frontend/   interface HTML, CSS e JavaScript
+backend/    API Express, autenticação e banco SQLite
+README.md   documentação do projeto
+```
 
 ## Acesso da demonstração
 
@@ -12,7 +40,7 @@ Escolha uma clínica na tela de login. O ambiente possui dois espaços fictício
 
 ## Próximos passos
 
-- API para persistir pacientes, guias e convênios.
+- Conectar o front-end à API e substituir o `localStorage`.
 - Validador baseado na versão TISS vigente.
 - Geração real de XML e testes de contrato (o download atual é uma demonstração client-side).
 - Login, permissões e trilha de auditoria.

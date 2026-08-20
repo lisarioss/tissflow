@@ -42,6 +42,22 @@ db.exec(`
     patient TEXT NOT NULL,
     procedure TEXT NOT NULL,
     insurer TEXT NOT NULL,
+    competence TEXT,
+    ans_code TEXT,
+    card_number TEXT,
+    patient_birth TEXT,
+    patient_plan TEXT,
+    plan_validity TEXT,
+    authorization_number TEXT,
+    operator_guide TEXT,
+    provider_name TEXT,
+    provider_cnpj TEXT,
+    professional TEXT,
+    professional_register TEXT,
+    attendance_type TEXT,
+    service_code TEXT,
+    quantity INTEGER NOT NULL DEFAULT 1,
+    unit_value_cents INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'sent',
     value_cents INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -60,9 +76,27 @@ db.exec(`
 `);
 
 const guideColumns = db.prepare('PRAGMA table_info(guides)').all();
-if (!guideColumns.some(column => column.name === 'sessions_json')) {
-  db.exec("ALTER TABLE guides ADD COLUMN sessions_json TEXT NOT NULL DEFAULT '[]'");
-}
+const guideColumnNames = new Set(guideColumns.map(column => column.name));
+const guideMigrations = {
+  sessions_json: "ALTER TABLE guides ADD COLUMN sessions_json TEXT NOT NULL DEFAULT '[]'",
+  competence: 'ALTER TABLE guides ADD COLUMN competence TEXT',
+  ans_code: 'ALTER TABLE guides ADD COLUMN ans_code TEXT',
+  card_number: 'ALTER TABLE guides ADD COLUMN card_number TEXT',
+  patient_birth: 'ALTER TABLE guides ADD COLUMN patient_birth TEXT',
+  patient_plan: 'ALTER TABLE guides ADD COLUMN patient_plan TEXT',
+  plan_validity: 'ALTER TABLE guides ADD COLUMN plan_validity TEXT',
+  authorization_number: 'ALTER TABLE guides ADD COLUMN authorization_number TEXT',
+  operator_guide: 'ALTER TABLE guides ADD COLUMN operator_guide TEXT',
+  provider_name: 'ALTER TABLE guides ADD COLUMN provider_name TEXT',
+  provider_cnpj: 'ALTER TABLE guides ADD COLUMN provider_cnpj TEXT',
+  professional: 'ALTER TABLE guides ADD COLUMN professional TEXT',
+  professional_register: 'ALTER TABLE guides ADD COLUMN professional_register TEXT',
+  attendance_type: 'ALTER TABLE guides ADD COLUMN attendance_type TEXT',
+  service_code: 'ALTER TABLE guides ADD COLUMN service_code TEXT',
+  quantity: 'ALTER TABLE guides ADD COLUMN quantity INTEGER NOT NULL DEFAULT 1',
+  unit_value_cents: 'ALTER TABLE guides ADD COLUMN unit_value_cents INTEGER NOT NULL DEFAULT 0'
+};
+Object.entries(guideMigrations).forEach(([column, statement]) => { if (!guideColumnNames.has(column)) db.exec(statement); });
 db.prepare("UPDATE guides SET sessions_json = ? WHERE id = 'G-2026-00481' AND sessions_json = '[]'").run(JSON.stringify([
   { date: '2026-08-05', start: '08:00', end: '09:00', type: 'Terapia ABA', procedure: '50000000 - Atendimento terapêutico ABA', professional: 'Marina Souza' },
   { date: '2026-08-07', start: '08:00', end: '09:00', type: 'Terapia ABA', procedure: '50000000 - Atendimento terapêutico ABA', professional: 'Marina Souza' },

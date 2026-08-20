@@ -63,7 +63,7 @@ async function apiRequest(path, options = {}) {
   if (!response.ok) throw new Error(payload.error || 'Não foi possível comunicar com a API.');
   return payload;
 }
-function normalizeGuide(guide) { return { ...guide, sessions: guide.sessions || [], status: guide.status, label: { sent: 'Enviada', review: 'Em análise', approved: 'Aprovada', error: 'Com pendência' }[guide.status] || guide.status, value: formatMoney((guide.valueCents || 0) / 100), date: guide.createdAt ? new Date(guide.createdAt).toLocaleDateString('pt-BR') : '' }; }
+function normalizeGuide(guide) { return { ...guide, sessions: guide.sessions || [], status: guide.status, label: { sent: 'Enviada', review: 'Em análise', approved: 'Aprovada', error: 'Com pendência' }[guide.status] || guide.status, value: formatMoney((guide.valueCents || 0) / 100), unitValue: Number(guide.unitValueCents || 0) / 100, date: guide.createdAt ? new Date(guide.createdAt).toLocaleDateString('pt-BR') : '' }; }
 function normalizeInvoice(invoice) { return { ...invoice, amount: Number(invoice.amountCents || 0) / 100 }; }
 async function loadApiData() {
   if (!activeSession?.token) return;
@@ -280,7 +280,30 @@ document.addEventListener('submit', async event => {
   if (!sessions.length) { showToast('Adicione pelo menos um atendimento à competência antes de enviar.'); return; }
   const guideId = `G-2026-${String(guides.length + 482).padStart(5, '0')}`;
   try {
-    await apiRequest('/guides', { method: 'POST', body: JSON.stringify({ id: guideId, patient: data.patient, procedure: data.procedure, insurer: data.insurer, value: Number(data.value || 0) * sessions.length, sessions }) });
+    await apiRequest('/guides', { method: 'POST', body: JSON.stringify({
+      id: guideId,
+      patient: data.patient,
+      procedure: data.procedure,
+      insurer: data.insurer,
+      competence: data.competence,
+      ansCode: data.ansCode,
+      cardNumber: data.cardNumber,
+      patientBirth: data.patientBirth,
+      patientPlan: data.patientPlan,
+      planValidity: data.planValidity,
+      authorizationNumber: data.authorizationNumber,
+      operatorGuide: data.operatorGuide,
+      providerName: data.providerName,
+      providerCnpj: data.providerCnpj,
+      professional: data.professional,
+      professionalRegister: data.professionalRegister,
+      attendanceType: data.type,
+      serviceCode: data.serviceCode,
+      quantity: sessions.length,
+      unitValue: Number(data.value || 0),
+      value: Number(data.value || 0) * sessions.length,
+      sessions
+    }) });
     const apiGuides = await apiRequest('/guides');
     guides = apiGuides.map(normalizeGuide);
     localStorage.removeItem(clinicStorageKey('draft'));

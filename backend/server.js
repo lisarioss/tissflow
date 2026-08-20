@@ -44,7 +44,7 @@ app.post('/api/auth/login', (req, res) => {
 });
 
 app.get('/api/patients', auth, (req, res) => {
-  const patients = db.prepare('SELECT id, name, birth_date AS birthDate, insurer, ans_code AS ansCode, card_number AS cardNumber, plan, plan_validity AS planValidity FROM patients WHERE clinic_id = ? ORDER BY name').all(req.session.clinicId);
+  const patients = db.prepare('SELECT id, name, birth_date AS birthDate, insurer, ans_code AS ansCode, card_number AS cardNumber, plan, plan_validity AS planValidity, active FROM patients WHERE clinic_id = ? ORDER BY active DESC, name').all(req.session.clinicId);
   res.json(patients);
 });
 
@@ -52,11 +52,19 @@ app.post('/api/patients', auth, (req, res) => {
   const { id, name, birthDate, insurer, ansCode, cardNumber, plan, planValidity } = req.body;
   if (!id || !name || !birthDate || !insurer || !cardNumber || !plan || !planValidity) return res.status(400).json({ error: 'Nome, nascimento, convênio, carteira, plano e validade são obrigatórios.' });
   try {
-    db.prepare('INSERT INTO patients (id, clinic_id, name, birth_date, insurer, ans_code, card_number, plan, plan_validity) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, req.session.clinicId, name, birthDate, insurer, ansCode || '', cardNumber, plan, planValidity);
+    db.prepare('INSERT INTO patients (id, clinic_id, name, birth_date, insurer, ans_code, card_number, plan, plan_validity, active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)').run(id, req.session.clinicId, name, birthDate, insurer, ansCode || '', cardNumber, plan, planValidity);
     res.status(201).json({ id });
   } catch (error) {
     res.status(409).json({ error: error.message });
   }
+});
+
+app.patch('/api/patients/:id', auth, (req, res) => {
+  const { name, birthDate, insurer, ansCode, cardNumber, plan, planValidity, active = 1 } = req.body;
+  if (!name || !birthDate || !insurer || !cardNumber || !plan || !planValidity) return res.status(400).json({ error: 'Nome, nascimento, convênio, carteira, plano e validade são obrigatórios.' });
+  const result = db.prepare('UPDATE patients SET name = ?, birth_date = ?, insurer = ?, ans_code = ?, card_number = ?, plan = ?, plan_validity = ?, active = ? WHERE id = ? AND clinic_id = ?').run(name, birthDate, insurer, ansCode || '', cardNumber, plan, planValidity, active ? 1 : 0, req.params.id, req.session.clinicId);
+  if (!result.changes) return res.status(404).json({ error: 'Paciente não encontrado.' });
+  res.json({ id: req.params.id });
 });
 
 app.get('/api/guides', auth, (req, res) => {

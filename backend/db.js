@@ -34,6 +34,7 @@ db.exec(`
     card_number TEXT NOT NULL,
     plan TEXT NOT NULL,
     plan_validity TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1,
     UNIQUE (clinic_id, card_number)
   );
   CREATE TABLE IF NOT EXISTS guides (
@@ -97,6 +98,8 @@ const guideMigrations = {
   unit_value_cents: 'ALTER TABLE guides ADD COLUMN unit_value_cents INTEGER NOT NULL DEFAULT 0'
 };
 Object.entries(guideMigrations).forEach(([column, statement]) => { if (!guideColumnNames.has(column)) db.exec(statement); });
+const patientColumns = new Set(db.prepare('PRAGMA table_info(patients)').all().map(column => column.name));
+if (!patientColumns.has('active')) db.exec('ALTER TABLE patients ADD COLUMN active INTEGER NOT NULL DEFAULT 1');
 db.prepare("UPDATE guides SET sessions_json = ? WHERE id = 'G-2026-00481' AND sessions_json = '[]'").run(JSON.stringify([
   { date: '2026-08-05', start: '08:00', end: '09:00', type: 'Terapia ABA', procedure: '50000000 - Atendimento terapêutico ABA', professional: 'Marina Souza' },
   { date: '2026-08-07', start: '08:00', end: '09:00', type: 'Terapia ABA', procedure: '50000000 - Atendimento terapêutico ABA', professional: 'Marina Souza' },

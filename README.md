@@ -4,7 +4,7 @@ Protótipo de portfólio para operação de faturamento clínico. A interface us
 
 ## Executar
 
-Para usar apenas a demonstração visual, abra `frontend/index.html` no navegador.
+Para usar apenas a demonstração visual, abra `frontend/index.html` no navegador. **Atenção:** o login sempre depende da API (`/api/auth/login`); sem o backend rodando, a tela de login não autentica. Guias, agenda, pacientes e notas fiscais têm fallback local em `localStorage` e continuam funcionando normalmente depois que a sessão é aberta com a API no ar.
 
 Para iniciar a API local:
 

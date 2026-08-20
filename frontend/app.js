@@ -56,6 +56,17 @@ const rolePermissions = {
 };
 function userCan(view) { return (rolePermissions[activeUser?.role || 'admin'] || []).includes(view); }
 function formatMoney(value) { return moneyFormatter.format(Number(value || 0)); }
+// Gera o próximo ID com base no maior número já existente na lista, em vez de
+// list.length — evitando colisão quando itens são removidos/filtrados
+// (ex.: duas guias apagadas fariam list.length reaproveitar um ID em uso).
+function nextSequentialId(list, prefix, digits) {
+  const highest = list.reduce((max, item) => {
+    const match = String(item.id || '').match(/(\d+)$/);
+    const num = match ? Number(match[1]) : 0;
+    return num > max ? num : max;
+  }, 0);
+  return `${prefix}${String(highest + 1).padStart(digits, '0')}`;
+}
 function apiHeaders() { return activeSession?.token ? { Authorization: `Bearer ${activeSession.token}` } : {}; }
 async function apiRequest(path, options = {}) {
   const response = await fetch(`${apiBase}${path}`, { ...options, headers: { 'Content-Type': 'application/json', ...apiHeaders(), ...(options.headers || {}) } });
@@ -141,8 +152,26 @@ function timeToMinutes(time) { const [hours, minutes] = time.split(':').map(Numb
 function hasScheduleConflict(data) { const start = timeToMinutes(data.start); const end = start + Number(data.duration); return appointments.find(appointment => { if (appointment.professional !== data.professional || appointment.date !== data.date) return false; const appointmentStart = timeToMinutes(appointment.start); const appointmentEnd = appointmentStart + Number(appointment.duration); return start < appointmentEnd && end > appointmentStart; }); }
 function saveAppointments() { localStorage.setItem(clinicStorageKey('appointments'), JSON.stringify(appointments)); }
 function agendaView() { const date = '2026-08-20'; const dayAppointments = appointments.filter(appointment => appointment.date === date).sort((first, second) => timeToMinutes(first.start) - timeToMinutes(second.start)); return `<div class="page-heading"><div><p class="eyebrow">Quinta-feira, 20 de agosto de 2026</p><h1>Agenda da clínica</h1><p class="heading-copy">Horários ocupados são bloqueados automaticamente por profissional.</p></div><button class="primary-button" data-action="new-appointment">＋ Novo atendimento</button></div><div class="agenda-layout"><div class="panel"><div class="panel-header"><div><h2 class="panel-title">Atendimentos de hoje</h2><p class="panel-subtitle">${dayAppointments.length} horários reservados</p></div><span class="status approved">Agenda protegida</span></div><div class="appointment-list">${dayAppointments.map(appointment => `<div class="appointment-row"><div class="appointment-time"><strong>${appointment.start}</strong><small>${appointment.duration} min</small></div><div class="appointment-info"><strong>${appointment.patient}</strong><small>${appointment.type} · ${appointment.professional}</small></div><span class="appointment-professional">${appointment.professional}</span></div>`).join('')}</div></div><form class="panel appointment-form" id="appointment-form"><div class="panel-header"><div><h2 class="panel-title">Reservar horário</h2><p class="panel-subtitle">A checagem acontece antes de salvar.</p></div></div><div class="form-section"><div class="field"><label for="appointment-patient">Paciente *</label><input id="appointment-patient" name="patient" required placeholder="Nome completo" /></div><div class="field"><label for="appointment-professional">Profissional *</label><select id="appointment-professional" name="professional" required><option value="">Selecione</option><option>Marina Souza</option><option>Lucas Andrade</option></select></div><div class="field"><label for="appointment-date">Data *</label><input id="appointment-date" name="date" type="date" value="${date}" required /></div><div class="appointment-fields"><div class="field"><label for="appointment-start">Início *</label><input id="appointment-start" name="start" type="time" value="09:00" required /></div><div class="field"><label for="appointment-duration">Duração *</label><select id="appointment-duration" name="duration" required><option value="30">30 min</option><option value="50" selected>50 min</option><option value="60">60 min</option></select></div></div><div class="field"><label for="appointment-type">Tipo de atendimento *</label><select id="appointment-type" name="type" required><option>Consulta</option><option>Fisioterapia</option><option>Exame</option></select></div></div><div class="form-footer"><button class="primary-button" type="submit">Verificar e reservar</button></div></form></div>`; }
+function editPatient(patientId) {
+  const patient = patients.find(item => item.id === patientId);
+  if (!patient) return;
+  const form = document.querySelector('#patient-form');
+  if (!form) return;
+  form.dataset.patientId = patient.id;
+  form.querySelector('#new-patient-name').value = patient.name;
+  form.querySelector('#new-patient-birth').value = patient.birthDate;
+  form.querySelector('#new-patient-insurer').value = patient.insurer;
+  form.querySelector('#new-patient-ans').value = patient.ansCode || '';
+  form.querySelector('#new-patient-card').value = patient.cardNumber;
+  form.querySelector('#new-patient-plan').value = patient.plan;
+  form.querySelector('#new-patient-validity').value = patient.planValidity;
+  form.querySelector('.panel-title').textContent = 'Editar paciente';
+  form.querySelector('button[type="submit"]').textContent = 'Atualizar paciente';
+  form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
 function patientsView() {
-  return `<div class="page-heading"><div><p class="eyebrow">Cadastro da clínica</p><h1>Pacientes</h1><p class="heading-copy">Mantenha os dados do plano prontos para reutilizar nas guias.</p></div><button class="primary-button" data-action="new-patient">＋ Novo paciente</button></div><div class="panel"><div class="panel-header"><div><h2 class="panel-title">Pacientes cadastrados</h2><p class="panel-subtitle">${patients.length} registros com dados de convênio</p></div></div><table><thead><tr><th>Paciente</th><th>Convênio</th><th>Carteira</th><th>Plano</th><th>Validade</th></tr></thead><tbody>${patients.map(patient => `<tr><td><strong>${patient.name}</strong><small>${new Date(`${patient.birthDate}T12:00:00`).toLocaleDateString('pt-BR')}</small></td><td>${patient.insurer}</td><td>${patient.cardNumber}</td><td>${patient.plan}</td><td>${new Date(`${patient.planValidity}T12:00:00`).toLocaleDateString('pt-BR')}</td></tr>`).join('')}</tbody></table></div><form class="panel patient-form" id="patient-form"><div class="panel-header"><div><h2 class="panel-title">Cadastrar paciente</h2><p class="panel-subtitle">Esses dados serão carregados automaticamente na guia.</p></div></div><div class="form-section"><div class="form-grid"><div class="field"><label for="new-patient-name">Nome completo *</label><input id="new-patient-name" name="name" required /></div><div class="field"><label for="new-patient-birth">Data de nascimento *</label><input id="new-patient-birth" name="birthDate" type="date" required /></div><div class="field"><label for="new-patient-insurer">Convênio *</label><select id="new-patient-insurer" name="insurer" required><option value="">Selecione</option><option>Unimed</option><option>Bradesco Saúde</option><option>SulAmérica</option><option>Amil</option><option>Promédica</option></select></div><div class="field"><label for="new-patient-ans">Código ANS</label><input id="new-patient-ans" name="ansCode" placeholder="Ex.: 004701" /></div><div class="field"><label for="new-patient-card">Número da carteira *</label><input id="new-patient-card" name="cardNumber" required /></div><div class="field"><label for="new-patient-plan">Plano *</label><input id="new-patient-plan" name="plan" required placeholder="Nome do plano" /></div><div class="field"><label for="new-patient-validity">Validade do plano *</label><input id="new-patient-validity" name="planValidity" type="date" required /></div></div><div class="form-footer"><button class="primary-button" type="submit">Salvar paciente</button></div></div></form>`;
+  return `<div class="page-heading"><div><p class="eyebrow">Cadastro da clínica</p><h1>Pacientes</h1><p class="heading-copy">Mantenha os dados do plano prontos para reutilizar nas guias.</p></div><button class="primary-button" data-action="new-patient">＋ Novo paciente</button></div><div class="panel"><div class="panel-header"><div><h2 class="panel-title">Pacientes cadastrados</h2><p class="panel-subtitle">${patients.length} registros com dados de convênio</p></div></div><table><thead><tr><th>Paciente</th><th>Convênio</th><th>Carteira</th><th>Plano</th><th>Validade</th><th></th></tr></thead><tbody>${patients.map(patient => `<tr><td><strong>${patient.name}</strong><small>${new Date(`${patient.birthDate}T12:00:00`).toLocaleDateString('pt-BR')}</small></td><td>${patient.insurer}</td><td>${patient.cardNumber}</td><td>${patient.plan}</td><td>${new Date(`${patient.planValidity}T12:00:00`).toLocaleDateString('pt-BR')}</td><td><button class="text-button" data-action="edit-patient" data-patient-id="${patient.id}">Editar</button></td></tr>`).join('')}</tbody></table></div><form class="panel patient-form" id="patient-form"><div class="panel-header"><div><h2 class="panel-title">Cadastrar paciente</h2><p class="panel-subtitle">Esses dados serão carregados automaticamente na guia.</p></div></div><div class="form-section"><div class="form-grid"><div class="field"><label for="new-patient-name">Nome completo *</label><input id="new-patient-name" name="name" required /></div><div class="field"><label for="new-patient-birth">Data de nascimento *</label><input id="new-patient-birth" name="birthDate" type="date" required /></div><div class="field"><label for="new-patient-insurer">Convênio *</label><select id="new-patient-insurer" name="insurer" required><option value="">Selecione</option><option>Unimed</option><option>Bradesco Saúde</option><option>SulAmérica</option><option>Amil</option><option>Promédica</option></select></div><div class="field"><label for="new-patient-ans">Código ANS</label><input id="new-patient-ans" name="ansCode" placeholder="Ex.: 004701" /></div><div class="field"><label for="new-patient-card">Número da carteira *</label><input id="new-patient-card" name="cardNumber" required /></div><div class="field"><label for="new-patient-plan">Plano *</label><input id="new-patient-plan" name="plan" required placeholder="Nome do plano" /></div><div class="field"><label for="new-patient-validity">Validade do plano *</label><input id="new-patient-validity" name="planValidity" type="date" required /></div></div><div class="form-footer"><button class="primary-button" type="submit">Salvar paciente</button></div></div></form>`;
 }
 function listing(title, description, icon) { return `<div class="page-heading"><div><p class="eyebrow">Módulo operacional</p><h1>${title}</h1><p class="heading-copy">${description}</p></div><button class="primary-button" data-action="new-guide">＋ Nova guia</button></div><div class="empty-state"><div><div class="empty-icon">${icon}</div><h2>Este módulo está pronto para crescer</h2><p>A estrutura de navegação está funcionando. O próximo passo é conectar este fluxo aos dados reais da clínica.</p><button class="primary-button" data-action="soon">Explorar demonstração</button></div></div>`; }
 function reportsView() {
@@ -218,9 +247,29 @@ document.addEventListener('submit', async event => {
 
 document.addEventListener('submit', async event => {
   if (event.target.id !== 'patient-form') return;
+  if (event.target.dataset.patientId) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    const data = Object.fromEntries(new FormData(event.target));
+    try {
+      if (activeSession?.token) {
+        await apiRequest(`/patients/${event.target.dataset.patientId}`, { method: 'PATCH', body: JSON.stringify(data) });
+        patients = await apiRequest('/patients');
+      } else {
+        const patient = patients.find(item => item.id === event.target.dataset.patientId);
+        Object.assign(patient, data);
+        localStorage.setItem(clinicStorageKey('patients'), JSON.stringify(patients));
+      }
+      render('patients');
+      showToast('Dados do paciente atualizados.');
+    } catch (error) {
+      showToast(error.message);
+    }
+    return;
+  }
   event.preventDefault();
   const data = Object.fromEntries(new FormData(event.target));
-  const patient = { id: `P-${String(patients.length + 1).padStart(3, '0')}`, ...data };
+  const patient = { id: nextSequentialId(patients, 'P-', 3), ...data };
   try {
     if (activeSession?.token) {
       await apiRequest('/patients', { method: 'POST', body: JSON.stringify(patient) });
@@ -278,7 +327,7 @@ document.addEventListener('submit', async event => {
   const data = Object.fromEntries(new FormData(form));
   const sessions = JSON.parse(data.sessions || '[]');
   if (!sessions.length) { showToast('Adicione pelo menos um atendimento à competência antes de enviar.'); return; }
-  const guideId = `G-2026-${String(guides.length + 482).padStart(5, '0')}`;
+  const guideId = nextSequentialId(guides, 'G-2026-', 5);
   try {
     await apiRequest('/guides', { method: 'POST', body: JSON.stringify({
       id: guideId,
@@ -316,7 +365,19 @@ document.addEventListener('submit', async event => {
 }, true);
 
 document.addEventListener('click', event => { const viewButton = event.target.closest('[data-view]'); if (viewButton) { document.querySelectorAll('.nav-item').forEach(item => item.classList.toggle('active', item.dataset.view === viewButton.dataset.view)); render(viewButton.dataset.view); } const statusButton = event.target.closest('[data-status]'); if (statusButton) { const guideId = document.querySelector('#status-guide')?.value; if (!guideId) { showToast('Selecione uma guia antes de registrar o retorno.'); return; } const statusLabels = { review: 'Em análise', approved: 'Aprovada', error: 'Glosada' }; const guide = guides.find(item => item.id === guideId); guide.status = statusButton.dataset.status; guide.label = statusLabels[guide.status]; saveGuides(); render('guides'); showToast(`Retorno registrado: ${guide.label}.`); } const action = event.target.closest('[data-action]')?.dataset.action; if (action === 'logout') { localStorage.removeItem('tiss-session'); window.location.reload(); } if (action === 'open-guide-folder') { breadcrumb.textContent = 'Pasta da guia'; appView.innerHTML = guideFolderView(event.target.closest('[data-guide-id]').dataset.guideId); } if (action === 'print-folder') { const guide = guides.find(item => item.id === event.target.closest('[data-guide-id]').dataset.guideId); if (guide) printGuideFolder(guide); } if (action === 'print-session') { const button = event.target.closest('[data-guide-id]'); const guide = guides.find(item => item.id === button.dataset.guideId); if (guide) printGuideFolder(guide, guide.sessions[Number(button.dataset.sessionIndex)]); } if (action === 'new-guide') { document.querySelectorAll('.nav-item').forEach(item => item.classList.toggle('active', item.dataset.view === 'guides')); breadcrumb.textContent = 'Nova guia'; appView.innerHTML = guideFormMonthly(); restoreDraft(); } if (action === 'new-appointment') { breadcrumb.textContent = 'Novo atendimento'; document.querySelectorAll('.nav-item').forEach(item => item.classList.toggle('active', item.dataset.view === 'agenda')); appView.innerHTML = agendaView(); document.querySelector('#appointment-patient')?.focus(); } if (action === 'clear-guides') { guides = [...defaultGuides]; saveGuides(); render('guides'); showToast('Dados demo restaurados.'); } if (action === 'soon') showToast('Demonstração em preparação.'); });
-document.addEventListener('submit', event => { if (event.target.id === 'login-form') { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); const clinicAccounts = clinicUsers[data.clinicId] || []; const matchedUser = clinicAccounts.find(user => user.email.toLowerCase() === data.email.toLowerCase() && user.password === data.password); if (!matchedUser) { showToast('Credenciais inválidas para a clínica selecionada.'); return; } localStorage.setItem('tiss-session', JSON.stringify({ clinicId: data.clinicId, userId: matchedUser.id })); window.location.reload(); return; } if (event.target.id === 'appointment-form') { event.preventDefault(); const form = event.target; if (!form.checkValidity()) { form.reportValidity(); return; } const data = Object.fromEntries(new FormData(form)); const conflict = hasScheduleConflict(data); if (conflict) { showToast(`Conflito: ${conflict.professional} já atende ${conflict.patient} às ${conflict.start}.`); return; } appointments.push({ id: `A-${String(appointments.length + 1).padStart(3, '0')}`, ...data, duration: Number(data.duration) }); saveAppointments(); render('agenda'); showToast('Horário reservado sem conflito.'); return; } if (event.target.id !== 'guide-form') return; event.preventDefault(); const form = event.target; if (!form.checkValidity()) { form.reportValidity(); return; } const data = Object.fromEntries(new FormData(form)); const sessions = JSON.parse(data.sessions || '[]'); if (!sessions.length) { showToast('Adicione pelo menos um atendimento à competência antes de enviar.'); return; } const xml = createTissXml(data); const totalValue = Number(data.value || 0) * sessions.length; guides.unshift({ id: `G-2026-${String(guides.length + 482).padStart(5, '0')}`, patient: data.patient, procedure: data.procedure.split(' - ')[1] || data.procedure, insurer: data.insurer, status: 'sent', label: 'Pronta para envio', date: data.competence || sessions[0].date, competence: data.competence, value: formatMoney(totalValue), sessions }); saveGuides(); localStorage.removeItem(clinicStorageKey('draft')); downloadXml(xml); showToast(`${sessions.length} atendimentos validados, guia salva e XML baixado.`); });
+document.addEventListener('click', event => {
+  const editButton = event.target.closest('[data-action="edit-patient"]');
+  if (editButton) editPatient(editButton.dataset.patientId);
+});
+document.addEventListener('submit', event => {
+  // Observação: o login-form NÃO tem fallback offline aqui de propósito.
+  // O submit de login é sempre interceptado (capture phase, sem checar sessão)
+  // pelo listener no topo do arquivo, que fala direto com a API. Abrir apenas
+  // frontend/index.html sem o backend rodando faz o login falhar por erro de
+  // rede — isso é uma limitação conhecida do modo somente-visual, não um bug
+  // deste bloco. Guias, agenda e notas fiscais têm fallback local abaixo porque
+  // não dependem de autenticação real.
+  if (event.target.id === 'appointment-form') { event.preventDefault(); const form = event.target; if (!form.checkValidity()) { form.reportValidity(); return; } const data = Object.fromEntries(new FormData(form)); const conflict = hasScheduleConflict(data); if (conflict) { showToast(`Conflito: ${conflict.professional} já atende ${conflict.patient} às ${conflict.start}.`); return; } appointments.push({ id: nextSequentialId(appointments, 'A-', 3), ...data, duration: Number(data.duration) }); saveAppointments(); render('agenda'); showToast('Horário reservado sem conflito.'); return; } if (event.target.id !== 'guide-form') return; event.preventDefault(); const form = event.target; if (!form.checkValidity()) { form.reportValidity(); return; } const data = Object.fromEntries(new FormData(form)); const sessions = JSON.parse(data.sessions || '[]'); if (!sessions.length) { showToast('Adicione pelo menos um atendimento à competência antes de enviar.'); return; } const xml = createTissXml(data); const totalValue = Number(data.value || 0) * sessions.length; guides.unshift({ id: nextSequentialId(guides, 'G-2026-', 5), patient: data.patient, procedure: data.procedure.split(' - ')[1] || data.procedure, insurer: data.insurer, status: 'sent', label: 'Pronta para envio', date: data.competence || sessions[0].date, competence: data.competence, value: formatMoney(totalValue), sessions }); saveGuides(); localStorage.removeItem(clinicStorageKey('draft')); downloadXml(xml); showToast(`${sessions.length} atendimentos validados, guia salva e XML baixado.`); });
 document.addEventListener('click', event => {
   const deleteButton = event.target.closest('[data-delete-invoice-id]');
   if (deleteButton) {

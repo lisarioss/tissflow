@@ -119,6 +119,12 @@ app.patch('/api/invoices/:id/status', auth, (req, res) => {
   res.json({ id: req.params.id, status });
 });
 
+app.delete('/api/invoices/:id', auth, (req, res) => {
+  const result = db.prepare('DELETE FROM invoices WHERE id = ? AND clinic_id = ?').run(req.params.id, req.session.clinicId);
+  if (!result.changes) return res.status(404).json({ error: 'Nota não encontrada.' });
+  res.status(204).end();
+});
+
 app.get('/api/reports', auth, (req, res) => {
   const guides = db.prepare('SELECT status, COUNT(*) AS count FROM guides WHERE clinic_id = ? GROUP BY status').all(req.session.clinicId);
   const invoices = db.prepare('SELECT status, COALESCE(SUM(amount_cents), 0) AS amountCents FROM invoices WHERE clinic_id = ? GROUP BY status').all(req.session.clinicId);

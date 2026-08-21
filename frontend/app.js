@@ -188,28 +188,28 @@ function saveGuides() { localStorage.setItem(clinicStorageKey('guides'), JSON.st
 function restoreDraft() { const draft = JSON.parse(localStorage.getItem(clinicStorageKey('draft')) || 'null'); if (!draft) return; Object.entries(draft).forEach(([key, value]) => { const field = document.querySelector(`#${key}`); if (field) field.value = value; }); }
 function saveDraft(form) { localStorage.setItem(clinicStorageKey('draft'), JSON.stringify(Object.fromEntries(new FormData(form)))); }
 function render(view = 'overview') { breadcrumb.textContent = views[view] || views.overview; const safeView = userCan(view) ? view : 'overview'; appView.innerHTML = safeView === 'overview' ? overview() : safeView === 'agenda' ? agendaView() : safeView === 'guides' ? guideList() : safeView === 'financeiro' ? financeView() : safeView === 'reports' ? reportsView() : safeView === 'patients' ? patientsView() : safeView === 'users' ? usersView() : listing(views[safeView], `Gerencie ${views[safeView].toLowerCase()} em um só lugar.`, safeView === 'convenios' ? '◇' : '↗'); document.querySelectorAll('.nav-item').forEach(item => { const visible = userCan(item.dataset.view); item.style.display = visible ? '' : 'none'; item.classList.toggle('active', item.dataset.view === safeView && visible); }); }
-function applySession() { const clinic = clinicProfiles[activeClinicId]; if (!clinic || !activeUser) return; document.querySelector('.workspace-switcher strong').textContent = clinic.name; document.querySelector('.workspace-switcher small').textContent = clinic.unit; document.querySelector('.workspace-switcher .avatar').textContent = clinic.initials; document.querySelector('.profile strong').textContent = activeUser.name; document.querySelector('.profile small').textContent = activeUser.roleLabel || roleLabels[activeUser.role] || activeUser.role; document.querySelector('.user-button span:nth-child(2)').textContent = activeUser.name; document.querySelector('.user-button .avatar').textContent = activeUser.name.split(' ').map(name => name[0]).join('').slice(0, 2); }
+function applySession() { const clinic = clinicProfiles[activeClinicId]; if (!clinic || !activeUser) return; document.querySelector('.workspace-switcher strong').textContent = clinic.name; document.querySelector('.workspace-switcher small').textContent = clinic.unit; document.querySelector('.workspace-switcher .avatar').textContent = clinic.initials; document.querySelector('#breadcrumb-clinic').textContent = clinic.name; document.querySelector('.profile strong').textContent = activeUser.name; document.querySelector('.profile small').textContent = activeUser.roleLabel || roleLabels[activeUser.role] || activeUser.role; document.querySelector('.user-button span:nth-child(2)').textContent = activeUser.name; document.querySelector('.user-button .avatar').textContent = activeUser.name.split(' ').map(name => name[0]).join('').slice(0, 2); }
 function usersView() { const clinicUsersList = clinicUsers[activeClinicId] || []; return `<div class="page-heading"><div><p class="eyebrow">Acesso e segurança</p><h1>Usuários da clínica</h1><p class="heading-copy">Cada perfil acessa apenas o que precisa.</p></div><button class="primary-button" data-action="new-user">＋ Novo usuário</button></div><div class="panel"><div class="panel-header"><div><h2 class="panel-title">Equipe</h2><p class="panel-subtitle">${clinicUsersList.length} usuários cadastrados</p></div></div><table><thead><tr><th>Nome</th><th>E-mail</th><th>Perfil</th><th>Permissão</th></tr></thead><tbody>${clinicUsersList.map(user => `<tr><td><strong>${user.name}</strong></td><td>${user.email}</td><td>${user.roleLabel}</td><td>${user.role === 'admin' ? 'Total' : user.role === 'faturamento' ? 'Guias e relatórios' : user.role === 'recepcao' ? 'Agenda e pacientes' : 'Agenda e prontuários'}</td></tr>`).join('')}</tbody></table></div>`; }
 function showToast(message) { toast.textContent = message; toast.classList.add('show'); setTimeout(() => toast.classList.remove('show'), 2800); }
 function escapeXml(value) {
   return String(value).replace(/[<>&'\"]/g, character => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', "'": '&apos;', '\"': '&quot;' }[character]));
 }
-function createTissXml(data) {
+function createTissXml(data, guideId) {
   const sessions = JSON.parse(data.sessions || '[]');
   const attendanceXml = sessions.length ? sessions.map(session => `<atendimento><data>${escapeXml(session.date)}</data><horaInicio>${escapeXml(session.start)}</horaInicio><horaFim>${escapeXml(session.end)}</horaFim><tipo>${escapeXml(session.type)}</tipo><procedimento>${escapeXml(session.procedure)}</procedimento><profissional>${escapeXml(session.professional)}</profissional></atendimento>`).join('') : `<atendimento><data>${escapeXml(data.date || '')}</data><horaInicio></horaInicio><horaFim></horaFim><tipo>${escapeXml(data.type || '')}</tipo><procedimento>${escapeXml(data.procedure || '')}</procedimento><profissional>${escapeXml(data.professional || '')}</profissional></atendimento>`;
   return `<?xml version="1.0" encoding="UTF-8"?>
 <mensagemTISS versao="4.01.00">
-  <cabecalho><identificacaoTransacao><tipoTransacao>ENVIO_LOTE_GUIAS</tipoTransacao><sequencialTransacao>000001</sequencialTransacao><dataRegistroTransacao>${data.date}</dataRegistroTransacao><horaRegistroTransacao>10:30:00</horaRegistroTransacao></identificacaoTransacao></cabecalho>
+  <cabecalho><identificacaoTransacao><tipoTransacao>ENVIO_LOTE_GUIAS</tipoTransacao><sequencialTransacao>000001</sequencialTransacao><dataRegistroTransacao>${escapeXml(data.date || '')}</dataRegistroTransacao><horaRegistroTransacao>10:30:00</horaRegistroTransacao></identificacaoTransacao></cabecalho>
   <prestador><identificacao><CNPJ>${escapeXml(data.providerCnpj || '12.345.678/0001-90')}</CNPJ></identificacao><nomeContratado>${escapeXml(data.providerName || 'Clinica Sabia')}</nomeContratado></prestador>
-  <guiasTISS><guiaSP_SADT><cabecalhoGuia><registroANS>${escapeXml(data.ansCode || '000000')}</registroANS><numeroGuiaPrestador>G-2026-DEMO</numeroGuiaPrestador></cabecalhoGuia><dadosAutorizacao><numeroGuiaOperadora>${escapeXml(data.operatorGuide || 'NAO_INFORMADO')}</numeroGuiaOperadora><numeroAutorizacao>${escapeXml(data.authorizationNumber || 'NAO_INFORMADO')}</numeroAutorizacao></dadosAutorizacao><beneficiario><numeroCarteira>${escapeXml(data.cardNumber || `${data.insurer}-DEMO`)}</numeroCarteira><nomeBeneficiario>${escapeXml(data.patient)}</nomeBeneficiario><dataNascimento>${escapeXml(data.patientBirth || '')}</dataNascimento><plano>${escapeXml(data.patientPlan || '')}</plano></beneficiario><dadosAtendimento><competencia>${escapeXml(data.competence || '')}</competencia><quantidadeAtendimentos>${sessions.length || escapeXml(data.quantity || '1')}</quantidadeAtendimentos><codigoTUSS>${escapeXml(data.serviceCode || '')}</codigoTUSS><valorUnitario>${escapeXml(data.value || '0')}</valorUnitario>${attendanceXml}<registroProfissional>${escapeXml(data.professionalRegister || '')}</registroProfissional></dadosAtendimento><observacao>${escapeXml(data.notes || '')}</observacao></guiaSP_SADT></guiasTISS>
+  <guiasTISS><guiaSP_SADT><cabecalhoGuia><registroANS>${escapeXml(data.ansCode || '000000')}</registroANS><numeroGuiaPrestador>${escapeXml(guideId || 'G-2026-DEMO')}</numeroGuiaPrestador></cabecalhoGuia><dadosAutorizacao><numeroGuiaOperadora>${escapeXml(data.operatorGuide || 'NAO_INFORMADO')}</numeroGuiaOperadora><numeroAutorizacao>${escapeXml(data.authorizationNumber || 'NAO_INFORMADO')}</numeroAutorizacao></dadosAutorizacao><beneficiario><numeroCarteira>${escapeXml(data.cardNumber || `${data.insurer}-DEMO`)}</numeroCarteira><nomeBeneficiario>${escapeXml(data.patient)}</nomeBeneficiario><dataNascimento>${escapeXml(data.patientBirth || '')}</dataNascimento><plano>${escapeXml(data.patientPlan || '')}</plano></beneficiario><dadosAtendimento><competencia>${escapeXml(data.competence || '')}</competencia><quantidadeAtendimentos>${sessions.length || escapeXml(data.quantity || '1')}</quantidadeAtendimentos><codigoTUSS>${escapeXml(data.serviceCode || '')}</codigoTUSS><valorUnitario>${escapeXml(data.value || '0')}</valorUnitario>${attendanceXml}<registroProfissional>${escapeXml(data.professionalRegister || '')}</registroProfissional></dadosAtendimento><observacao>${escapeXml(data.notes || '')}</observacao></guiaSP_SADT></guiasTISS>
 </mensagemTISS>`;
 }
-function downloadXml(xml) {
+function downloadXml(xml, guideId) {
   const blob = new Blob([xml], { type: 'application/xml;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = 'guia-tiss-demo.xml';
+  link.download = `guia-tiss-${guideId || 'demo'}.xml`;
   link.click();
   URL.revokeObjectURL(url);
 }
@@ -302,6 +302,21 @@ document.addEventListener('click', async event => {
   }
 }, true);
 
+document.addEventListener('click', async event => {
+  const deleteButton = event.target.closest('[data-delete-invoice-id]');
+  if (!deleteButton || !activeSession?.token) return;
+  event.preventDefault();
+  event.stopPropagation();
+  try {
+    await apiRequest(`/invoices/${deleteButton.dataset.deleteInvoiceId}`, { method: 'DELETE' });
+    invoices = invoices.filter(invoice => invoice.id !== deleteButton.dataset.deleteInvoiceId);
+    render('financeiro');
+    showToast('Nota fiscal excluída na API.');
+  } catch (error) {
+    showToast(error.message);
+  }
+}, true);
+
 document.addEventListener('submit', async event => {
   if (event.target.id !== 'invoice-form' || !activeSession?.token) return;
   event.preventDefault();
@@ -356,7 +371,7 @@ document.addEventListener('submit', async event => {
     const apiGuides = await apiRequest('/guides');
     guides = apiGuides.map(normalizeGuide);
     localStorage.removeItem(clinicStorageKey('draft'));
-    downloadXml(createTissXml(data));
+    downloadXml(createTissXml(data, guideId), guideId);
     render('guides');
     showToast('Guia e atendimentos salvos na API.');
   } catch (error) {
@@ -377,7 +392,7 @@ document.addEventListener('submit', event => {
   // rede — isso é uma limitação conhecida do modo somente-visual, não um bug
   // deste bloco. Guias, agenda e notas fiscais têm fallback local abaixo porque
   // não dependem de autenticação real.
-  if (event.target.id === 'appointment-form') { event.preventDefault(); const form = event.target; if (!form.checkValidity()) { form.reportValidity(); return; } const data = Object.fromEntries(new FormData(form)); const conflict = hasScheduleConflict(data); if (conflict) { showToast(`Conflito: ${conflict.professional} já atende ${conflict.patient} às ${conflict.start}.`); return; } appointments.push({ id: nextSequentialId(appointments, 'A-', 3), ...data, duration: Number(data.duration) }); saveAppointments(); render('agenda'); showToast('Horário reservado sem conflito.'); return; } if (event.target.id !== 'guide-form') return; event.preventDefault(); const form = event.target; if (!form.checkValidity()) { form.reportValidity(); return; } const data = Object.fromEntries(new FormData(form)); const sessions = JSON.parse(data.sessions || '[]'); if (!sessions.length) { showToast('Adicione pelo menos um atendimento à competência antes de enviar.'); return; } const xml = createTissXml(data); const totalValue = Number(data.value || 0) * sessions.length; guides.unshift({ id: nextSequentialId(guides, 'G-2026-', 5), patient: data.patient, procedure: data.procedure.split(' - ')[1] || data.procedure, insurer: data.insurer, status: 'sent', label: 'Pronta para envio', date: data.competence || sessions[0].date, competence: data.competence, value: formatMoney(totalValue), sessions }); saveGuides(); localStorage.removeItem(clinicStorageKey('draft')); downloadXml(xml); showToast(`${sessions.length} atendimentos validados, guia salva e XML baixado.`); });
+  if (event.target.id === 'appointment-form') { event.preventDefault(); const form = event.target; if (!form.checkValidity()) { form.reportValidity(); return; } const data = Object.fromEntries(new FormData(form)); const conflict = hasScheduleConflict(data); if (conflict) { showToast(`Conflito: ${conflict.professional} já atende ${conflict.patient} às ${conflict.start}.`); return; } appointments.push({ id: nextSequentialId(appointments, 'A-', 3), ...data, duration: Number(data.duration) }); saveAppointments(); render('agenda'); showToast('Horário reservado sem conflito.'); return; } if (event.target.id !== 'guide-form') return; event.preventDefault(); const form = event.target; if (!form.checkValidity()) { form.reportValidity(); return; } const data = Object.fromEntries(new FormData(form)); const sessions = JSON.parse(data.sessions || '[]'); if (!sessions.length) { showToast('Adicione pelo menos um atendimento à competência antes de enviar.'); return; } const guideId = nextSequentialId(guides, 'G-2026-', 5); const xml = createTissXml(data, guideId); const totalValue = Number(data.value || 0) * sessions.length; guides.unshift({ id: guideId, patient: data.patient, procedure: data.procedure.split(' - ')[1] || data.procedure, insurer: data.insurer, status: 'sent', label: 'Pronta para envio', date: data.competence || sessions[0].date, competence: data.competence, value: formatMoney(totalValue), sessions }); saveGuides(); localStorage.removeItem(clinicStorageKey('draft')); downloadXml(xml, guideId); showToast(`${sessions.length} atendimentos validados, guia salva e XML baixado.`); });
 document.addEventListener('click', event => {
   const deleteButton = event.target.closest('[data-delete-invoice-id]');
   if (deleteButton) {

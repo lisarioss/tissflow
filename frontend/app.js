@@ -44,6 +44,7 @@ const defaultAppointments = [
   { id: 'A-003', patient: 'Bianca Torres', professional: 'Lucas Andrade', date: '2026-08-20', start: '09:30', duration: 60, type: 'Fisioterapia' }
 ];
 let appointments = JSON.parse(localStorage.getItem(clinicStorageKey('appointments')) || 'null') || defaultAppointments;
+let glosas = JSON.parse(localStorage.getItem(clinicStorageKey('glosas')) || 'null') || [];
 const views = { overview: 'Visão geral', agenda: 'Agenda', guides: 'Guias TISS', financeiro: 'Financeiro', users: 'Usuários', patients: 'Pacientes', convenios: 'Convênios', reports: 'Relatórios', settings: 'Configurações' };
 const appView = document.querySelector('#app-view');
 const breadcrumb = document.querySelector('#breadcrumb');
@@ -74,20 +75,23 @@ async function apiRequest(path, options = {}) {
   if (!response.ok) throw new Error(payload.error || 'Não foi possível comunicar com a API.');
   return payload;
 }
-function normalizeGuide(guide) { return { ...guide, sessions: guide.sessions || [], status: guide.status, label: { sent: 'Enviada', review: 'Em análise', approved: 'Aprovada', error: 'Com pendência' }[guide.status] || guide.status, value: formatMoney((guide.valueCents || 0) / 100), unitValue: Number(guide.unitValueCents || 0) / 100, date: guide.createdAt ? new Date(guide.createdAt).toLocaleDateString('pt-BR') : '' }; }
+function normalizeGuide(guide) { return { ...guide, sessions: guide.sessions || [], status: guide.status, label: { sent: 'Enviada', review: 'Em análise', approved: 'Aprovada', error: 'Com glosa', recurso: 'Recurso enviado' }[guide.status] || guide.status, value: formatMoney((guide.valueCents || 0) / 100), unitValue: Number(guide.unitValueCents || 0) / 100, date: guide.createdAt ? new Date(guide.createdAt).toLocaleDateString('pt-BR') : '' }; }
 function normalizeInvoice(invoice) { return { ...invoice, amount: Number(invoice.amountCents || 0) / 100 }; }
+function normalizeGlosa(glosa) { return { ...glosa, amount: Number(glosa.amountCents || 0) / 100 }; }
 async function loadApiData() {
   if (!activeSession?.token) return;
   try {
-    const [apiGuides, apiInvoices, apiPatients] = await Promise.all([apiRequest('/guides'), apiRequest('/invoices'), apiRequest('/patients')]);
+    const [apiGuides, apiInvoices, apiPatients, apiGlosas] = await Promise.all([apiRequest('/guides'), apiRequest('/invoices'), apiRequest('/patients'), apiRequest('/glosas')]);
     guides = apiGuides.map(normalizeGuide);
     invoices = apiInvoices.map(normalizeInvoice);
     if (apiPatients.length) patients = apiPatients;
+    glosas = apiGlosas.map(normalizeGlosa);
     render();
   } catch (error) {
     showToast(`Modo local: ${error.message}`);
   }
 }
+function saveGlosas() { localStorage.setItem(clinicStorageKey('glosas'), JSON.stringify(glosas)); }
 
 function statusTag(guide) { return `<span class="status ${guide.status}">${guide.label}</span>`; }
 function overview() {
@@ -127,11 +131,39 @@ function guideFormMonthly() {
 }
 
 function statusSimulator() { return `<div class="panel status-simulator"><div class="panel-header"><div><h2 class="panel-title">Retorno da operadora</h2><p class="panel-subtitle">Simule o processamento para demonstrar o ciclo da guia.</p></div><span class="status sent">Ambiente demo</span></div><div class="status-controls"><select id="status-guide"><option value="">Selecione uma guia</option>${guides.map(guide => `<option value="${guide.id}">${guide.id} · ${guide.patient}</option>`).join('')}</select><button class="status-action review" data-status="review">Em análise</button><button class="status-action approved" data-status="approved">Aprovar</button><button class="status-action error" data-status="error">Glosar</button></div></div>`; }
+const glosaCodes = [
+  { value: '', label: 'Selecione um código' },
+  { value: 'GL01', label: 'GL01 · Procedimento incompatível com a guia' },
+  { value: 'GL02', label: 'GL02 · Falta de autorização prévia' },
+  { value: 'GL03', label: 'GL03 · Divergência de valor cobrado' },
+  { value: 'GL04', label: 'GL04 · Beneficiário fora de vigência' },
+  { value: 'GL05', label: 'GL05 · Quantidade excede o autorizado' }
+];
+function glosaPanel(guide) {
+  const guideGlosas = glosas.filter(item => item.guideId === guide.id).sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+  const current = guideGlosas[0];
+  let body;
+  if (!current || current.status === 'revertida') {
+    body = `${current ? `<div class="glosa-outcome success">Glosa anterior <strong>revertida</strong> — guia reaprovada pela operadora.</div>` : ''}
+    <form class="glosa-form" id="glosa-form" data-guide-id="${guide.id}"><div class="form-grid"><div class="field"><label for="glosa-code">Código da glosa</label><select id="glosa-code" name="code">${glosaCodes.map(item => `<option value="${item.value}">${item.label}</option>`).join('')}</select></div><div class="field"><label for="glosa-amount">Valor glosado *</label><input id="glosa-amount" name="amount" type="number" min="0.01" step="0.01" value="${Number(guide.value?.replace(/[^\d,]/g, '').replace(',', '.')) || 0}" required /></div></div><div class="field"><label for="glosa-reason">Motivo *</label><input id="glosa-reason" name="reason" required placeholder="Descreva o motivo informado pela operadora" /></div><button class="secondary-button" type="submit">Registrar glosa (simular retorno)</button></form>`;
+  } else if (current.status === 'aberta') {
+    body = `<div class="glosa-outcome error"><strong>${current.code || 'Sem código'}</strong> · ${current.reason} · <span>${formatMoney(current.amount)}</span></div>
+    <form class="recurso-form" id="recurso-form" data-glosa-id="${current.id}"><div class="field"><label for="recurso-justification">Justificativa do recurso *</label><textarea id="recurso-justification" name="justification" rows="3" required placeholder="Explique por que a glosa deve ser revertida"></textarea></div><button class="primary-button" type="submit">Enviar recurso</button></form>`;
+  } else if (current.status === 'recurso_enviado') {
+    body = `<div class="glosa-outcome error"><strong>${current.code || 'Sem código'}</strong> · ${current.reason} · <span>${formatMoney(current.amount)}</span></div>
+    <div class="recurso-sent"><span>Recurso enviado:</span><p>${current.justification}</p><small>Aguardando retorno da operadora.</small></div>
+    <div class="status-controls"><button class="status-action approved" data-action="resolve-glosa" data-outcome="revertida" data-glosa-id="${current.id}">Simular reversão</button><button class="status-action error" data-action="resolve-glosa" data-outcome="mantida" data-glosa-id="${current.id}">Simular manutenção</button></div>`;
+  } else {
+    body = `<div class="glosa-outcome error">Glosa <strong>mantida</strong> pela operadora — valor de ${formatMoney(current.amount)} não será reembolsado.</div>
+    <form class="glosa-form" id="glosa-form" data-guide-id="${guide.id}"><p class="heading-copy">Registrar novo item glosado (opcional):</p><div class="form-grid"><div class="field"><label for="glosa-code">Código da glosa</label><select id="glosa-code" name="code">${glosaCodes.map(item => `<option value="${item.value}">${item.label}</option>`).join('')}</select></div><div class="field"><label for="glosa-amount">Valor glosado *</label><input id="glosa-amount" name="amount" type="number" min="0.01" step="0.01" required /></div></div><div class="field"><label for="glosa-reason">Motivo *</label><input id="glosa-reason" name="reason" required /></div><button class="secondary-button" type="submit">Registrar nova glosa</button></form>`;
+  }
+  return `<div class="panel glosa-panel"><div class="panel-header"><div><h2 class="panel-title">Glosa e recurso</h2><p class="panel-subtitle">Histórico de retorno da operadora para esta guia.</p></div></div><div class="glosa-body">${body}</div></div>`;
+}
 function guideFolderView(guideId) {
   const guide = guides.find(item => item.id === guideId);
   if (!guide) return listing('Guia não encontrada', 'O registro solicitado não está disponível.', '×');
   const sessions = guide.sessions || [];
-  return `<div class="page-heading"><div><p class="eyebrow">Pasta da guia · ${guide.id}</p><h1>${guide.patient}</h1><p class="heading-copy">${guide.insurer} · ${guide.competence || guide.date} · ${sessions.length} atendimentos</p></div><div class="folder-actions"><button class="secondary-button" data-view="guides">← Voltar</button><button class="secondary-button" data-action="print-folder" data-guide-id="${guide.id}">Gerar PDF da pasta</button></div></div><div class="folder-summary"><div><span>Guia</span><strong>${guide.id}</strong></div><div><span>Procedimento</span><strong>${guide.procedure}</strong></div><div><span>Valor total</span><strong>${guide.value}</strong></div><div><span>Status</span>${statusTag(guide)}</div></div><div class="panel"><div class="panel-header"><div><h2 class="panel-title">Atendimentos da competência</h2><p class="panel-subtitle">Edite o serviço de cada atendimento e gere um PDF completo ou individual.</p></div></div><table><thead><tr><th>#</th><th>Data</th><th>Horário</th><th>Profissional</th><th>Serviço</th><th></th></tr></thead><tbody>${sessions.length ? sessions.map((session, index) => `<tr><td>${index + 1}</td><td>${new Date(`${session.date}T12:00:00`).toLocaleDateString('pt-BR')}</td><td>${session.start} às ${session.end}</td><td>${session.professional}</td><td><select class="folder-service" data-guide-id="${guide.id}" data-session-index="${index}"><option ${session.procedure.includes('10101012') ? 'selected' : ''} value="10101012 - Consulta em consultório">10101012 · Consulta</option><option ${session.procedure.includes('50000470') ? 'selected' : ''} value="50000470 - Sessão de fisioterapia">50000470 · Fisioterapia</option><option ${session.procedure.includes('50000000') ? 'selected' : ''} value="50000000 - Atendimento terapêutico ABA">50000000 · Terapia ABA</option><option ${session.procedure.includes('40901122') ? 'selected' : ''} value="40901122 - Ultrassonografia">40901122 · Ultrassonografia</option></select></td><td><button class="finance-delete" data-action="print-session" data-guide-id="${guide.id}" data-session-index="${index}">Gerar PDF</button></td></tr>`).join('') : '<tr><td colspan="6">Nenhum atendimento nesta pasta.</td></tr>'}</tbody></table></div>`;
+  return `<div class="page-heading"><div><p class="eyebrow">Pasta da guia · ${guide.id}</p><h1>${guide.patient}</h1><p class="heading-copy">${guide.insurer} · ${guide.competence || guide.date} · ${sessions.length} atendimentos</p></div><div class="folder-actions"><button class="secondary-button" data-view="guides">← Voltar</button><button class="secondary-button" data-action="print-folder" data-guide-id="${guide.id}">Gerar PDF da pasta</button></div></div><div class="folder-summary"><div><span>Guia</span><strong>${guide.id}</strong></div><div><span>Procedimento</span><strong>${guide.procedure}</strong></div><div><span>Valor total</span><strong>${guide.value}</strong></div><div><span>Status</span>${statusTag(guide)}</div></div><div class="panel"><div class="panel-header"><div><h2 class="panel-title">Atendimentos da competência</h2><p class="panel-subtitle">Edite o serviço de cada atendimento e gere um PDF completo ou individual.</p></div></div><table><thead><tr><th>#</th><th>Data</th><th>Horário</th><th>Profissional</th><th>Serviço</th><th></th></tr></thead><tbody>${sessions.length ? sessions.map((session, index) => `<tr><td>${index + 1}</td><td>${new Date(`${session.date}T12:00:00`).toLocaleDateString('pt-BR')}</td><td>${session.start} às ${session.end}</td><td>${session.professional}</td><td><select class="folder-service" data-guide-id="${guide.id}" data-session-index="${index}"><option ${session.procedure.includes('10101012') ? 'selected' : ''} value="10101012 - Consulta em consultório">10101012 · Consulta</option><option ${session.procedure.includes('50000470') ? 'selected' : ''} value="50000470 - Sessão de fisioterapia">50000470 · Fisioterapia</option><option ${session.procedure.includes('50000000') ? 'selected' : ''} value="50000000 - Atendimento terapêutico ABA">50000000 · Terapia ABA</option><option ${session.procedure.includes('40901122') ? 'selected' : ''} value="40901122 - Ultrassonografia">40901122 · Ultrassonografia</option></select></td><td><button class="finance-delete" data-action="print-session" data-guide-id="${guide.id}" data-session-index="${index}">Gerar PDF</button></td></tr>`).join('') : '<tr><td colspan="6">Nenhum atendimento nesta pasta.</td></tr>'}</tbody></table></div>${glosaPanel(guide)}`;
 }
 function guideList() { return `<div class="page-heading"><div><p class="eyebrow">Operação de faturamento</p><h1>Guias TISS</h1><p class="heading-copy">Acompanhe o ciclo de cada guia, do preenchimento ao envio.</p></div><button class="primary-button" data-action="new-guide">＋ Nova guia</button></div><div class="panel"><div class="panel-header"><div><h2 class="panel-title">Todas as guias</h2><p class="panel-subtitle">${guides.length} registros salvos neste navegador</p></div><button class="secondary-button" data-action="clear-guides">Limpar dados demo</button></div><table><thead><tr><th>Guia</th><th>Paciente</th><th>Convênio</th><th>Status</th><th>Valor</th><th></th></tr></thead><tbody>${guides.map(g => `<tr><td><strong>${g.id}</strong><small>${g.date}</small></td><td>${g.patient}<small>${g.procedure}</small></td><td>${g.insurer}</td><td>${statusTag(g)}</td><td><strong>${g.value}</strong></td><td><button class="text-button" data-action="open-guide-folder" data-guide-id="${g.id}">Abrir pasta →</button></td></tr>`).join('')}</tbody></table></div>${statusSimulator()}`; }
 function financeView() {
@@ -318,6 +350,62 @@ document.addEventListener('click', async event => {
 }, true);
 
 document.addEventListener('submit', async event => {
+  if (event.target.id !== 'glosa-form' || !activeSession?.token) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const guideId = event.target.dataset.guideId;
+  const data = Object.fromEntries(new FormData(event.target));
+  try {
+    await apiRequest(`/guides/${guideId}/glosa`, { method: 'POST', body: JSON.stringify(data) });
+    const [apiGlosas, apiGuides] = await Promise.all([apiRequest('/glosas'), apiRequest('/guides')]);
+    glosas = apiGlosas.map(normalizeGlosa);
+    guides = apiGuides.map(normalizeGuide);
+    appView.innerHTML = guideFolderView(guideId);
+    showToast('Glosa registrada.');
+  } catch (error) {
+    showToast(error.message);
+  }
+}, true);
+
+document.addEventListener('submit', async event => {
+  if (event.target.id !== 'recurso-form' || !activeSession?.token) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const glosaId = event.target.dataset.glosaId;
+  const data = Object.fromEntries(new FormData(event.target));
+  const guideId = guides.find(guide => glosas.some(g => g.id === glosaId && g.guideId === guide.id))?.id;
+  try {
+    await apiRequest(`/glosas/${glosaId}/recurso`, { method: 'POST', body: JSON.stringify(data) });
+    const [apiGlosas, apiGuides] = await Promise.all([apiRequest('/glosas'), apiRequest('/guides')]);
+    glosas = apiGlosas.map(normalizeGlosa);
+    guides = apiGuides.map(normalizeGuide);
+    appView.innerHTML = guideFolderView(guideId);
+    showToast('Recurso enviado à operadora.');
+  } catch (error) {
+    showToast(error.message);
+  }
+}, true);
+
+document.addEventListener('click', async event => {
+  const resolveButton = event.target.closest('[data-action="resolve-glosa"]');
+  if (!resolveButton || !activeSession?.token) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const glosaId = resolveButton.dataset.glosaId;
+  const guideId = guides.find(guide => glosas.some(g => g.id === glosaId && g.guideId === guide.id))?.id;
+  try {
+    await apiRequest(`/glosas/${glosaId}/resolve`, { method: 'POST', body: JSON.stringify({ outcome: resolveButton.dataset.outcome }) });
+    const [apiGlosas, apiGuides] = await Promise.all([apiRequest('/glosas'), apiRequest('/guides')]);
+    glosas = apiGlosas.map(normalizeGlosa);
+    guides = apiGuides.map(normalizeGuide);
+    appView.innerHTML = guideFolderView(guideId);
+    showToast(resolveButton.dataset.outcome === 'revertida' ? 'Glosa revertida.' : 'Glosa mantida.');
+  } catch (error) {
+    showToast(error.message);
+  }
+}, true);
+
+document.addEventListener('submit', async event => {
   if (event.target.id !== 'invoice-form' || !activeSession?.token) return;
   event.preventDefault();
   event.stopPropagation();
@@ -379,7 +467,39 @@ document.addEventListener('submit', async event => {
   }
 }, true);
 
-document.addEventListener('click', event => { const viewButton = event.target.closest('[data-view]'); if (viewButton) { document.querySelectorAll('.nav-item').forEach(item => item.classList.toggle('active', item.dataset.view === viewButton.dataset.view)); render(viewButton.dataset.view); } const statusButton = event.target.closest('[data-status]'); if (statusButton) { const guideId = document.querySelector('#status-guide')?.value; if (!guideId) { showToast('Selecione uma guia antes de registrar o retorno.'); return; } const statusLabels = { review: 'Em análise', approved: 'Aprovada', error: 'Glosada' }; const guide = guides.find(item => item.id === guideId); guide.status = statusButton.dataset.status; guide.label = statusLabels[guide.status]; saveGuides(); render('guides'); showToast(`Retorno registrado: ${guide.label}.`); } const action = event.target.closest('[data-action]')?.dataset.action; if (action === 'logout') { localStorage.removeItem('tiss-session'); window.location.reload(); } if (action === 'open-guide-folder') { breadcrumb.textContent = 'Pasta da guia'; appView.innerHTML = guideFolderView(event.target.closest('[data-guide-id]').dataset.guideId); } if (action === 'print-folder') { const guide = guides.find(item => item.id === event.target.closest('[data-guide-id]').dataset.guideId); if (guide) printGuideFolder(guide); } if (action === 'print-session') { const button = event.target.closest('[data-guide-id]'); const guide = guides.find(item => item.id === button.dataset.guideId); if (guide) printGuideFolder(guide, guide.sessions[Number(button.dataset.sessionIndex)]); } if (action === 'new-guide') { document.querySelectorAll('.nav-item').forEach(item => item.classList.toggle('active', item.dataset.view === 'guides')); breadcrumb.textContent = 'Nova guia'; appView.innerHTML = guideFormMonthly(); restoreDraft(); } if (action === 'new-appointment') { breadcrumb.textContent = 'Novo atendimento'; document.querySelectorAll('.nav-item').forEach(item => item.classList.toggle('active', item.dataset.view === 'agenda')); appView.innerHTML = agendaView(); document.querySelector('#appointment-patient')?.focus(); } if (action === 'clear-guides') { guides = [...defaultGuides]; saveGuides(); render('guides'); showToast('Dados demo restaurados.'); } if (action === 'soon') showToast('Demonstração em preparação.'); });
+document.addEventListener('submit', event => {
+  if (event.target.id !== 'glosa-form' || activeSession?.token) return;
+  event.preventDefault();
+  const guideId = event.target.dataset.guideId;
+  const data = Object.fromEntries(new FormData(event.target));
+  const glosaId = `GL-${Date.now()}`;
+  glosas.unshift({ id: glosaId, guideId, code: data.code, reason: data.reason, amount: Number(data.amount || 0), status: 'aberta' });
+  const guide = guides.find(item => item.id === guideId);
+  if (guide) { guide.status = 'error'; guide.label = 'Com glosa'; }
+  saveGlosas();
+  saveGuides();
+  appView.innerHTML = guideFolderView(guideId);
+  showToast('Glosa registrada.');
+});
+
+document.addEventListener('submit', event => {
+  if (event.target.id !== 'recurso-form' || activeSession?.token) return;
+  event.preventDefault();
+  const glosaId = event.target.dataset.glosaId;
+  const data = Object.fromEntries(new FormData(event.target));
+  const glosa = glosas.find(item => item.id === glosaId);
+  if (!glosa) return;
+  glosa.status = 'recurso_enviado';
+  glosa.justification = data.justification;
+  const guide = guides.find(item => item.id === glosa.guideId);
+  if (guide) { guide.status = 'recurso'; guide.label = 'Recurso enviado'; }
+  saveGlosas();
+  saveGuides();
+  appView.innerHTML = guideFolderView(glosa.guideId);
+  showToast('Recurso enviado à operadora.');
+});
+
+document.addEventListener('click', event => { const viewButton = event.target.closest('[data-view]'); if (viewButton) { document.querySelectorAll('.nav-item').forEach(item => item.classList.toggle('active', item.dataset.view === viewButton.dataset.view)); render(viewButton.dataset.view); } const statusButton = event.target.closest('[data-status]'); if (statusButton) { const guideId = document.querySelector('#status-guide')?.value; if (!guideId) { showToast('Selecione uma guia antes de registrar o retorno.'); return; } if (statusButton.dataset.status === 'error') { document.querySelectorAll('.nav-item').forEach(item => item.classList.toggle('active', item.dataset.view === 'guides')); breadcrumb.textContent = 'Pasta da guia'; appView.innerHTML = guideFolderView(guideId); showToast('Registre o motivo e o valor da glosa na pasta da guia.'); return; } const statusLabels = { review: 'Em análise', approved: 'Aprovada' }; const guide = guides.find(item => item.id === guideId); guide.status = statusButton.dataset.status; guide.label = statusLabels[guide.status]; saveGuides(); render('guides'); showToast(`Retorno registrado: ${guide.label}.`); } const action = event.target.closest('[data-action]')?.dataset.action; if (action === 'logout') { localStorage.removeItem('tiss-session'); window.location.reload(); } if (action === 'open-guide-folder') { breadcrumb.textContent = 'Pasta da guia'; appView.innerHTML = guideFolderView(event.target.closest('[data-guide-id]').dataset.guideId); } if (action === 'print-folder') { const guide = guides.find(item => item.id === event.target.closest('[data-guide-id]').dataset.guideId); if (guide) printGuideFolder(guide); } if (action === 'print-session') { const button = event.target.closest('[data-guide-id]'); const guide = guides.find(item => item.id === button.dataset.guideId); if (guide) printGuideFolder(guide, guide.sessions[Number(button.dataset.sessionIndex)]); } if (action === 'new-guide') { document.querySelectorAll('.nav-item').forEach(item => item.classList.toggle('active', item.dataset.view === 'guides')); breadcrumb.textContent = 'Nova guia'; appView.innerHTML = guideFormMonthly(); restoreDraft(); } if (action === 'new-appointment') { breadcrumb.textContent = 'Novo atendimento'; document.querySelectorAll('.nav-item').forEach(item => item.classList.toggle('active', item.dataset.view === 'agenda')); appView.innerHTML = agendaView(); document.querySelector('#appointment-patient')?.focus(); } if (action === 'clear-guides') { guides = [...defaultGuides]; saveGuides(); render('guides'); showToast('Dados demo restaurados.'); } if (action === 'resolve-glosa' && !activeSession?.token) { const button = event.target.closest('[data-glosa-id]'); const glosa = glosas.find(item => item.id === button.dataset.glosaId); if (!glosa) return; glosa.status = button.dataset.outcome; glosa.resolvedAt = new Date().toISOString(); const guide = guides.find(item => item.id === glosa.guideId); if (guide) { guide.status = glosa.status === 'revertida' ? 'approved' : 'error'; guide.label = glosa.status === 'revertida' ? 'Aprovada' : 'Com glosa'; } saveGlosas(); saveGuides(); appView.innerHTML = guideFolderView(glosa.guideId); showToast(glosa.status === 'revertida' ? 'Glosa revertida.' : 'Glosa mantida.'); } if (action === 'soon') showToast('Demonstração em preparação.'); });
 document.addEventListener('click', event => {
   const editButton = event.target.closest('[data-action="edit-patient"]');
   if (editButton) editPatient(editButton.dataset.patientId);

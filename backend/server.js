@@ -131,4 +131,52 @@ app.get('/api/reports', auth, (req, res) => {
   res.json({ guides, invoices });
 });
 
+app.get('/api/glosas', auth, (req, res) => {
+  const glosas = db.prepare('SELECT id, guide_id AS guideId, code, reason, amount_cents AS amountCents, status, justification, created_at AS createdAt, resolved_at AS resolvedAt FROM glosas WHERE clinic_id = ? ORDER BY created_at DESC').all(req.session.clinicId);
+  res.json(glosas);
+});
+
+app.post('/api/guides/:id/glosa', auth, (req, res) => {
+  const { code, reason, amount } = req.body;
+  if (!reason) return res.status(400).json({ error: 'Informe o motivo da glosa.' });
+  const guide = db.prepare('SELECT id FROM guides WHERE id = ? AND clinic_id = ?').get(req.params.id, req.session.clinicId);
+  if (!guide) return res.status(404).json({ error: 'Guia não encontrada.' });
+  const glosaId = `GL-${Date.now()}`;
+  try {
+    const insertAndUpdate = db.transaction(() => {
+      db.prepare('INSERT INTO glosas (id, clinic_id, guide_id, code, reason, amount_cents) VALUES (?, ?, ?, ?, ?, ?)').run(glosaId, req.session.clinicId, req.params.id, code || '', reason, moneyToCents(amount));
+      db.prepare("UPDATE guides SET status = 'error' WHERE id = ? AND clinic_id = ?").run(req.params.id, req.session.clinicId);
+    });
+    insertAndUpdate();
+    res.status(201).json({ id: glosaId });
+  } catch (error) {
+    res.status(409).json({ error: error.message });
+  }
+});
+
+app.post('/api/glosas/:id/recurso', auth, (req, res) => {
+  const { justification } = req.body;
+  if (!justification) return res.status(400).json({ error: 'Informe a justificativa do recurso.' });
+  const glosa = db.prepare('SELECT * FROM glosas WHERE id = ? AND clinic_id = ?').get(req.params.id, req.session.clinicId);
+  if (!glosa) return res.status(404).json({ error: 'Glosa não encontrada.' });
+  const updateAll = db.transaction(() => {
+    db.prepare("UPDATE glosas SET status = 'recurso_enviado', justification = ? WHERE id = ?").run(justification, req.params.id);
+    db.prepare("UPDATE guides SET status = 'recurso' WHERE id = ? AND clinic_id = ?").run(glosa.guide_id, req.session.clinicId);
+  });
+  updateAll();
+  res.json({ id: req.params.id, status: 'recurso_enviado' });
+});
+
+app.post('/api/glosas/:id/resolve', auth, (req, res) => {
+  const outcome = req.body.outcome === 'revertida' ? 'revertida' : 'mantida';
+  const glosa = db.prepare('SELECT * FROM glosas WHERE id = ? AND clinic_id = ?').get(req.params.id, req.session.clinicId);
+  if (!glosa) return res.status(404).json({ error: 'Glosa não encontrada.' });
+  const updateAll = db.transaction(() => {
+    db.prepare('UPDATE glosas SET status = ?, resolved_at = CURRENT_TIMESTAMP WHERE id = ?').run(outcome, req.params.id);
+    db.prepare('UPDATE guides SET status = ? WHERE id = ? AND clinic_id = ?').run(outcome === 'revertida' ? 'approved' : 'error', glosa.guide_id, req.session.clinicId);
+  });
+  updateAll();
+  res.json({ id: req.params.id, status: outcome });
+});
+
 app.listen(port, () => console.log(`TISS Flow API disponível em http://localhost:${port}`));

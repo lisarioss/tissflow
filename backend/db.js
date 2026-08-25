@@ -74,6 +74,18 @@ db.exec(`
     status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'received')),
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
+  CREATE TABLE IF NOT EXISTS glosas (
+    id TEXT PRIMARY KEY,
+    clinic_id TEXT NOT NULL REFERENCES clinics(id),
+    guide_id TEXT NOT NULL REFERENCES guides(id),
+    code TEXT,
+    reason TEXT NOT NULL,
+    amount_cents INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'aberta' CHECK (status IN ('aberta', 'recurso_enviado', 'revertida', 'mantida')),
+    justification TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    resolved_at TEXT
+  );
 `);
 
 const guideColumns = db.prepare('PRAGMA table_info(guides)').all();

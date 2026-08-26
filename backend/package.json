@@ -18,5 +18,11 @@
     "dotenv": "^16.6.1",
     "express": "^4.21.2",
     "jsonwebtoken": "^9.0.2"
+  },
+  "name": "tiss-flow-frontend",
+  "private": true,
+  "description": "Funções puras e testes do frontend do TISS Flow (a UI em si não usa build/bundler).",
+  "scripts": {
+    "test": "node --test"
   }
 }

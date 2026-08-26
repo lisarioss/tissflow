@@ -108,7 +108,9 @@ const guideMigrations = {
   service_code: 'ALTER TABLE guides ADD COLUMN service_code TEXT',
   quantity: 'ALTER TABLE guides ADD COLUMN quantity INTEGER NOT NULL DEFAULT 1',
   unit_value_cents: 'ALTER TABLE guides ADD COLUMN unit_value_cents INTEGER NOT NULL DEFAULT 0',
-  guide_type: "ALTER TABLE guides ADD COLUMN guide_type TEXT NOT NULL DEFAULT 'sp_sadt'"
+  guide_type: "ALTER TABLE guides ADD COLUMN guide_type TEXT NOT NULL DEFAULT 'sp_sadt'",
+  cid: 'ALTER TABLE guides ADD COLUMN cid TEXT',
+  authorized_quantity: 'ALTER TABLE guides ADD COLUMN authorized_quantity INTEGER'
 };
 Object.entries(guideMigrations).forEach(([column, statement]) => { if (!guideColumnNames.has(column)) db.exec(statement); });
 const patientColumns = new Set(db.prepare('PRAGMA table_info(patients)').all().map(column => column.name));

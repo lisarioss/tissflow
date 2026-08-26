@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { nextSequentialId, timeToMinutes, hasScheduleConflictWith, escapeXml } = require('./lib.js');
+const { nextSequentialId, timeToMinutes, hasScheduleConflictWith, escapeXml, findSessionOutsidePlanValidity, exceedsAuthorizedQuantity, findCidIncompatibility } = require('./lib.js');
 
 test('nextSequentialId gera o próximo número com base no maior ID existente', () => {
   const list = [{ id: 'G-2026-00478' }, { id: 'G-2026-00481' }];
@@ -53,4 +53,49 @@ test('escapeXml previne injeção de marcação vinda de dados do formulário', 
   const escaped = escapeXml(nomeMalicioso);
   assert.ok(!escaped.includes('<'), 'não deve conter "<" literal após o escape');
   assert.ok(!escaped.includes('>'), 'não deve conter ">" literal após o escape');
+});
+
+test('findSessionOutsidePlanValidity detecta atendimento após o fim da vigência do plano', () => {
+  const sessions = [{ date: '2026-08-05' }, { date: '2026-08-20' }];
+  assert.equal(findSessionOutsidePlanValidity(sessions, '2026-08-10'), '2026-08-20');
+});
+
+test('findSessionOutsidePlanValidity retorna null quando todos os atendimentos estão dentro da vigência', () => {
+  const sessions = [{ date: '2026-08-05' }, { date: '2026-08-08' }];
+  assert.equal(findSessionOutsidePlanValidity(sessions, '2026-08-10'), null);
+});
+
+test('findSessionOutsidePlanValidity ignora a checagem quando não há vigência informada', () => {
+  const sessions = [{ date: '2099-01-01' }];
+  assert.equal(findSessionOutsidePlanValidity(sessions, ''), null);
+  assert.equal(findSessionOutsidePlanValidity(sessions, undefined), null);
+});
+
+test('exceedsAuthorizedQuantity acusa quando os atendimentos passam do autorizado', () => {
+  assert.equal(exceedsAuthorizedQuantity(5, 3), true);
+});
+
+test('exceedsAuthorizedQuantity não acusa quando está dentro ou igual ao autorizado', () => {
+  assert.equal(exceedsAuthorizedQuantity(3, 3), false);
+  assert.equal(exceedsAuthorizedQuantity(2, 3), false);
+});
+
+test('exceedsAuthorizedQuantity ignora a checagem quando não há autorização prévia', () => {
+  assert.equal(exceedsAuthorizedQuantity(999, ''), false);
+  assert.equal(exceedsAuthorizedQuantity(999, undefined), false);
+});
+
+test('findCidIncompatibility acusa CID fora do capítulo esperado para o procedimento', () => {
+  const result = findCidIncompatibility('50000000 - Atendimento terapêutico ABA', 'M54.5');
+  assert.ok(result, 'deveria encontrar incompatibilidade (esperado capítulo F para terapia ABA)');
+  assert.equal(result.chapter, 'M');
+});
+
+test('findCidIncompatibility aceita CID compatível com o procedimento', () => {
+  assert.equal(findCidIncompatibility('50000000 - Atendimento terapêutico ABA', 'F84.0'), null);
+  assert.equal(findCidIncompatibility('50000470 - Sessão de fisioterapia', 'M25.5'), null);
+});
+
+test('findCidIncompatibility não se aplica a procedimentos fora da tabela demonstrativa', () => {
+  assert.equal(findCidIncompatibility('10101012 - Consulta em consultório', 'Z00.0'), null);
 });

@@ -45,6 +45,25 @@ const defaultAppointments = [
 ];
 let appointments = JSON.parse(localStorage.getItem(clinicStorageKey('appointments')) || 'null') || defaultAppointments;
 let glosas = JSON.parse(localStorage.getItem(clinicStorageKey('glosas')) || 'null') || [];
+// Logos empacotados no projeto — usados só como enfeite visual no cabeçalho da
+// guia. Convênios cadastrados depois via tela de Convênios não têm logo
+// próprio e caem no fallback de texto (initials/nome), sem quebrar nada.
+const insurerLogos = {
+  'Unimed': { logo: 'UNIMED', logoPath: 'assets/planos/unimed.png' },
+  'Bradesco Saúde': { logo: 'BRADESCO SAÚDE', logoPath: 'assets/planos/bradescosaude.png' },
+  'SulAmérica': { logo: 'SULAMÉRICA', logoPath: 'assets/planos/sulamerica.png' },
+  'Amil': { logo: 'AMIL', logoPath: 'assets/planos/amil.png' },
+  'Promédica': { logo: 'PROMÉDICA', logoPath: 'assets/planos/promedica.png' }
+};
+const defaultInsurers = [
+  { id: 'INS-001', name: 'Unimed', ansCode: '004701', contactEmail: '', contactPhone: '', acceptedProcedures: ['10101012', '50000470', '50000000', '40901122'] },
+  { id: 'INS-002', name: 'Bradesco Saúde', ansCode: '005711', contactEmail: '', contactPhone: '', acceptedProcedures: ['10101012', '50000470', '40901122'] },
+  { id: 'INS-003', name: 'SulAmérica', ansCode: '006246', contactEmail: '', contactPhone: '', acceptedProcedures: ['10101012', '50000470'] },
+  { id: 'INS-004', name: 'Amil', ansCode: '326305', contactEmail: '', contactPhone: '', acceptedProcedures: ['10101012'] },
+  { id: 'INS-005', name: 'Promédica', ansCode: '', contactEmail: '', contactPhone: '', acceptedProcedures: [] }
+];
+let insurers = JSON.parse(localStorage.getItem(clinicStorageKey('insurers')) || 'null') || defaultInsurers;
+function saveInsurers() { localStorage.setItem(clinicStorageKey('insurers'), JSON.stringify(insurers)); }
 const views = { overview: 'Visão geral', agenda: 'Agenda', guides: 'Guias TISS', financeiro: 'Financeiro', users: 'Usuários', patients: 'Pacientes', convenios: 'Convênios', reports: 'Relatórios', settings: 'Configurações' };
 const appView = document.querySelector('#app-view');
 const breadcrumb = document.querySelector('#breadcrumb');
@@ -70,11 +89,12 @@ function normalizeGlosa(glosa) { return { ...glosa, amount: Number(glosa.amountC
 async function loadApiData() {
   if (!activeSession?.token) return;
   try {
-    const [apiGuides, apiInvoices, apiPatients, apiGlosas] = await Promise.all([apiRequest('/guides'), apiRequest('/invoices'), apiRequest('/patients'), apiRequest('/glosas')]);
+    const [apiGuides, apiInvoices, apiPatients, apiGlosas, apiInsurers] = await Promise.all([apiRequest('/guides'), apiRequest('/invoices'), apiRequest('/patients'), apiRequest('/glosas'), apiRequest('/insurers')]);
     guides = apiGuides.map(normalizeGuide);
     invoices = apiInvoices.map(normalizeInvoice);
     if (apiPatients.length) patients = apiPatients;
     glosas = apiGlosas.map(normalizeGlosa);
+    if (apiInsurers.length) insurers = apiInsurers;
     render();
   } catch (error) {
     showToast(`Modo local: ${error.message}`);
@@ -87,22 +107,13 @@ function overview() {
   return `<div class="page-heading"><div><p class="eyebrow">Quarta-feira, 19 de agosto de 2026</p><h1>Bom dia, Marina.</h1><p class="heading-copy">Aqui está o pulso do faturamento da sua clínica.</p></div><button class="primary-button" data-action="new-guide">＋ Nova guia</button></div>
   <div class="stats-grid"><article class="stat-card"><div class="stat-top"><span>Guias este mês</span><span class="stat-icon">▣</span></div><div class="stat-value">184</div><div class="stat-note"><b>↑ 12,4%</b> vs. mês anterior</div></article><article class="stat-card"><div class="stat-top"><span>Taxa de aprovação</span><span class="stat-icon">◉</span></div><div class="stat-value">94,8%</div><div class="stat-note"><b>↑ 2,1 p.p.</b> vs. mês anterior</div></article><article class="stat-card"><div class="stat-top"><span>Em análise</span><span class="stat-icon">◷</span></div><div class="stat-value">12</div><div class="stat-note warn"><b>3 vencem hoje</b> precisam de atenção</div></article><article class="stat-card"><div class="stat-top"><span>Valor faturado</span><span class="stat-icon">◇</span></div><div class="stat-value">R$ 42,8k</div><div class="stat-note"><b>↑ 8,7%</b> vs. mês anterior</div></article></div>
   <div class="content-grid"><div class="panel"><div class="panel-header"><div><h2 class="panel-title">Guias recentes</h2><p class="panel-subtitle">Acompanhe as últimas movimentações</p></div><button class="text-button" data-view="guides">Ver todas →</button></div><table><thead><tr><th>Guia</th><th>Paciente</th><th>Convênio</th><th>Status</th><th>Valor</th></tr></thead><tbody>${guides.map(g => `<tr><td><strong>${g.id}</strong><small>${g.date}</small></td><td>${g.patient}<small>${g.procedure}</small></td><td>${g.insurer}</td><td>${statusTag(g)}</td><td><strong>${g.value}</strong></td></tr>`).join('')}</tbody></table></div><div class="panel activity"><div class="panel-header"><div><h2 class="panel-title">Atividade recente</h2><p class="panel-subtitle">Atualizações da operação</p></div></div><div class="activity-item"><span class="activity-dot"></span><div><strong>Guia aprovada</strong><p>G-2026-00481 foi processada pela Unimed</p></div><time>há 18 min</time></div><div class="activity-item"><span class="activity-dot orange"></span><div><strong>Nova pendência</strong><p>G-2026-00479 requer revisão</p></div><time>há 1 h</time></div><div class="activity-item"><span class="activity-dot"></span><div><strong>Lote enviado</strong><p>12 guias enviadas para Bradesco Saúde</p></div><time>há 3 h</time></div></div></div>
-  <div class="panel" style="margin-top:18px"><div class="panel-header"><div><h2 class="panel-title">Volume de guias</h2><p class="panel-subtitle">Guias processadas nos últimos 7 dias</p></div><button class="secondary-button">Últimos 7 dias⌄</button></div><div class="chart-area"><div class="chart-grid"><svg class="chart-line" viewBox="0 0 700 140" preserveAspectRatio="none"><polyline points="0,112 100,91 200,101 300,65 400,78 500,34 600,49 700,15"/><circle cx="0" cy="112" r="3"/><circle cx="100" cy="91" r="3"/><circle cx="200" cy="101" r="3"/><circle cx="300" cy="65" r="3"/><circle cx="400" cy="78" r="3"/><circle cx="500" cy="34" r="3"/><circle cx="600" cy="49" r="3"/><circle cx="700" cy="15" r="3"/></svg></div><div class="chart-labels">${ultimosSeteDias().map(label => `<span>${label}</span>`).join('')}</div></div></div>`;
+  <div class="panel" style="margin-top:18px"><div class="panel-header"><div><h2 class="panel-title">Volume de guias</h2><p class="panel-subtitle">Guias processadas nos últimos 7 dias</p></div><button class="secondary-button">Últimos 7 dias⌄</button></div><div class="chart-area"><div class="chart-grid"><svg class="chart-line" viewBox="0 0 700 140" preserveAspectRatio="none"><polyline points="0,112 100,91 200,101 300,65 400,78 500,34 600,49 700,15"/><circle cx="0" cy="112" r="3"/><circle cx="100" cy="91" r="3"/><circle cx="200" cy="101" r="3"/><circle cx="300" cy="65" r="3"/><circle cx="400" cy="78" r="3"/><circle cx="500" cy="34" r="3"/><circle cx="600" cy="49" r="3"/><circle cx="700" cy="15" r="3"/></svg></div><div class="chart-labels"><span>13 ago</span><span>14 ago</span><span>15 ago</span><span>16 ago</span><span>17 ago</span><span>18 ago</span><span>19 ago</span></div></div></div>`;
 }
-function guideForm() { return `<div class="page-heading"><div><p class="eyebrow">Nova movimentação</p><h1>Preencher guia TISS</h1><p class="heading-copy">Os dados ficam salvos como rascunho até a validação final.</p></div><button class="secondary-button" data-view="overview">← Voltar</button></div><form class="guide-form" id="guide-form"><div class="form-section"><h2>Dados do atendimento</h2><p>Informe os dados básicos para iniciar a guia.</p><div class="form-grid"><div class="field"><label for="patient">Paciente *</label><input id="patient" required placeholder="Nome completo" /></div><div class="field"><label for="insurer">Convênio *</label><select id="insurer" required><option value="">Selecione o convênio</option><option>Unimed</option><option>Bradesco Saúde</option><option>SulAmérica</option><option>Amil</option></select></div><div class="field"><label for="date">Data do atendimento *</label><input id="date" type="date" required value="2026-08-19" /></div><div class="field"><label for="type">Tipo de atendimento *</label><select id="type" required><option value="">Selecione o tipo</option><option>Consulta</option><option>Exame</option><option>Terapia</option></select></div></div></div><div class="form-section"><h2>Procedimento realizado</h2><p>Busque o procedimento pelo código TUSS ou descrição.</p><div class="form-grid"><div class="field"><label for="procedure">Procedimento *</label><select id="procedure" required><option value="">Selecione o procedimento</option><option>10101012 - Consulta em consultório</option><option>50000470 - Sessão de fisioterapia</option><option>40901122 - Ultrassonografia</option></select></div><div class="field"><label for="professional">Profissional executante *</label><select id="professional" required><option value="">Selecione o profissional</option><option>Marina Souza - CRM 12345</option><option>Lucas Andrade - CREFITO 8812</option></select></div></div></div><div class="form-section"><h2>Conferência</h2><p>A validação automática será executada antes da geração do XML.</p><div class="field"><label for="notes">Observações (opcional)</label><input id="notes" placeholder="Adicione uma observação para o faturamento" /></div></div><div class="form-footer"><button type="button" class="secondary-button" data-action="draft">Salvar rascunho</button><button class="primary-button" type="submit">Validar e continuar →</button></div></form>`; }
 function guideFormComplete() {
-  const insurers = [
-    { value: 'Unimed', label: 'Unimed', code: '004701', logo: 'UNIMED', logoPath: 'assets/planos/unimed.png' },
-    { value: 'Bradesco Saúde', label: 'Bradesco Saúde', code: '005711', logo: 'BRADESCO SAÚDE', logoPath: 'assets/planos/bradescosaude.png' },
-    { value: 'SulAmérica', label: 'SulAmérica', code: '006246', logo: 'SULAMÉRICA', logoPath: 'assets/planos/sulamerica.png' },
-    { value: 'Amil', label: 'Amil', code: '326305', logo: 'AMIL', logoPath: 'assets/planos/amil.png' },
-    { value: 'Promédica', label: 'Promédica', code: '', logo: 'PROMÉDICA', logoPath: 'assets/planos/promedica.png' }
-  ];
-
   return `<div class="page-heading"><div><p class="eyebrow">Guia SP/SADT · TISS 4.01</p><h1>Preencher guia TISS</h1><p class="heading-copy">Complete os dados da operadora, beneficiário, prestador e atendimento.</p></div><button class="secondary-button" data-view="overview">← Voltar</button></div>
   <form class="guide-form" id="guide-form">
     <div class="guide-plan-header"><div class="plan-logo"><img id="plan-logo-image" src="" alt="Logo da operadora" hidden /><span id="plan-logo">TISS</span></div><div><strong id="plan-name">Selecione a operadora</strong><small>Guia SP/SADT · padrão demonstrativo</small></div><span class="guide-code">Nº <b>G-2026-DEMO</b></span></div>
-    <div class="form-section"><h2>1. Identificação da operadora</h2><p>Dados da empresa responsável pelo plano de saúde.</p><div class="form-grid"><div class="field"><label for="insurer">Operadora *</label><select id="insurer" name="insurer" required><option value="">Selecione a operadora</option>${insurers.map(insurer => `<option value="${insurer.value}" data-code="${insurer.code}" data-logo="${insurer.logo}" data-logo-path="${insurer.logoPath}">${insurer.label}</option>`).join('')}</select></div><div class="field"><label for="ans-code">Código ANS</label><input id="ans-code" name="ansCode" readonly placeholder="Preenchido pela operadora" /></div><div class="field"><label for="authorization-number">Número da autorização</label><input id="authorization-number" name="authorizationNumber" placeholder="Se autorizado previamente" /></div><div class="field"><label for="authorized-quantity">Quantidade autorizada</label><input id="authorized-quantity" name="authorizedQuantity" type="number" min="1" placeholder="Se pré-autorizado" /></div><div class="field"><label for="operator-guide">Guia da operadora</label><input id="operator-guide" name="operatorGuide" placeholder="Número informado pela operadora" /></div></div></div>
+    <div class="form-section"><h2>1. Identificação da operadora</h2><p>Dados da empresa responsável pelo plano de saúde.</p><div class="form-grid"><div class="field"><label for="insurer">Operadora *</label><select id="insurer" name="insurer" required><option value="">Selecione a operadora</option>${insurers.map(insurer => `<option value="${insurer.name}" data-code="${insurer.ansCode || ''}" data-logo="${(insurerLogos[insurer.name] || {}).logo || insurer.name.toUpperCase()}" data-logo-path="${(insurerLogos[insurer.name] || {}).logoPath || ''}">${insurer.name}</option>`).join('')}</select></div><div class="field"><label for="ans-code">Código ANS</label><input id="ans-code" name="ansCode" readonly placeholder="Preenchido pela operadora" /></div><div class="field"><label for="authorization-number">Número da autorização</label><input id="authorization-number" name="authorizationNumber" placeholder="Se autorizado previamente" /></div><div class="field"><label for="authorized-quantity">Quantidade autorizada</label><input id="authorized-quantity" name="authorizedQuantity" type="number" min="1" placeholder="Se pré-autorizado" /></div><div class="field"><label for="operator-guide">Guia da operadora</label><input id="operator-guide" name="operatorGuide" placeholder="Número informado pela operadora" /></div></div></div>
     <div class="form-section"><h2>2. Beneficiário</h2><p>Selecione um paciente cadastrado para preencher automaticamente os dados do plano.</p><div class="form-grid"><div class="field"><label for="patient">Paciente *</label><select id="patient" name="patient" required><option value="">Selecione o paciente</option>${patients.map(patient => `<option value="${patient.name}" data-patient-id="${patient.id}">${patient.name} · ${patient.insurer}</option>`).join('')}</select></div><div class="field"><label for="card-number">Número da carteira *</label><input id="card-number" name="cardNumber" required placeholder="Preenchido pelo paciente" /></div><div class="field"><label for="patient-birth">Data de nascimento</label><input id="patient-birth" name="patientBirth" type="date" /></div><div class="field"><label for="patient-plan">Plano</label><input id="patient-plan" name="patientPlan" placeholder="Preenchido pelo paciente" /></div><div class="field"><label for="plan-validity">Validade do plano</label><input id="plan-validity" name="planValidity" type="date" /></div></div></div>
     <div class="form-section"><h2>3. Prestador executante</h2><p>Dados da clínica e do profissional que realizou o atendimento.</p><div class="form-grid"><div class="field"><label for="provider-name">Nome da clínica *</label><input id="provider-name" name="providerName" value="Clínica Sabiá" required /></div><div class="field"><label for="provider-cnpj">CNPJ</label><input id="provider-cnpj" name="providerCnpj" value="12.345.678/0001-90" /></div><div class="field"><label for="professional">Profissional executante *</label><select id="professional" name="professional" required><option value="">Selecione o profissional</option><option value="Marina Souza" data-register="CRM 12345">Marina Souza · CRM 12345</option><option value="Lucas Andrade" data-register="CREFITO 8812">Lucas Andrade · CREFITO 8812</option></select></div><div class="field"><label for="professional-register">Registro profissional</label><input id="professional-register" name="professionalRegister" readonly placeholder="Preenchido pelo profissional" /></div></div></div>
     <div class="form-section"><h2>4. Atendimento e procedimento</h2><p>Informe o código TUSS, a data e os detalhes do serviço realizado.</p><div class="form-grid"><div class="field"><label for="date">Data do atendimento *</label><input id="date" name="date" type="date" required value="2026-08-20" /></div><div class="field"><label for="type">Tipo de atendimento *</label><select id="type" name="type" required><option value="">Selecione o tipo</option><option>Consulta</option><option>Exame</option><option>Terapia</option></select></div><div class="field"><label for="procedure">Procedimento TUSS *</label><select id="procedure" name="procedure" required><option value="">Selecione o procedimento</option><option value="10101012 - Consulta em consultório">10101012 · Consulta em consultório</option><option value="50000470 - Sessão de fisioterapia">50000470 · Sessão de fisioterapia</option><option value="40901122 - Ultrassonografia">40901122 · Ultrassonografia</option></select></div><div class="field"><label for="quantity">Quantidade *</label><input id="quantity" name="quantity" type="number" min="1" value="1" required /></div><div class="field"><label for="value">Valor do procedimento *</label><input id="value" name="value" type="number" min="0.01" step="0.01" value="180" required /></div><div class="field"><label for="service-code">Código do serviço</label><input id="service-code" name="serviceCode" readonly placeholder="Extraído do TUSS" /></div><div class="field"><label for="cid">CID-10 principal</label><input id="cid" name="cid" placeholder="Ex.: F84.0" pattern="^[A-Za-z][0-9]{2}(\.[0-9]{1,2})?$" title="Formato esperado: letra + 2 dígitos, ex. F84 ou F84.0" /></div></div></div>
@@ -211,9 +222,33 @@ function patientRowsHtml(term) {
   return filtered.map(patient => `<tr><td><strong>${patient.name}</strong><small>${new Date(`${patient.birthDate}T12:00:00`).toLocaleDateString('pt-BR')}</small></td><td>${patient.insurer}</td><td>${patient.cardNumber}</td><td>${patient.plan}</td><td>${new Date(`${patient.planValidity}T12:00:00`).toLocaleDateString('pt-BR')}</td><td><button class="text-button" data-action="edit-patient" data-patient-id="${patient.id}">Editar</button></td></tr>`).join('');
 }
 function patientsView() {
-  return `<div class="page-heading"><div><p class="eyebrow">Cadastro da clínica</p><h1>Pacientes</h1><p class="heading-copy">Mantenha os dados do plano prontos para reutilizar nas guias.</p></div><button class="primary-button" data-action="new-patient">＋ Novo paciente</button></div><div class="panel"><div class="panel-header"><div><h2 class="panel-title">Pacientes cadastrados</h2><p class="panel-subtitle">${patients.length} registros com dados de convênio</p></div></div><div class="search-bar"><input type="search" id="patient-search" placeholder="Buscar por nome, convênio, carteira ou plano" /></div><table><thead><tr><th>Paciente</th><th>Convênio</th><th>Carteira</th><th>Plano</th><th>Validade</th><th></th></tr></thead><tbody id="patient-table-body">${patientRowsHtml('')}</tbody></table></div><form class="panel patient-form" id="patient-form"><div class="panel-header"><div><h2 class="panel-title">Cadastrar paciente</h2><p class="panel-subtitle">Esses dados serão carregados automaticamente na guia.</p></div></div><div class="form-section"><div class="form-grid"><div class="field"><label for="new-patient-name">Nome completo *</label><input id="new-patient-name" name="name" required /></div><div class="field"><label for="new-patient-birth">Data de nascimento *</label><input id="new-patient-birth" name="birthDate" type="date" required /></div><div class="field"><label for="new-patient-insurer">Convênio *</label><select id="new-patient-insurer" name="insurer" required><option value="">Selecione</option><option>Unimed</option><option>Bradesco Saúde</option><option>SulAmérica</option><option>Amil</option><option>Promédica</option></select></div><div class="field"><label for="new-patient-ans">Código ANS</label><input id="new-patient-ans" name="ansCode" placeholder="Ex.: 004701" /></div><div class="field"><label for="new-patient-card">Número da carteira *</label><input id="new-patient-card" name="cardNumber" required /></div><div class="field"><label for="new-patient-plan">Plano *</label><input id="new-patient-plan" name="plan" required placeholder="Nome do plano" /></div><div class="field"><label for="new-patient-validity">Validade do plano *</label><input id="new-patient-validity" name="planValidity" type="date" required /></div></div><div class="form-footer"><button class="primary-button" type="submit">Salvar paciente</button></div></div></form>`;
+  return `<div class="page-heading"><div><p class="eyebrow">Cadastro da clínica</p><h1>Pacientes</h1><p class="heading-copy">Mantenha os dados do plano prontos para reutilizar nas guias.</p></div><button class="primary-button" data-action="new-patient">＋ Novo paciente</button></div><div class="panel"><div class="panel-header"><div><h2 class="panel-title">Pacientes cadastrados</h2><p class="panel-subtitle">${patients.length} registros com dados de convênio</p></div></div><div class="search-bar"><input type="search" id="patient-search" placeholder="Buscar por nome, convênio, carteira ou plano" /></div><table><thead><tr><th>Paciente</th><th>Convênio</th><th>Carteira</th><th>Plano</th><th>Validade</th><th></th></tr></thead><tbody id="patient-table-body">${patientRowsHtml('')}</tbody></table></div><form class="panel patient-form" id="patient-form"><div class="panel-header"><div><h2 class="panel-title">Cadastrar paciente</h2><p class="panel-subtitle">Esses dados serão carregados automaticamente na guia.</p></div></div><div class="form-section"><div class="form-grid"><div class="field"><label for="new-patient-name">Nome completo *</label><input id="new-patient-name" name="name" required /></div><div class="field"><label for="new-patient-birth">Data de nascimento *</label><input id="new-patient-birth" name="birthDate" type="date" required /></div><div class="field"><label for="new-patient-insurer">Convênio *</label><select id="new-patient-insurer" name="insurer" required><option value="">Selecione</option>${insurers.map(insurer => `<option>${insurer.name}</option>`).join('')}</select></div><div class="field"><label for="new-patient-ans">Código ANS</label><input id="new-patient-ans" name="ansCode" placeholder="Ex.: 004701" /></div><div class="field"><label for="new-patient-card">Número da carteira *</label><input id="new-patient-card" name="cardNumber" required /></div><div class="field"><label for="new-patient-plan">Plano *</label><input id="new-patient-plan" name="plan" required placeholder="Nome do plano" /></div><div class="field"><label for="new-patient-validity">Validade do plano *</label><input id="new-patient-validity" name="planValidity" type="date" required /></div></div><div class="form-footer"><button class="primary-button" type="submit">Salvar paciente</button></div></div></form>`;
 }
 function listing(title, description, icon) { return `<div class="page-heading"><div><p class="eyebrow">Módulo operacional</p><h1>${title}</h1><p class="heading-copy">${description}</p></div><button class="primary-button" data-action="new-guide">＋ Nova guia</button></div><div class="empty-state"><div><div class="empty-icon">${icon}</div><h2>Este módulo está pronto para crescer</h2><p>A estrutura de navegação está funcionando. O próximo passo é conectar este fluxo aos dados reais da clínica.</p><button class="primary-button" data-action="soon">Explorar demonstração</button></div></div>`; }
+function insurerRowsHtml() {
+  if (!insurers.length) return '<tr><td colspan="5">Nenhum convênio cadastrado.</td></tr>';
+  return insurers.map(insurer => `<tr><td><strong>${insurer.name}</strong></td><td>${insurer.ansCode || '—'}</td><td>${insurer.contactEmail || '—'}<br><small>${insurer.contactPhone || ''}</small></td><td>${(insurer.acceptedProcedures || []).length} procedimento(s)</td><td><button class="text-button" data-action="edit-insurer" data-insurer-id="${insurer.id}">Editar</button> <button class="finance-delete" data-action="delete-insurer" data-insurer-id="${insurer.id}">Excluir</button></td></tr>`).join('');
+}
+function insurersView() {
+  return `<div class="page-heading"><div><p class="eyebrow">Cadastro da clínica</p><h1>Convênios</h1><p class="heading-copy">Operadoras aceitas pela clínica — alimenta os seletores de guia e paciente.</p></div></div><div class="panel"><div class="panel-header"><div><h2 class="panel-title">Convênios cadastrados</h2><p class="panel-subtitle">${insurers.length} operadoras</p></div></div><table><thead><tr><th>Nome</th><th>Código ANS</th><th>Contato</th><th>Procedimentos aceitos</th><th></th></tr></thead><tbody id="insurer-table-body">${insurerRowsHtml()}</tbody></table></div><form class="panel patient-form" id="insurer-form"><div class="panel-header"><div><h2 class="panel-title">Cadastrar convênio</h2><p class="panel-subtitle">Fica disponível imediatamente nos formulários de paciente e guia.</p></div></div><div class="form-section"><div class="form-grid"><div class="field"><label for="new-insurer-name">Nome *</label><input id="new-insurer-name" name="name" required /></div><div class="field"><label for="new-insurer-ans">Código ANS</label><input id="new-insurer-ans" name="ansCode" placeholder="Ex.: 004701" /></div><div class="field"><label for="new-insurer-email">E-mail de contato</label><input id="new-insurer-email" name="contactEmail" type="email" placeholder="faturamento@operadora.com.br" /></div><div class="field"><label for="new-insurer-phone">Telefone de contato</label><input id="new-insurer-phone" name="contactPhone" placeholder="(00) 0000-0000" /></div></div><div class="field"><label for="new-insurer-procedures">Códigos TUSS aceitos (separados por vírgula)</label><input id="new-insurer-procedures" name="acceptedProcedures" placeholder="Ex.: 10101012, 50000470" /></div></div><div class="form-footer"><button type="button" class="secondary-button" data-action="cancel-insurer-edit" hidden>Cancelar edição</button><button class="primary-button" type="submit">Salvar convênio</button></div></form>`;
+}
+function editInsurer(insurerId) {
+  const insurer = insurers.find(item => item.id === insurerId);
+  if (!insurer) return;
+  const form = document.querySelector('#insurer-form');
+  if (!form) return;
+  form.dataset.insurerId = insurer.id;
+  form.querySelector('#new-insurer-name').value = insurer.name;
+  form.querySelector('#new-insurer-ans').value = insurer.ansCode || '';
+  form.querySelector('#new-insurer-email').value = insurer.contactEmail || '';
+  form.querySelector('#new-insurer-phone').value = insurer.contactPhone || '';
+  form.querySelector('#new-insurer-procedures').value = (insurer.acceptedProcedures || []).join(', ');
+  form.querySelector('.panel-title').textContent = 'Editar convênio';
+  form.querySelector('button[type="submit"]').textContent = 'Atualizar convênio';
+  const cancelButton = form.querySelector('[data-action="cancel-insurer-edit"]');
+  if (cancelButton) cancelButton.hidden = false;
+  form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
 function reportsView() {
   const guideCounts = guides.reduce((summary, guide) => ({ ...summary, [guide.status]: (summary[guide.status] || 0) + 1 }), {});
   const pendingAmount = invoices.filter(invoice => invoice.status === 'pending').reduce((sum, invoice) => sum + Number(invoice.amount || 0), 0);
@@ -227,7 +262,7 @@ function reportsView() {
 function saveGuides() { localStorage.setItem(clinicStorageKey('guides'), JSON.stringify(guides)); }
 function restoreDraft() { const draft = JSON.parse(localStorage.getItem(clinicStorageKey('draft')) || 'null'); if (!draft) return; Object.entries(draft).forEach(([key, value]) => { const field = document.querySelector(`#${key}`); if (field) field.value = value; }); }
 function saveDraft(form) { localStorage.setItem(clinicStorageKey('draft'), JSON.stringify(Object.fromEntries(new FormData(form)))); }
-function render(view = 'overview') { breadcrumb.textContent = views[view] || views.overview; const safeView = userCan(view) ? view : 'overview'; appView.innerHTML = safeView === 'overview' ? overview() : safeView === 'agenda' ? agendaView() : safeView === 'guides' ? guideList() : safeView === 'financeiro' ? financeView() : safeView === 'reports' ? reportsView() : safeView === 'patients' ? patientsView() : safeView === 'users' ? usersView() : listing(views[safeView], `Gerencie ${views[safeView].toLowerCase()} em um só lugar.`, safeView === 'convenios' ? '◇' : '↗'); document.querySelectorAll('.nav-item').forEach(item => { const visible = userCan(item.dataset.view); item.style.display = visible ? '' : 'none'; item.classList.toggle('active', item.dataset.view === safeView && visible); }); }
+function render(view = 'overview') { breadcrumb.textContent = views[view] || views.overview; const safeView = userCan(view) ? view : 'overview'; appView.innerHTML = safeView === 'overview' ? overview() : safeView === 'agenda' ? agendaView() : safeView === 'guides' ? guideList() : safeView === 'financeiro' ? financeView() : safeView === 'reports' ? reportsView() : safeView === 'patients' ? patientsView() : safeView === 'users' ? usersView() : safeView === 'convenios' ? insurersView() : listing(views[safeView], `Gerencie ${views[safeView].toLowerCase()} em um só lugar.`, '↗'); document.querySelectorAll('.nav-item').forEach(item => { const visible = userCan(item.dataset.view); item.style.display = visible ? '' : 'none'; item.classList.toggle('active', item.dataset.view === safeView && visible); }); }
 function applySession() { const clinic = clinicProfiles[activeClinicId]; if (!clinic || !activeUser) return; document.querySelector('.workspace-switcher strong').textContent = clinic.name; document.querySelector('.workspace-switcher small').textContent = clinic.unit; document.querySelector('.workspace-switcher .avatar').textContent = clinic.initials; document.querySelector('#breadcrumb-clinic').textContent = clinic.name; document.querySelector('.profile strong').textContent = activeUser.name; document.querySelector('.profile small').textContent = activeUser.roleLabel || roleLabels[activeUser.role] || activeUser.role; document.querySelector('.user-button span:nth-child(2)').textContent = activeUser.name; document.querySelector('.user-button .avatar').textContent = activeUser.name.split(' ').map(name => name[0]).join('').slice(0, 2); }
 function usersView() { const clinicUsersList = clinicUsers[activeClinicId] || []; return `<div class="page-heading"><div><p class="eyebrow">Acesso e segurança</p><h1>Usuários da clínica</h1><p class="heading-copy">Cada perfil acessa apenas o que precisa.</p></div><button class="primary-button" data-action="new-user">＋ Novo usuário</button></div><div class="panel"><div class="panel-header"><div><h2 class="panel-title">Equipe</h2><p class="panel-subtitle">${clinicUsersList.length} usuários cadastrados</p></div></div><table><thead><tr><th>Nome</th><th>E-mail</th><th>Perfil</th><th>Permissão</th></tr></thead><tbody>${clinicUsersList.map(user => `<tr><td><strong>${user.name}</strong></td><td>${user.email}</td><td>${user.roleLabel}</td><td>${user.role === 'admin' ? 'Total' : user.role === 'faturamento' ? 'Guias e relatórios' : user.role === 'recepcao' ? 'Agenda e pacientes' : 'Agenda e prontuários'}</td></tr>`).join('')}</tbody></table></div>`; }
 function showToast(message) { toast.textContent = message; toast.classList.add('show'); setTimeout(() => toast.classList.remove('show'), 2800); }
@@ -326,6 +361,63 @@ document.addEventListener('submit', async event => {
     }
     render('patients');
     showToast('Paciente cadastrado com dados do plano.');
+  } catch (error) {
+    showToast(error.message);
+  }
+});
+
+document.addEventListener('submit', async event => {
+  if (event.target.id !== 'insurer-form') return;
+  event.preventDefault();
+  const data = Object.fromEntries(new FormData(event.target));
+  const acceptedProcedures = String(data.acceptedProcedures || '').split(',').map(code => code.trim()).filter(Boolean);
+  const insurerId = event.target.dataset.insurerId;
+  try {
+    if (insurerId) {
+      const payload = { name: data.name, ansCode: data.ansCode, contactEmail: data.contactEmail, contactPhone: data.contactPhone, acceptedProcedures };
+      if (activeSession?.token) {
+        await apiRequest(`/insurers/${insurerId}`, { method: 'PUT', body: JSON.stringify(payload) });
+        insurers = await apiRequest('/insurers');
+      } else {
+        Object.assign(insurers.find(item => item.id === insurerId), payload);
+        saveInsurers();
+      }
+      showToast('Convênio atualizado.');
+    } else {
+      const insurer = { id: nextSequentialId(insurers, 'INS-', 3), name: data.name, ansCode: data.ansCode, contactEmail: data.contactEmail, contactPhone: data.contactPhone, acceptedProcedures };
+      if (activeSession?.token) {
+        await apiRequest('/insurers', { method: 'POST', body: JSON.stringify(insurer) });
+        insurers = await apiRequest('/insurers');
+      } else {
+        insurers.unshift(insurer);
+        saveInsurers();
+      }
+      showToast('Convênio cadastrado.');
+    }
+    render('convenios');
+  } catch (error) {
+    showToast(error.message);
+  }
+});
+
+document.addEventListener('click', async event => {
+  const editInsurerButton = event.target.closest('[data-action="edit-insurer"]');
+  if (editInsurerButton) { editInsurer(editInsurerButton.dataset.insurerId); return; }
+  const cancelInsurerButton = event.target.closest('[data-action="cancel-insurer-edit"]');
+  if (cancelInsurerButton) { render('convenios'); return; }
+  const deleteInsurerButton = event.target.closest('[data-action="delete-insurer"]');
+  if (!deleteInsurerButton) return;
+  const insurerId = deleteInsurerButton.dataset.insurerId;
+  try {
+    if (activeSession?.token) {
+      await apiRequest(`/insurers/${insurerId}`, { method: 'DELETE' });
+      insurers = await apiRequest('/insurers');
+    } else {
+      insurers = insurers.filter(item => item.id !== insurerId);
+      saveInsurers();
+    }
+    render('convenios');
+    showToast('Convênio excluído.');
   } catch (error) {
     showToast(error.message);
   }

@@ -138,6 +138,40 @@ app.get('/api/reports', auth, (req, res) => {
   res.json({ guides, invoices });
 });
 
+app.get('/api/insurers', auth, (req, res) => {
+  const insurers = db.prepare('SELECT id, name, ans_code AS ansCode, contact_email AS contactEmail, contact_phone AS contactPhone, accepted_procedures AS acceptedProcedures FROM insurers WHERE clinic_id = ? ORDER BY name').all(req.session.clinicId);
+  res.json(insurers.map(insurer => ({ ...insurer, acceptedProcedures: JSON.parse(insurer.acceptedProcedures || '[]') })));
+});
+
+app.post('/api/insurers', auth, (req, res) => {
+  const { id, name, ansCode, contactEmail, contactPhone, acceptedProcedures = [] } = req.body;
+  if (!id || !name) return res.status(400).json({ error: 'Nome e identificador são obrigatórios.' });
+  try {
+    db.prepare('INSERT INTO insurers (id, clinic_id, name, ans_code, contact_email, contact_phone, accepted_procedures) VALUES (?, ?, ?, ?, ?, ?, ?)').run(id, req.session.clinicId, name, ansCode || null, contactEmail || null, contactPhone || null, JSON.stringify(acceptedProcedures));
+    res.status(201).json({ id });
+  } catch (error) {
+    res.status(409).json({ error: error.message });
+  }
+});
+
+app.put('/api/insurers/:id', auth, (req, res) => {
+  const { name, ansCode, contactEmail, contactPhone, acceptedProcedures = [] } = req.body;
+  if (!name) return res.status(400).json({ error: 'Nome é obrigatório.' });
+  try {
+    const result = db.prepare('UPDATE insurers SET name = ?, ans_code = ?, contact_email = ?, contact_phone = ?, accepted_procedures = ? WHERE id = ? AND clinic_id = ?').run(name, ansCode || null, contactEmail || null, contactPhone || null, JSON.stringify(acceptedProcedures), req.params.id, req.session.clinicId);
+    if (!result.changes) return res.status(404).json({ error: 'Convênio não encontrado.' });
+    res.json({ id: req.params.id });
+  } catch (error) {
+    res.status(409).json({ error: error.message });
+  }
+});
+
+app.delete('/api/insurers/:id', auth, (req, res) => {
+  const result = db.prepare('DELETE FROM insurers WHERE id = ? AND clinic_id = ?').run(req.params.id, req.session.clinicId);
+  if (!result.changes) return res.status(404).json({ error: 'Convênio não encontrado.' });
+  res.status(204).end();
+});
+
 app.get('/api/glosas', auth, (req, res) => {
   const glosas = db.prepare('SELECT id, guide_id AS guideId, code, reason, amount_cents AS amountCents, status, justification, created_at AS createdAt, resolved_at AS resolvedAt FROM glosas WHERE clinic_id = ? ORDER BY created_at DESC').all(req.session.clinicId);
   res.json(glosas);

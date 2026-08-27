@@ -86,6 +86,17 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     resolved_at TEXT
   );
+  CREATE TABLE IF NOT EXISTS insurers (
+    id TEXT PRIMARY KEY,
+    clinic_id TEXT NOT NULL REFERENCES clinics(id),
+    name TEXT NOT NULL,
+    ans_code TEXT,
+    contact_email TEXT,
+    contact_phone TEXT,
+    accepted_procedures TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(clinic_id, name)
+  );
 `);
 
 const guideColumns = db.prepare('PRAGMA table_info(guides)').all();
@@ -121,6 +132,7 @@ if (clinicCount === 0) {
   const insertUser = db.prepare('INSERT INTO users (id, clinic_id, name, email, password_hash, role) VALUES (?, ?, ?, ?, ?, ?)');
   const insertGuide = db.prepare('INSERT INTO guides (id, clinic_id, patient, procedure, insurer, status, value_cents, sessions_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
   const insertPatient = db.prepare('INSERT INTO patients (id, clinic_id, name, birth_date, insurer, ans_code, card_number, plan, plan_validity) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+  const insertInsurer = db.prepare('INSERT INTO insurers (id, clinic_id, name, ans_code, accepted_procedures) VALUES (?, ?, ?, ?, ?)');
 
   const seed = db.transaction(() => {
     insertClinic.run('sabia', 'Clínica Sabiá', 'Unidade Centro');
@@ -137,6 +149,11 @@ if (clinicCount === 0) {
     insertPatient.run('P-001', 'sabia', 'Helena Martins', '1988-03-14', 'Unimed', '004701', '0123456789012', 'Unimed Nacional Apartamento', '2027-12-31');
     insertPatient.run('P-002', 'sabia', 'Rafael Nogueira', '2014-09-22', 'Bradesco Saúde', '005711', '9876543210001', 'Bradesco Efetivo', '2027-06-30');
     insertPatient.run('P-003', 'sabia', 'Bianca Torres', '1992-11-08', 'SulAmérica', '006246', '2468135790004', 'SulAmérica Exato', '2026-12-31');
+    insertInsurer.run('INS-001', 'sabia', 'Unimed', '004701', JSON.stringify(['10101012', '50000470', '50000000', '40901122']));
+    insertInsurer.run('INS-002', 'sabia', 'Bradesco Saúde', '005711', JSON.stringify(['10101012', '50000470', '40901122']));
+    insertInsurer.run('INS-003', 'sabia', 'SulAmérica', '006246', JSON.stringify(['10101012', '50000470']));
+    insertInsurer.run('INS-004', 'sabia', 'Amil', '326305', JSON.stringify(['10101012']));
+    insertInsurer.run('INS-005', 'sabia', 'Promédica', '', JSON.stringify([]));
   });
   seed();
 }

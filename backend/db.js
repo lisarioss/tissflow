@@ -97,6 +97,18 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(clinic_id, name)
   );
+  CREATE TABLE IF NOT EXISTS feedbacks (
+    id TEXT PRIMARY KEY,
+    clinic_id TEXT NOT NULL REFERENCES clinics(id),
+    guide_id TEXT REFERENCES guides(id),
+    patient TEXT NOT NULL,
+    professional TEXT NOT NULL,
+    attendance_date TEXT NOT NULL,
+    attendance_type TEXT,
+    content TEXT NOT NULL,
+    photo TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
 `);
 
 const guideColumns = db.prepare('PRAGMA table_info(guides)').all();

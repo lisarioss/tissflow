@@ -64,15 +64,17 @@ const defaultInsurers = [
 ];
 let insurers = JSON.parse(localStorage.getItem(clinicStorageKey('insurers')) || 'null') || defaultInsurers;
 function saveInsurers() { localStorage.setItem(clinicStorageKey('insurers'), JSON.stringify(insurers)); }
-const views = { overview: 'Visão geral', agenda: 'Agenda', guides: 'Guias TISS', financeiro: 'Financeiro', users: 'Usuários', patients: 'Pacientes', convenios: 'Convênios', reports: 'Relatórios', settings: 'Configurações' };
+let feedbacks = JSON.parse(localStorage.getItem(clinicStorageKey('feedbacks')) || 'null') || [];
+function saveFeedbacks() { localStorage.setItem(clinicStorageKey('feedbacks'), JSON.stringify(feedbacks)); }
+const views = { overview: 'Visão geral', agenda: 'Agenda', guides: 'Guias TISS', financeiro: 'Financeiro', users: 'Usuários', patients: 'Pacientes', convenios: 'Convênios', feedback: 'Feedbacks', reports: 'Relatórios', settings: 'Configurações' };
 const appView = document.querySelector('#app-view');
 const breadcrumb = document.querySelector('#breadcrumb');
 const toast = document.querySelector('#toast');
 const rolePermissions = {
-  admin: ['overview', 'agenda', 'guides', 'financeiro', 'users', 'patients', 'convenios', 'reports', 'settings'],
+  admin: ['overview', 'agenda', 'guides', 'financeiro', 'users', 'patients', 'convenios', 'feedback', 'reports', 'settings'],
   faturamento: ['overview', 'guides', 'financeiro', 'reports', 'users'],
-  recepcao: ['overview', 'agenda', 'patients', 'users'],
-  medico: ['overview', 'agenda', 'patients']
+  recepcao: ['overview', 'agenda', 'patients', 'feedback', 'users'],
+  medico: ['overview', 'agenda', 'patients', 'feedback']
 };
 function userCan(view) { return (rolePermissions[activeUser?.role || 'admin'] || []).includes(view); }
 function formatMoney(value) { return moneyFormatter.format(Number(value || 0)); }
@@ -89,12 +91,13 @@ function normalizeGlosa(glosa) { return { ...glosa, amount: Number(glosa.amountC
 async function loadApiData() {
   if (!activeSession?.token) return;
   try {
-    const [apiGuides, apiInvoices, apiPatients, apiGlosas, apiInsurers] = await Promise.all([apiRequest('/guides'), apiRequest('/invoices'), apiRequest('/patients'), apiRequest('/glosas'), apiRequest('/insurers')]);
+    const [apiGuides, apiInvoices, apiPatients, apiGlosas, apiInsurers, apiFeedbacks] = await Promise.all([apiRequest('/guides'), apiRequest('/invoices'), apiRequest('/patients'), apiRequest('/glosas'), apiRequest('/insurers'), apiRequest('/feedbacks')]);
     guides = apiGuides.map(normalizeGuide);
     invoices = apiInvoices.map(normalizeInvoice);
     if (apiPatients.length) patients = apiPatients;
     glosas = apiGlosas.map(normalizeGlosa);
     if (apiInsurers.length) insurers = apiInsurers;
+    feedbacks = apiFeedbacks;
     render();
   } catch (error) {
     showToast(`Modo local: ${error.message}`);
@@ -249,6 +252,13 @@ function editInsurer(insurerId) {
   if (cancelButton) cancelButton.hidden = false;
   form.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
+function feedbackRowsHtml() {
+  if (!feedbacks.length) return '<tr><td colspan="6">Nenhum feedback registrado ainda.</td></tr>';
+  return feedbacks.map(fb => `<tr><td><strong>${fb.patient}</strong><small>${new Date(`${fb.attendanceDate}T12:00:00`).toLocaleDateString('pt-BR')}</small></td><td>${fb.professional}</td><td>${fb.attendanceType || '—'}</td><td>${fb.guideId ? `<span class="guide-type-tag">${fb.guideId}</span>` : '<small>Particular</small>'}</td><td>${fb.photo ? '📷' : '—'}</td><td><button class="text-button" data-action="print-feedback" data-feedback-id="${fb.id}">Gerar PDF</button> <button class="finance-delete" data-action="delete-feedback" data-feedback-id="${fb.id}">Excluir</button></td></tr>`).join('');
+}
+function feedbackView() {
+  return `<div class="page-heading"><div><p class="eyebrow">Acompanhamento clínico</p><h1>Feedbacks de atendimento</h1><p class="heading-copy">Registros dos profissionais sobre os atendimentos realizados. Quando o paciente é de convênio, o feedback pode ficar ligado à guia faturada.</p></div></div><div class="panel"><div class="panel-header"><div><h2 class="panel-title">Feedbacks registrados</h2><p class="panel-subtitle">${feedbacks.length} registros</p></div></div><table><thead><tr><th>Paciente</th><th>Profissional</th><th>Tipo</th><th>Guia</th><th>Foto</th><th></th></tr></thead><tbody id="feedback-table-body">${feedbackRowsHtml()}</tbody></table></div><form class="panel patient-form" id="feedback-form"><div class="panel-header"><div><h2 class="panel-title">Novo feedback</h2><p class="panel-subtitle">Se o paciente tiver guias faturadas, escolha a qual atendimento este feedback se refere.</p></div></div><div class="form-section"><div class="form-grid"><div class="field"><label for="feedback-patient">Paciente *</label><select id="feedback-patient" name="patient" required><option value="">Selecione o paciente</option>${patients.map(patient => `<option>${patient.name}</option>`).join('')}</select></div><div class="field"><label for="feedback-professional">Profissional *</label><select id="feedback-professional" name="professional" required><option value="">Selecione o profissional</option><option value="Marina Souza">Marina Souza · CRM 12345</option><option value="Lucas Andrade">Lucas Andrade · CREFITO 8812</option></select></div><div class="field"><label for="feedback-date">Data do atendimento *</label><input id="feedback-date" name="attendanceDate" type="date" required /></div><div class="field"><label for="feedback-type">Tipo de atendimento</label><select id="feedback-type" name="attendanceType"><option value="">Selecione</option><option>Consulta</option><option>Exame</option><option>Terapia</option></select></div><div class="field"><label for="feedback-guide">Guia vinculada (convênio)</label><select id="feedback-guide" name="guideId"><option value="">Particular / sem guia</option></select></div><div class="field"><label for="feedback-photo">Foto do atendimento (opcional)</label><input id="feedback-photo" name="photoFile" type="file" accept="image/*" /><input type="hidden" id="feedback-photo-data" name="photo" /></div></div><div class="field"><label for="feedback-content">Feedback *</label><textarea id="feedback-content" name="content" rows="4" required placeholder="Descreva a evolução, observações clínicas ou orientações passadas ao paciente"></textarea></div></div><div class="form-footer"><button class="primary-button" type="submit">Salvar feedback</button></div></form>`;
+}
 function reportsView() {
   const guideCounts = guides.reduce((summary, guide) => ({ ...summary, [guide.status]: (summary[guide.status] || 0) + 1 }), {});
   const pendingAmount = invoices.filter(invoice => invoice.status === 'pending').reduce((sum, invoice) => sum + Number(invoice.amount || 0), 0);
@@ -262,7 +272,7 @@ function reportsView() {
 function saveGuides() { localStorage.setItem(clinicStorageKey('guides'), JSON.stringify(guides)); }
 function restoreDraft() { const draft = JSON.parse(localStorage.getItem(clinicStorageKey('draft')) || 'null'); if (!draft) return; Object.entries(draft).forEach(([key, value]) => { const field = document.querySelector(`#${key}`); if (field) field.value = value; }); }
 function saveDraft(form) { localStorage.setItem(clinicStorageKey('draft'), JSON.stringify(Object.fromEntries(new FormData(form)))); }
-function render(view = 'overview') { breadcrumb.textContent = views[view] || views.overview; const safeView = userCan(view) ? view : 'overview'; appView.innerHTML = safeView === 'overview' ? overview() : safeView === 'agenda' ? agendaView() : safeView === 'guides' ? guideList() : safeView === 'financeiro' ? financeView() : safeView === 'reports' ? reportsView() : safeView === 'patients' ? patientsView() : safeView === 'users' ? usersView() : safeView === 'convenios' ? insurersView() : listing(views[safeView], `Gerencie ${views[safeView].toLowerCase()} em um só lugar.`, '↗'); document.querySelectorAll('.nav-item').forEach(item => { const visible = userCan(item.dataset.view); item.style.display = visible ? '' : 'none'; item.classList.toggle('active', item.dataset.view === safeView && visible); }); }
+function render(view = 'overview') { breadcrumb.textContent = views[view] || views.overview; const safeView = userCan(view) ? view : 'overview'; appView.innerHTML = safeView === 'overview' ? overview() : safeView === 'agenda' ? agendaView() : safeView === 'guides' ? guideList() : safeView === 'financeiro' ? financeView() : safeView === 'reports' ? reportsView() : safeView === 'patients' ? patientsView() : safeView === 'users' ? usersView() : safeView === 'convenios' ? insurersView() : safeView === 'feedback' ? feedbackView() : listing(views[safeView], `Gerencie ${views[safeView].toLowerCase()} em um só lugar.`, '↗'); document.querySelectorAll('.nav-item').forEach(item => { const visible = userCan(item.dataset.view); item.style.display = visible ? '' : 'none'; item.classList.toggle('active', item.dataset.view === safeView && visible); }); }
 function applySession() { const clinic = clinicProfiles[activeClinicId]; if (!clinic || !activeUser) return; document.querySelector('.workspace-switcher strong').textContent = clinic.name; document.querySelector('.workspace-switcher small').textContent = clinic.unit; document.querySelector('.workspace-switcher .avatar').textContent = clinic.initials; document.querySelector('#breadcrumb-clinic').textContent = clinic.name; document.querySelector('.profile strong').textContent = activeUser.name; document.querySelector('.profile small').textContent = activeUser.roleLabel || roleLabels[activeUser.role] || activeUser.role; document.querySelector('.user-button span:nth-child(2)').textContent = activeUser.name; document.querySelector('.user-button .avatar').textContent = activeUser.name.split(' ').map(name => name[0]).join('').slice(0, 2); }
 function usersView() { const clinicUsersList = clinicUsers[activeClinicId] || []; return `<div class="page-heading"><div><p class="eyebrow">Acesso e segurança</p><h1>Usuários da clínica</h1><p class="heading-copy">Cada perfil acessa apenas o que precisa.</p></div><button class="primary-button" data-action="new-user">＋ Novo usuário</button></div><div class="panel"><div class="panel-header"><div><h2 class="panel-title">Equipe</h2><p class="panel-subtitle">${clinicUsersList.length} usuários cadastrados</p></div></div><table><thead><tr><th>Nome</th><th>E-mail</th><th>Perfil</th><th>Permissão</th></tr></thead><tbody>${clinicUsersList.map(user => `<tr><td><strong>${user.name}</strong></td><td>${user.email}</td><td>${user.roleLabel}</td><td>${user.role === 'admin' ? 'Total' : user.role === 'faturamento' ? 'Guias e relatórios' : user.role === 'recepcao' ? 'Agenda e pacientes' : 'Agenda e prontuários'}</td></tr>`).join('')}</tbody></table></div>`; }
 function showToast(message) { toast.textContent = message; toast.classList.add('show'); setTimeout(() => toast.classList.remove('show'), 2800); }
@@ -366,6 +376,11 @@ document.addEventListener('submit', async event => {
   }
 });
 
+function printFeedback(feedback) {
+  const rows = `<div class="print-brand"><span>TISS flow · Feedback de atendimento</span></div><h1>Feedback — ${feedback.patient}</h1><p><strong>Profissional:</strong> ${feedback.professional} &nbsp; <strong>Data do atendimento:</strong> ${new Date(`${feedback.attendanceDate}T12:00:00`).toLocaleDateString('pt-BR')}</p><p><strong>Tipo:</strong> ${feedback.attendanceType || 'Não informado'} &nbsp; <strong>Guia vinculada:</strong> ${feedback.guideId || 'Particular / sem guia'}</p><p style="white-space:pre-wrap;margin-top:16px;border:1px solid #dfe7e1;padding:14px;border-radius:6px;">${feedback.content}</p>${feedback.photo ? `<img src="${feedback.photo}" alt="Foto do atendimento" style="max-width:100%;margin-top:16px;border-radius:6px;" />` : ''}`;
+  printGuideContent(`Feedback ${feedback.patient}`, rows);
+}
+
 document.addEventListener('submit', async event => {
   if (event.target.id !== 'insurer-form') return;
   event.preventDefault();
@@ -418,6 +433,51 @@ document.addEventListener('click', async event => {
     }
     render('convenios');
     showToast('Convênio excluído.');
+  } catch (error) {
+    showToast(error.message);
+  }
+});
+
+document.addEventListener('submit', async event => {
+  if (event.target.id !== 'feedback-form') return;
+  event.preventDefault();
+  const data = Object.fromEntries(new FormData(event.target));
+  const feedback = { id: nextSequentialId(feedbacks, 'FB-', 4), guideId: data.guideId || null, patient: data.patient, professional: data.professional, attendanceDate: data.attendanceDate, attendanceType: data.attendanceType, content: data.content, photo: data.photo || null };
+  try {
+    if (activeSession?.token) {
+      await apiRequest('/feedbacks', { method: 'POST', body: JSON.stringify(feedback) });
+      feedbacks = await apiRequest('/feedbacks');
+    } else {
+      feedbacks.unshift(feedback);
+      saveFeedbacks();
+    }
+    render('feedback');
+    showToast('Feedback registrado.');
+  } catch (error) {
+    showToast(error.message);
+  }
+});
+
+document.addEventListener('click', async event => {
+  const printFeedbackButton = event.target.closest('[data-action="print-feedback"]');
+  if (printFeedbackButton) {
+    const feedback = feedbacks.find(item => item.id === printFeedbackButton.dataset.feedbackId);
+    if (feedback) printFeedback(feedback);
+    return;
+  }
+  const deleteFeedbackButton = event.target.closest('[data-action="delete-feedback"]');
+  if (!deleteFeedbackButton) return;
+  const feedbackId = deleteFeedbackButton.dataset.feedbackId;
+  try {
+    if (activeSession?.token) {
+      await apiRequest(`/feedbacks/${feedbackId}`, { method: 'DELETE' });
+      feedbacks = await apiRequest('/feedbacks');
+    } else {
+      feedbacks = feedbacks.filter(item => item.id !== feedbackId);
+      saveFeedbacks();
+    }
+    render('feedback');
+    showToast('Feedback excluído.');
   } catch (error) {
     showToast(error.message);
   }
@@ -675,7 +735,22 @@ document.addEventListener('change', event => {
       showToast('Dados do plano preenchidos pelo cadastro do paciente.');
     }
   }
-
+  if (event.target.id === 'feedback-patient') {
+    const guideSelect = document.querySelector('#feedback-guide');
+    if (guideSelect) {
+      const patientGuides = guides.filter(guide => guide.patient === event.target.value);
+      guideSelect.innerHTML = '<option value="">Particular / sem guia</option>' + patientGuides.map(guide => `<option value="${guide.id}">${guide.id} · ${guide.procedure}</option>`).join('');
+    }
+  }
+  if (event.target.id === 'feedback-photo') {
+    const dataField = document.querySelector('#feedback-photo-data');
+    const file = event.target.files?.[0];
+    if (!file || !dataField) return;
+    if (file.size > 4 * 1024 * 1024) { showToast('Foto muito grande — escolha uma imagem de até 4MB.'); event.target.value = ''; return; }
+    const reader = new FileReader();
+    reader.onload = () => { dataField.value = reader.result; };
+    reader.readAsDataURL(file);
+  }
   if (event.target.classList.contains('folder-service')) {
     const guide = guides.find(item => item.id === event.target.dataset.guideId);
     const session = guide?.sessions?.[Number(event.target.dataset.sessionIndex)];

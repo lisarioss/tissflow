@@ -13,7 +13,7 @@ const jwtSecret = process.env.JWT_SECRET;
 if (!jwtSecret) throw new Error('JWT_SECRET não configurado no arquivo backend/.env.');
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '8mb' })); // fotos de feedback em base64 podem passar do limite padrão de 100kb
 app.use(express.static(path.join(__dirname, '..', 'frontend')));
 
 function auth(req, res, next) {
@@ -169,6 +169,30 @@ app.put('/api/insurers/:id', auth, (req, res) => {
 app.delete('/api/insurers/:id', auth, (req, res) => {
   const result = db.prepare('DELETE FROM insurers WHERE id = ? AND clinic_id = ?').run(req.params.id, req.session.clinicId);
   if (!result.changes) return res.status(404).json({ error: 'Convênio não encontrado.' });
+  res.status(204).end();
+});
+
+app.get('/api/feedbacks', auth, (req, res) => {
+  const feedbacks = db.prepare('SELECT id, guide_id AS guideId, patient, professional, attendance_date AS attendanceDate, attendance_type AS attendanceType, content, photo, created_at AS createdAt FROM feedbacks WHERE clinic_id = ? ORDER BY created_at DESC').all(req.session.clinicId);
+  res.json(feedbacks);
+});
+
+app.post('/api/feedbacks', auth, (req, res) => {
+  const { id, guideId, patient, professional, attendanceDate, attendanceType, content, photo } = req.body;
+  if (!id || !patient || !professional || !attendanceDate || !content) {
+    return res.status(400).json({ error: 'Paciente, profissional, data do atendimento e o texto do feedback são obrigatórios.' });
+  }
+  try {
+    db.prepare('INSERT INTO feedbacks (id, clinic_id, guide_id, patient, professional, attendance_date, attendance_type, content, photo) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, req.session.clinicId, guideId || null, patient, professional, attendanceDate, attendanceType || null, content, photo || null);
+    res.status(201).json({ id });
+  } catch (error) {
+    res.status(409).json({ error: error.message });
+  }
+});
+
+app.delete('/api/feedbacks/:id', auth, (req, res) => {
+  const result = db.prepare('DELETE FROM feedbacks WHERE id = ? AND clinic_id = ?').run(req.params.id, req.session.clinicId);
+  if (!result.changes) return res.status(404).json({ error: 'Feedback não encontrado.' });
   res.status(204).end();
 });
 

@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { nextSequentialId, timeToMinutes, hasScheduleConflictWith, escapeXml, findSessionOutsidePlanValidity, exceedsAuthorizedQuantity, findCidIncompatibility } = require('./lib.js');
+const { nextSequentialId, timeToMinutes, hasScheduleConflictWith, escapeXml, findSessionOutsidePlanValidity, exceedsAuthorizedQuantity, findCidIncompatibility, filterGuides, filterPatients } = require('./lib.js');
 
 test('nextSequentialId gera o próximo número com base no maior ID existente', () => {
   const list = [{ id: 'G-2026-00478' }, { id: 'G-2026-00481' }];
@@ -98,4 +98,38 @@ test('findCidIncompatibility aceita CID compatível com o procedimento', () => {
 
 test('findCidIncompatibility não se aplica a procedimentos fora da tabela demonstrativa', () => {
   assert.equal(findCidIncompatibility('10101012 - Consulta em consultório', 'Z00.0'), null);
+});
+
+test('filterGuides encontra por paciente, convênio, procedimento ou ID, ignorando maiúsculas/minúsculas', () => {
+  const guides = [
+    { id: 'G-2026-00481', patient: 'Helena Martins', insurer: 'Unimed', procedure: 'Consulta ambulatorial' },
+    { id: 'G-2026-00478', patient: 'João Pedro Lima', insurer: 'Amil', procedure: 'Fisioterapia' }
+  ];
+  assert.equal(filterGuides(guides, 'helena').length, 1);
+  assert.equal(filterGuides(guides, 'AMIL').length, 1);
+  assert.equal(filterGuides(guides, 'G-2026-00478').length, 1);
+  assert.equal(filterGuides(guides, 'fisio').length, 1);
+});
+
+test('filterGuides retorna a lista completa quando o termo está vazio', () => {
+  const guides = [{ id: 'G-1', patient: 'A', insurer: 'B', procedure: 'C' }];
+  assert.equal(filterGuides(guides, '').length, 1);
+  assert.equal(filterGuides(guides, '   ').length, 1);
+  assert.equal(filterGuides(guides, undefined).length, 1);
+});
+
+test('filterGuides retorna vazio quando nada corresponde ao termo', () => {
+  const guides = [{ id: 'G-1', patient: 'Helena', insurer: 'Unimed', procedure: 'Consulta' }];
+  assert.equal(filterGuides(guides, 'inexistente').length, 0);
+});
+
+test('filterPatients encontra por nome, convênio, carteira ou plano', () => {
+  const patients = [
+    { name: 'Rafael Nogueira', insurer: 'Bradesco Saúde', cardNumber: '9876543210001', plan: 'Bradesco Efetivo' },
+    { name: 'Bianca Torres', insurer: 'SulAmérica', cardNumber: '2468135790004', plan: 'SulAmérica Exato' }
+  ];
+  assert.equal(filterPatients(patients, 'rafael').length, 1);
+  assert.equal(filterPatients(patients, '2468135790004').length, 1);
+  assert.equal(filterPatients(patients, 'exato').length, 1);
+  assert.equal(filterPatients(patients, '').length, 2);
 });

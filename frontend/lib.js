@@ -71,8 +71,22 @@ function findCidIncompatibility(procedureValue, cid) {
   return rule.chapters.includes(chapter) ? null : { ...rule, chapter };
 }
 
+// --- Busca/filtro nas listagens ---
+// Busca simples por substring (case-insensitive), sem acentuação especial —
+// suficiente para o volume de dados de um protótipo/demo.
+function filterGuides(guides, term) {
+  const query = String(term || '').trim().toLowerCase();
+  if (!query) return guides;
+  return guides.filter(guide => [guide.id, guide.patient, guide.insurer, guide.procedure].some(field => String(field || '').toLowerCase().includes(query)));
+}
+function filterPatients(patients, term) {
+  const query = String(term || '').trim().toLowerCase();
+  if (!query) return patients;
+  return patients.filter(patient => [patient.name, patient.insurer, patient.cardNumber, patient.plan].some(field => String(field || '').toLowerCase().includes(query)));
+}
+
 // Disponibiliza as funções tanto para <script> no navegador (globais em
 // `window`) quanto para `require()` em testes Node — sem precisar de bundler.
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { nextSequentialId, timeToMinutes, hasScheduleConflictWith, escapeXml, findSessionOutsidePlanValidity, exceedsAuthorizedQuantity, findCidIncompatibility };
+  module.exports = { nextSequentialId, timeToMinutes, hasScheduleConflictWith, escapeXml, findSessionOutsidePlanValidity, exceedsAuthorizedQuantity, findCidIncompatibility, filterGuides, filterPatients };
 }

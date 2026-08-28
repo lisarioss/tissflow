@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { nextSequentialId, timeToMinutes, hasScheduleConflictWith, escapeXml, findSessionOutsidePlanValidity, exceedsAuthorizedQuantity, findCidIncompatibility, filterGuides, filterPatients, hojeIso, mesAtual, anoSeguinte, anoAtual, dataRelativaIso, dataRelativaCurta, diaDaSemanaLongo, capitalizar, ultimosSeteDias } = require('./lib.js');
+const { nextSequentialId, timeToMinutes, hasScheduleConflictWith, escapeXml, findSessionOutsidePlanValidity, exceedsAuthorizedQuantity, findCidIncompatibility, filterGuides, filterPatients, filterInsurers, filterFeedbacks } = require('./lib.js');
 
 test('nextSequentialId gera o próximo número com base no maior ID existente', () => {
   const list = [{ id: 'G-2026-00478' }, { id: 'G-2026-00481' }];
@@ -134,27 +134,25 @@ test('filterPatients encontra por nome, convênio, carteira ou plano', () => {
   assert.equal(filterPatients(patients, '').length, 2);
 });
 
-// --- Datas dinâmicas ---
-test('hojeIso retorna YYYY-MM-DD válido', () => {
-  assert.match(hojeIso(), /^\d{4}-\d{2}-\d{2}$/);
-});
-test('mesAtual retorna YYYY-MM', () => {
-  assert.match(mesAtual(), /^\d{4}-\d{2}$/);
-});
-test('anoSeguinte = anoAtual + 1', () => {
-  assert.equal(anoSeguinte(), anoAtual() + 1);
-});
-test('dataRelativaIso(0) == hojeIso', () => {
-  assert.equal(dataRelativaIso(0), hojeIso());
-});
-test('dataRelativaCurta(0) começa com o dia atual', () => {
-  const dia = Number(hojeIso().slice(8, 10));
-  assert.match(dataRelativaCurta(0), new RegExp('^' + dia + ' '));
-});
-test('diaDaSemanaLongo + capitalizar produzem Quinta-feira', () => {
-  assert.equal(capitalizar(diaDaSemanaLongo('2026-08-20')), 'Quinta-feira');
-});
-test('ultimosSeteDias tem 7 labels', () => {
-  assert.equal(ultimosSeteDias().length, 7);
+test('filterInsurers encontra por nome, código ANS ou e-mail de contato', () => {
+  const insurers = [
+    { name: 'Unimed', ansCode: '004701', contactEmail: 'contato@unimed.com.br' },
+    { name: 'Amil', ansCode: '326305', contactEmail: 'faturamento@amil.com.br' }
+  ];
+  assert.equal(filterInsurers(insurers, 'unimed').length, 1);
+  assert.equal(filterInsurers(insurers, '326305').length, 1);
+  assert.equal(filterInsurers(insurers, 'faturamento@amil').length, 1);
+  assert.equal(filterInsurers(insurers, '').length, 2);
 });
 
+test('filterFeedbacks encontra por paciente, profissional, guia ou tipo de atendimento', () => {
+  const feedbacks = [
+    { patient: 'Helena Martins', professional: 'Marina Souza', guideId: 'G-2026-00481', attendanceType: 'Terapia ABA' },
+    { patient: 'Rafael Nogueira', professional: 'Lucas Andrade', guideId: null, attendanceType: 'Fisioterapia' }
+  ];
+  assert.equal(filterFeedbacks(feedbacks, 'helena').length, 1);
+  assert.equal(filterFeedbacks(feedbacks, 'lucas andrade').length, 1);
+  assert.equal(filterFeedbacks(feedbacks, 'G-2026-00481').length, 1);
+  assert.equal(filterFeedbacks(feedbacks, 'fisioterapia').length, 1);
+  assert.equal(filterFeedbacks(feedbacks, '').length, 2);
+});

@@ -27,6 +27,19 @@ function auth(req, res, next) {
   }
 }
 
+// RBAC leve: restringe rotas de escrita por papel. Leitura (GET) continua
+// aberta para qualquer usuário autenticado da clínica - o dashboard carrega
+// tudo de uma vez hoje, então bloquear leitura por papel exigiria refatorar
+// o carregamento de dados do front-end. O que importa por segurança é
+// impedir que alguém sem o papel certo escreva/apague dados via chamada
+// direta à API, mesmo que a UI já esconda os botões correspondentes.
+function requireRole(...roles) {
+  return (req, res, next) => {
+    if (!roles.includes(req.session.role)) return res.status(403).json({ error: 'Seu perfil não tem permissão para esta ação.' });
+    next();
+  };
+}
+
 function moneyToCents(value) {
   const amount = Number(value);
   return Number.isFinite(amount) && amount > 0 ? Math.round(amount * 100) : 0;
@@ -48,7 +61,7 @@ app.get('/api/patients', auth, (req, res) => {
   res.json(patients);
 });
 
-app.post('/api/patients', auth, (req, res) => {
+app.post('/api/patients', auth, requireRole('admin', 'recepcao', 'medico'), (req, res) => {
   const { id, name, birthDate, insurer, ansCode, cardNumber, plan, planValidity } = req.body;
   if (!id || !name || !birthDate || !insurer || !cardNumber || !plan || !planValidity) return res.status(400).json({ error: 'Nome, nascimento, convênio, carteira, plano e validade são obrigatórios.' });
   try {
@@ -59,7 +72,7 @@ app.post('/api/patients', auth, (req, res) => {
   }
 });
 
-app.patch('/api/patients/:id', auth, (req, res) => {
+app.patch('/api/patients/:id', auth, requireRole('admin', 'recepcao', 'medico'), (req, res) => {
   const { name, birthDate, insurer, ansCode, cardNumber, plan, planValidity, active = 1 } = req.body;
   if (!name || !birthDate || !insurer || !cardNumber || !plan || !planValidity) return res.status(400).json({ error: 'Nome, nascimento, convênio, carteira, plano e validade são obrigatórios.' });
   const result = db.prepare('UPDATE patients SET name = ?, birth_date = ?, insurer = ?, ans_code = ?, card_number = ?, plan = ?, plan_validity = ?, active = ? WHERE id = ? AND clinic_id = ?').run(name, birthDate, insurer, ansCode || '', cardNumber, plan, planValidity, active ? 1 : 0, req.params.id, req.session.clinicId);
@@ -72,7 +85,7 @@ app.get('/api/guides', auth, (req, res) => {
   res.json(guides);
 });
 
-app.post('/api/guides', auth, (req, res) => {
+app.post('/api/guides', auth, requireRole('admin', 'faturamento'), (req, res) => {
   const { id, patient, procedure, insurer, competence, ansCode, cardNumber, patientBirth, patientPlan, planValidity, authorizationNumber, operatorGuide, providerName, providerCnpj, professional, professionalRegister, attendanceType, serviceCode, quantity = 1, unitValue, status = 'sent', value, sessions = [], guideType = 'sp_sadt', cid, authorizedQuantity } = req.body;
   if (!id || !patient || !procedure || !insurer) return res.status(400).json({ error: 'Paciente, procedimento, convênio e identificador são obrigatórios.' });
   // Validações de negócio no servidor (o front-end já checa isso, mas não confiamos só no cliente).
@@ -90,7 +103,7 @@ app.post('/api/guides', auth, (req, res) => {
   }
 });
 
-app.patch('/api/guides/:id/sessions/:index', auth, (req, res) => {
+app.patch('/api/guides/:id/sessions/:index', auth, requireRole('admin', 'faturamento'), (req, res) => {
   const guide = db.prepare('SELECT sessions_json FROM guides WHERE id = ? AND clinic_id = ?').get(req.params.id, req.session.clinicId);
   if (!guide) return res.status(404).json({ error: 'Guia não encontrada.' });
   const sessions = JSON.parse(guide.sessions_json || '[]');
@@ -101,21 +114,12 @@ app.patch('/api/guides/:id/sessions/:index', auth, (req, res) => {
   res.json({ id: req.params.id, index, procedure: sessions[index].procedure });
 });
 
-app.patch('/api/guides/:id/status', auth, (req, res) => {
-  const { status } = req.body || {};
-  const valid = ['sent', 'review', 'approved', 'error', 'recurso'];
-  if (!valid.includes(status)) return res.status(400).json({ error: 'Status inválido.' });
-  const result = db.prepare('UPDATE guides SET status = ? WHERE id = ? AND clinic_id = ?').run(status, req.params.id, req.session.clinicId);
-  if (result.changes === 0) return res.status(404).json({ error: 'Guia não encontrada.' });
-  res.json({ id: req.params.id, status });
-});
-
 app.get('/api/invoices', auth, (req, res) => {
   const invoices = db.prepare(`SELECT invoices.id, invoices.guide_id AS guideId, invoices.provider, invoices.description, invoices.amount_cents AS amountCents, invoices.expected_date AS expectedDate, invoices.status, guides.patient FROM invoices LEFT JOIN guides ON guides.id = invoices.guide_id WHERE invoices.clinic_id = ? ORDER BY invoices.expected_date`).all(req.session.clinicId);
   res.json(invoices);
 });
 
-app.post('/api/invoices', auth, (req, res) => {
+app.post('/api/invoices', auth, requireRole('admin', 'faturamento'), (req, res) => {
   const { id, guideId, provider, description, amount, expectedDate } = req.body;
   if (!id || !guideId || !provider || !description || !expectedDate || !moneyToCents(amount)) return res.status(400).json({ error: 'Guia, nota, fornecedor, descrição, valor e previsão são obrigatórios.' });
   const guide = db.prepare('SELECT id FROM guides WHERE id = ? AND clinic_id = ? AND status IN (\'sent\', \'approved\')').get(guideId, req.session.clinicId);
@@ -128,23 +132,17 @@ app.post('/api/invoices', auth, (req, res) => {
   }
 });
 
-app.patch('/api/invoices/:id/status', auth, (req, res) => {
+app.patch('/api/invoices/:id/status', auth, requireRole('admin', 'faturamento'), (req, res) => {
   const status = req.body.status === 'received' ? 'received' : 'pending';
   const result = db.prepare('UPDATE invoices SET status = ? WHERE id = ? AND clinic_id = ?').run(status, req.params.id, req.session.clinicId);
   if (!result.changes) return res.status(404).json({ error: 'Nota não encontrada.' });
   res.json({ id: req.params.id, status });
 });
 
-app.delete('/api/invoices/:id', auth, (req, res) => {
+app.delete('/api/invoices/:id', auth, requireRole('admin', 'faturamento'), (req, res) => {
   const result = db.prepare('DELETE FROM invoices WHERE id = ? AND clinic_id = ?').run(req.params.id, req.session.clinicId);
   if (!result.changes) return res.status(404).json({ error: 'Nota não encontrada.' });
   res.status(204).end();
-});
-
-app.get('/api/reports', auth, (req, res) => {
-  const guides = db.prepare('SELECT status, COUNT(*) AS count FROM guides WHERE clinic_id = ? GROUP BY status').all(req.session.clinicId);
-  const invoices = db.prepare('SELECT status, COALESCE(SUM(amount_cents), 0) AS amountCents FROM invoices WHERE clinic_id = ? GROUP BY status').all(req.session.clinicId);
-  res.json({ guides, invoices });
 });
 
 app.get('/api/insurers', auth, (req, res) => {
@@ -152,7 +150,7 @@ app.get('/api/insurers', auth, (req, res) => {
   res.json(insurers.map(insurer => ({ ...insurer, acceptedProcedures: JSON.parse(insurer.acceptedProcedures || '[]') })));
 });
 
-app.post('/api/insurers', auth, (req, res) => {
+app.post('/api/insurers', auth, requireRole('admin'), (req, res) => {
   const { id, name, ansCode, contactEmail, contactPhone, acceptedProcedures = [] } = req.body;
   if (!id || !name) return res.status(400).json({ error: 'Nome e identificador são obrigatórios.' });
   try {
@@ -163,7 +161,7 @@ app.post('/api/insurers', auth, (req, res) => {
   }
 });
 
-app.put('/api/insurers/:id', auth, (req, res) => {
+app.put('/api/insurers/:id', auth, requireRole('admin'), (req, res) => {
   const { name, ansCode, contactEmail, contactPhone, acceptedProcedures = [] } = req.body;
   if (!name) return res.status(400).json({ error: 'Nome é obrigatório.' });
   try {
@@ -175,7 +173,7 @@ app.put('/api/insurers/:id', auth, (req, res) => {
   }
 });
 
-app.delete('/api/insurers/:id', auth, (req, res) => {
+app.delete('/api/insurers/:id', auth, requireRole('admin'), (req, res) => {
   const result = db.prepare('DELETE FROM insurers WHERE id = ? AND clinic_id = ?').run(req.params.id, req.session.clinicId);
   if (!result.changes) return res.status(404).json({ error: 'Convênio não encontrado.' });
   res.status(204).end();
@@ -186,7 +184,7 @@ app.get('/api/feedbacks', auth, (req, res) => {
   res.json(feedbacks);
 });
 
-app.post('/api/feedbacks', auth, (req, res) => {
+app.post('/api/feedbacks', auth, requireRole('admin', 'recepcao', 'medico'), (req, res) => {
   const { id, guideId, patient, professional, attendanceDate, attendanceType, content, photo } = req.body;
   if (!id || !patient || !professional || !attendanceDate || !content) {
     return res.status(400).json({ error: 'Paciente, profissional, data do atendimento e o texto do feedback são obrigatórios.' });
@@ -199,7 +197,7 @@ app.post('/api/feedbacks', auth, (req, res) => {
   }
 });
 
-app.delete('/api/feedbacks/:id', auth, (req, res) => {
+app.delete('/api/feedbacks/:id', auth, requireRole('admin', 'recepcao', 'medico'), (req, res) => {
   const result = db.prepare('DELETE FROM feedbacks WHERE id = ? AND clinic_id = ?').run(req.params.id, req.session.clinicId);
   if (!result.changes) return res.status(404).json({ error: 'Feedback não encontrado.' });
   res.status(204).end();
@@ -210,7 +208,7 @@ app.get('/api/glosas', auth, (req, res) => {
   res.json(glosas);
 });
 
-app.post('/api/guides/:id/glosa', auth, (req, res) => {
+app.post('/api/guides/:id/glosa', auth, requireRole('admin', 'faturamento'), (req, res) => {
   const { code, reason, amount } = req.body;
   if (!reason) return res.status(400).json({ error: 'Informe o motivo da glosa.' });
   const guide = db.prepare('SELECT id FROM guides WHERE id = ? AND clinic_id = ?').get(req.params.id, req.session.clinicId);
@@ -228,7 +226,7 @@ app.post('/api/guides/:id/glosa', auth, (req, res) => {
   }
 });
 
-app.post('/api/glosas/:id/recurso', auth, (req, res) => {
+app.post('/api/glosas/:id/recurso', auth, requireRole('admin', 'faturamento'), (req, res) => {
   const { justification } = req.body;
   if (!justification) return res.status(400).json({ error: 'Informe a justificativa do recurso.' });
   const glosa = db.prepare('SELECT * FROM glosas WHERE id = ? AND clinic_id = ?').get(req.params.id, req.session.clinicId);
@@ -241,7 +239,7 @@ app.post('/api/glosas/:id/recurso', auth, (req, res) => {
   res.json({ id: req.params.id, status: 'recurso_enviado' });
 });
 
-app.post('/api/glosas/:id/resolve', auth, (req, res) => {
+app.post('/api/glosas/:id/resolve', auth, requireRole('admin', 'faturamento'), (req, res) => {
   const outcome = req.body.outcome === 'revertida' ? 'revertida' : 'mantida';
   const glosa = db.prepare('SELECT * FROM glosas WHERE id = ? AND clinic_id = ?').get(req.params.id, req.session.clinicId);
   if (!glosa) return res.status(404).json({ error: 'Glosa não encontrada.' });

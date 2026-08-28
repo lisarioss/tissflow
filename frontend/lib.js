@@ -85,8 +85,64 @@ function filterPatients(patients, term) {
   return patients.filter(patient => [patient.name, patient.insurer, patient.cardNumber, patient.plan].some(field => String(field || '').toLowerCase().includes(query)));
 }
 
+
+// --- Datas (din\u00e2micas, substituem valores hardcoded) ---
+const MESES_CURTO = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+const DIAS_LONGO = ['domingo', 'segunda-feira', 'ter\u00e7a-feira', 'quarta-feira', 'quinta-feira', 'sexta-feira', 's\u00e1bado'];
+
+function hojeIso() {
+  const now = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  return now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate());
+}
+function mesAtual() {
+  const now = new Date();
+  return now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
+}
+function anoAtual() {
+  return new Date().getFullYear();
+}
+function anoSeguinte() {
+  return new Date().getFullYear() + 1;
+}
+function somarDiasLocal(ref, dias) {
+  const d = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate() + dias);
+  return d;
+}
+function dataRelativaIso(dias) {
+  const d = somarDiasLocal(new Date(), dias);
+  const pad = n => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+}
+function dataRelativaCurta(dias) {
+  const d = somarDiasLocal(new Date(), dias);
+  return d.getDate() + ' ' + MESES_CURTO[d.getMonth()] + ', ' + d.getFullYear();
+}
+function diaDaSemanaLongo(iso) {
+  const [y, m, d] = String(iso || '').split('-').map(Number);
+  const date = new Date(y, (m || 1) - 1, d || 1);
+  return DIAS_LONGO[date.getDay()];
+}
+function capitalizar(texto) {
+  const s = String(texto || '');
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+function saudacaoInstantanea(nome) {
+  const h = new Date().getHours();
+  const turno = h < 12 ? 'Bom dia' : (h < 18 ? 'Boa tarde' : 'Boa noite');
+  return nome ? turno + ', ' + nome + '.' : turno + '.';
+}
+function ultimosSeteDias() {
+  const labels = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = somarDiasLocal(new Date(), -i);
+    labels.push(d.getDate() + ' ' + MESES_CURTO[d.getMonth()]);
+  }
+  return labels;
+}
+
 // Disponibiliza as funções tanto para <script> no navegador (globais em
 // `window`) quanto para `require()` em testes Node — sem precisar de bundler.
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { nextSequentialId, timeToMinutes, hasScheduleConflictWith, escapeXml, findSessionOutsidePlanValidity, exceedsAuthorizedQuantity, findCidIncompatibility, filterGuides, filterPatients };
+  module.exports = { nextSequentialId, timeToMinutes, hasScheduleConflictWith, escapeXml, findSessionOutsidePlanValidity, exceedsAuthorizedQuantity, findCidIncompatibility, filterGuides, filterPatients, hojeIso, mesAtual, anoAtual, anoSeguinte, dataRelativaIso, dataRelativaCurta, diaDaSemanaLongo, capitalizar, saudacaoInstantanea, ultimosSeteDias };
 }

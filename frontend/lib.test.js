@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { nextSequentialId, timeToMinutes, hasScheduleConflictWith, escapeXml, findSessionOutsidePlanValidity, exceedsAuthorizedQuantity, findCidIncompatibility, filterGuides, filterPatients } = require('./lib.js');
+const { nextSequentialId, timeToMinutes, hasScheduleConflictWith, escapeXml, findSessionOutsidePlanValidity, exceedsAuthorizedQuantity, findCidIncompatibility, filterGuides, filterPatients, hojeIso, mesAtual, anoSeguinte, anoAtual, dataRelativaIso, dataRelativaCurta, diaDaSemanaLongo, capitalizar, ultimosSeteDias } = require('./lib.js');
 
 test('nextSequentialId gera o próximo número com base no maior ID existente', () => {
   const list = [{ id: 'G-2026-00478' }, { id: 'G-2026-00481' }];
@@ -133,3 +133,28 @@ test('filterPatients encontra por nome, convênio, carteira ou plano', () => {
   assert.equal(filterPatients(patients, 'exato').length, 1);
   assert.equal(filterPatients(patients, '').length, 2);
 });
+
+// --- Datas dinâmicas ---
+test('hojeIso retorna YYYY-MM-DD válido', () => {
+  assert.match(hojeIso(), /^\d{4}-\d{2}-\d{2}$/);
+});
+test('mesAtual retorna YYYY-MM', () => {
+  assert.match(mesAtual(), /^\d{4}-\d{2}$/);
+});
+test('anoSeguinte = anoAtual + 1', () => {
+  assert.equal(anoSeguinte(), anoAtual() + 1);
+});
+test('dataRelativaIso(0) == hojeIso', () => {
+  assert.equal(dataRelativaIso(0), hojeIso());
+});
+test('dataRelativaCurta(0) começa com o dia atual', () => {
+  const dia = Number(hojeIso().slice(8, 10));
+  assert.match(dataRelativaCurta(0), new RegExp('^' + dia + ' '));
+});
+test('diaDaSemanaLongo + capitalizar produzem Quinta-feira', () => {
+  assert.equal(capitalizar(diaDaSemanaLongo('2026-08-20')), 'Quinta-feira');
+});
+test('ultimosSeteDias tem 7 labels', () => {
+  assert.equal(ultimosSeteDias().length, 7);
+});
+

@@ -170,4 +170,17 @@ if (clinicCount === 0) {
   seed();
 }
 
+
+const demoSeed = db.transaction(() => {
+  const insertDemoUser = db.prepare('INSERT OR IGNORE INTO users (id, clinic_id, name, email, password_hash, role) VALUES (?, ?, ?, ?, ?, ?)');
+  const demoUsers = [
+    { id: 'julia', clinicId: 'sabia', name: 'Julia Andrade', email: 'recepcao@clinicasabia.com.br', role: 'recepcao' },
+    { id: 'camila', clinicId: 'sabia', name: 'Camila Rocha', email: 'medica@clinicasabia.com.br', role: 'medico' },
+    { id: 'leticia', clinicId: 'vital', name: 'Leticia Prado', email: 'recepcao@institutovital.com.br', role: 'recepcao' },
+    { id: 'bruno', clinicId: 'vital', name: 'Bruno Castro', email: 'faturamento@institutovital.com.br', role: 'faturamento' }
+  ];
+  for (const u of demoUsers) insertDemoUser.run(u.id, u.clinicId, u.name, u.email, bcrypt.hashSync(demoPassword, 10), u.role);
+});
+demoSeed();
+
 module.exports = db;

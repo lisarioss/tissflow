@@ -101,6 +101,15 @@ app.patch('/api/guides/:id/sessions/:index', auth, (req, res) => {
   res.json({ id: req.params.id, index, procedure: sessions[index].procedure });
 });
 
+app.patch('/api/guides/:id/status', auth, (req, res) => {
+  const { status } = req.body || {};
+  const valid = ['sent', 'review', 'approved', 'error', 'recurso'];
+  if (!valid.includes(status)) return res.status(400).json({ error: 'Status inválido.' });
+  const result = db.prepare('UPDATE guides SET status = ? WHERE id = ? AND clinic_id = ?').run(status, req.params.id, req.session.clinicId);
+  if (result.changes === 0) return res.status(404).json({ error: 'Guia não encontrada.' });
+  res.json({ id: req.params.id, status });
+});
+
 app.get('/api/invoices', auth, (req, res) => {
   const invoices = db.prepare(`SELECT invoices.id, invoices.guide_id AS guideId, invoices.provider, invoices.description, invoices.amount_cents AS amountCents, invoices.expected_date AS expectedDate, invoices.status, guides.patient FROM invoices LEFT JOIN guides ON guides.id = invoices.guide_id WHERE invoices.clinic_id = ? ORDER BY invoices.expected_date`).all(req.session.clinicId);
   res.json(invoices);

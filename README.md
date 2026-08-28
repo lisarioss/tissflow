@@ -11,8 +11,12 @@ Protótipo de portfólio para operação de faturamento clínico. Demonstra o ci
   - Quantidade de atendimentos vs. quantidade pré-autorizada
   - Compatibilidade demonstrativa entre CID-10 e procedimento (tabela simplificada, não substitui a tabela oficial da ANS)
 - **Autenticação real** via JWT + bcrypt, com dados persistidos em SQLite e isolados por `clinic_id` em todas as consultas.
+- **Convênios**: CRUD de operadoras (código ANS e tabela de procedimentos aceitos), alimentando os formulários de guia e a pré-validação de compatibilidade.
+- **Feedback profissional**: registro de feedback por atendimento, com foto e vinculação opcional à guia.
 - **Financeiro**: cadastro, baixa e exclusão de notas fiscais vinculadas a guias aprovadas.
 - **Agenda**: checagem de conflito de horário por profissional/data.
+- **Status de guia via API**: retorno da operadora persistido via `PATCH /api/guides/:id/status` (sent/review/approved/error/recurso) quando autenticado, com fallback local em `localStorage`.
+- **Datas dinâmicas**: overview, agenda, formulários, documentos e ids do ano usam a data corrente (helpers puros em `frontend/lib.js`) — nada é hardcoded para 2026.
 - **Modo somente-visual**: guias, agenda, pacientes e notas fiscais funcionam offline via `localStorage` (ver limitações abaixo).
 
 ## Executar
@@ -84,7 +88,6 @@ Escolha uma clínica na tela de login (contas demo listadas na própria tela). O
 
 ## Próximos passos
 
-- Tela de Convênios com CRUD de operadoras (código ANS, tabela de procedimentos aceitos).
-- Busca/filtro nas listagens de guias e pacientes.
 - RBAC por papel nas rotas da API.
 - Trilha de auditoria (quem alterou o quê e quando).
+- Validação do XML contra o XSD oficial da ANS.

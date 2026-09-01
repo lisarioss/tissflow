@@ -126,6 +126,29 @@ db.exec(`
     professionals_json TEXT NOT NULL DEFAULT '[]',
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
+  CREATE TABLE IF NOT EXISTS tuss_imports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    table_code TEXT NOT NULL,
+    version TEXT NOT NULL,
+    source_file TEXT NOT NULL,
+    term_count INTEGER NOT NULL DEFAULT 0,
+    imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(table_code, version)
+  );
+  CREATE TABLE IF NOT EXISTS tuss_terms (
+    table_code TEXT NOT NULL,
+    code TEXT NOT NULL,
+    term TEXT NOT NULL,
+    detailed_description TEXT,
+    valid_from TEXT,
+    valid_to TEXT,
+    implementation_end TEXT,
+    version TEXT NOT NULL,
+    source_file TEXT NOT NULL,
+    imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(table_code, code, version)
+  );
+  CREATE INDEX IF NOT EXISTS idx_tuss_terms_search ON tuss_terms(table_code, version, code, term);
 `);
 
 const guideColumns = db.prepare('PRAGMA table_info(guides)').all();
@@ -157,6 +180,8 @@ const patientColumns = new Set(db.prepare('PRAGMA table_info(patients)').all().m
 if (!patientColumns.has('active')) db.exec('ALTER TABLE patients ADD COLUMN active INTEGER NOT NULL DEFAULT 1');
 const settingsColumns = new Set(db.prepare('PRAGMA table_info(clinic_settings)').all().map(column => column.name));
 if (!settingsColumns.has('letterhead_data_url')) db.exec("ALTER TABLE clinic_settings ADD COLUMN letterhead_data_url TEXT NOT NULL DEFAULT ''");
+const insurerColumns = new Set(db.prepare('PRAGMA table_info(insurers)').all().map(column => column.name));
+if (!insurerColumns.has('procedure_rules')) db.exec("ALTER TABLE insurers ADD COLUMN procedure_rules TEXT NOT NULL DEFAULT '[]'");
 const clinicCount = db.prepare('SELECT COUNT(*) AS count FROM clinics').get().count;
 if (clinicCount === 0) {
   const insertClinic = db.prepare('INSERT INTO clinics (id, name, unit) VALUES (?, ?, ?)');

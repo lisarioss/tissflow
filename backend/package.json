@@ -9,7 +9,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "import:tuss": "node scripts/importTuss.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
@@ -19,5 +20,8 @@
     "express": "^4.21.2",
     "jsonwebtoken": "^9.0.2",
     "pdfmake": "^0.2.20"
+  },
+  "devDependencies": {
+    "exceljs": "4.4.0"
   }
 }

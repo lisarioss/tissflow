@@ -77,6 +77,33 @@ app.get('/api/settings', auth, (req, res) => {
   res.json(mapClinicSettings(settings, clinic));
 });
 
+app.get('/api/tuss', auth, (req, res) => {
+  const tableCode = String(req.query.table || '22');
+  const query = String(req.query.query || '').trim();
+  const requestedVersion = String(req.query.version || '').trim();
+  const activeOn = String(req.query.activeOn || new Date().toISOString().slice(0, 10));
+  const includeInactive = req.query.includeInactive === 'true';
+  const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 50);
+  if (!/^\d{1,3}$/.test(tableCode)) return res.status(400).json({ error: 'Tabela TUSS inválida.' });
+  if (requestedVersion && !/^\d{6}$/.test(requestedVersion)) return res.status(400).json({ error: 'Versão TUSS inválida.' });
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(activeOn)) return res.status(400).json({ error: 'A data de vigência deve usar AAAA-MM-DD.' });
+
+  const latest = requestedVersion || db.prepare('SELECT version FROM tuss_imports WHERE table_code = ? ORDER BY version DESC LIMIT 1').get(tableCode)?.version;
+  if (!latest) return res.json({ tableCode, version: null, activeOn, terms: [] });
+  const search = `%${query}%`;
+  const activeClause = includeInactive ? '' : 'AND (valid_from IS NULL OR valid_from <= ?) AND (valid_to IS NULL OR valid_to >= ?)';
+  const parameters = [tableCode, latest, search, search];
+  if (!includeInactive) parameters.push(activeOn, activeOn);
+  parameters.push(query, `${query}%`, limit);
+  const terms = db.prepare(`SELECT table_code AS tableCode, code, term, detailed_description AS detailedDescription,
+      valid_from AS validFrom, valid_to AS validTo, implementation_end AS implementationEnd, version
+    FROM tuss_terms
+    WHERE table_code = ? AND version = ? AND (code LIKE ? OR lower(term) LIKE lower(?)) ${activeClause}
+    ORDER BY code = ? DESC, code LIKE ? DESC, term
+    LIMIT ?`).all(...parameters);
+  res.json({ tableCode, version: latest, activeOn, terms });
+});
+
 app.put('/api/settings', auth, requireRole('admin'), (req, res) => {
   const { legalName, tradeName, cnpj, phone, instagram, address, city, state, postalCode, logoDataUrl, letterheadDataUrl, owners = [], professionals = [] } = req.body;
   if (!tradeName) return res.status(400).json({ error: 'O nome da clínica é obrigatório.' });
@@ -130,6 +157,13 @@ app.get('/api/guides', auth, (req, res) => {
 app.post('/api/guides', auth, requireRole('admin', 'faturamento'), (req, res) => {
   const { id, patient, procedure, insurer, competence, ansCode, cardNumber, patientBirth, patientPlan, planValidity, authorizationNumber, operatorGuide, providerName, providerCnpj, professional, professionalRegister, attendanceType, serviceCode, quantity = 1, unitValue, status = 'sent', value, sessions = [], guideType = 'sp_sadt', cid, authorizedQuantity } = req.body;
   if (!id || !patient || !procedure || !insurer) return res.status(400).json({ error: 'Paciente, procedimento, convênio e identificador são obrigatórios.' });
+  const insurerContract = db.prepare('SELECT procedure_rules FROM insurers WHERE clinic_id = ? AND name = ?').get(req.session.clinicId, insurer);
+  const contractRules = insurerContract ? JSON.parse(insurerContract.procedure_rules || '[]') : [];
+  const procedureCode = String(serviceCode || procedure).split(' - ')[0].trim();
+  const contractRule = contractRules.find(rule => rule.code === procedureCode);
+  if (contractRules.length && !contractRule) return res.status(400).json({ error: `O procedimento ${procedureCode} não está na tabela contratada com ${insurer}.` });
+  if (contractRule?.requiresAuthorization && !String(authorizationNumber || '').trim()) return res.status(400).json({ error: `O procedimento ${procedureCode} exige número de autorização prévia.` });
+  if (contractRule?.unitValue > 0 && Math.abs(Number(unitValue || 0) - Number(contractRule.unitValue)) > 0.009) return res.status(400).json({ error: `O valor deve ser o contratado com ${insurer}: R$ ${Number(contractRule.unitValue).toFixed(2).replace('.', ',')}.` });
   // Validações de negócio no servidor (o front-end já checa isso, mas não confiamos só no cliente).
   if (planValidity && sessions.some(session => session.date > planValidity)) {
     return res.status(400).json({ error: `Existe atendimento fora da vigência do plano (válido até ${planValidity}).` });
@@ -188,15 +222,30 @@ app.delete('/api/invoices/:id', auth, requireRole('admin', 'faturamento'), (req,
 });
 
 app.get('/api/insurers', auth, (req, res) => {
-  const insurers = db.prepare('SELECT id, name, ans_code AS ansCode, contact_email AS contactEmail, contact_phone AS contactPhone, accepted_procedures AS acceptedProcedures FROM insurers WHERE clinic_id = ? ORDER BY name').all(req.session.clinicId);
-  res.json(insurers.map(insurer => ({ ...insurer, acceptedProcedures: JSON.parse(insurer.acceptedProcedures || '[]') })));
+  const insurers = db.prepare('SELECT id, name, ans_code AS ansCode, contact_email AS contactEmail, contact_phone AS contactPhone, accepted_procedures AS acceptedProcedures, procedure_rules AS procedureRules FROM insurers WHERE clinic_id = ? ORDER BY name').all(req.session.clinicId);
+  res.json(insurers.map(insurer => ({ ...insurer, acceptedProcedures: JSON.parse(insurer.acceptedProcedures || '[]'), procedureRules: JSON.parse(insurer.procedureRules || '[]') })));
 });
 
+function normalizeProcedureRules(rules) {
+  if (!Array.isArray(rules)) return [];
+  return rules.map(rule => ({ code: String(rule.code || '').trim(), unitValue: Number(rule.unitValue || 0), requiresAuthorization: Boolean(rule.requiresAuthorization) }))
+    .filter(rule => /^\d+$/.test(rule.code) && Number.isFinite(rule.unitValue) && rule.unitValue >= 0);
+}
+function unknownProcedureCodes(rules) {
+  const latest = db.prepare("SELECT version FROM tuss_imports WHERE table_code = '22' ORDER BY version DESC LIMIT 1").get()?.version;
+  if (!latest || !rules.length) return [];
+  const exists = db.prepare("SELECT 1 FROM tuss_terms WHERE table_code = '22' AND version = ? AND code = ?");
+  return rules.map(rule => rule.code).filter(code => !exists.get(latest, code));
+}
+
 app.post('/api/insurers', auth, requireRole('admin'), (req, res) => {
-  const { id, name, ansCode, contactEmail, contactPhone, acceptedProcedures = [] } = req.body;
+  const { id, name, ansCode, contactEmail, contactPhone, acceptedProcedures = [], procedureRules = [] } = req.body;
   if (!id || !name) return res.status(400).json({ error: 'Nome e identificador são obrigatórios.' });
   try {
-    db.prepare('INSERT INTO insurers (id, clinic_id, name, ans_code, contact_email, contact_phone, accepted_procedures) VALUES (?, ?, ?, ?, ?, ?, ?)').run(id, req.session.clinicId, name, ansCode || null, contactEmail || null, contactPhone || null, JSON.stringify(acceptedProcedures));
+    const rules = normalizeProcedureRules(procedureRules);
+    const unknownCodes = unknownProcedureCodes(rules);
+    if (unknownCodes.length) return res.status(400).json({ error: `Código TUSS não encontrado na versão oficial: ${unknownCodes.join(', ')}.` });
+    db.prepare('INSERT INTO insurers (id, clinic_id, name, ans_code, contact_email, contact_phone, accepted_procedures, procedure_rules) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(id, req.session.clinicId, name, ansCode || null, contactEmail || null, contactPhone || null, JSON.stringify(rules.length ? rules.map(rule => rule.code) : acceptedProcedures), JSON.stringify(rules));
     res.status(201).json({ id });
   } catch (error) {
     res.status(409).json({ error: error.message });
@@ -204,10 +253,14 @@ app.post('/api/insurers', auth, requireRole('admin'), (req, res) => {
 });
 
 app.put('/api/insurers/:id', auth, requireRole('admin'), (req, res) => {
-  const { name, ansCode, contactEmail, contactPhone, acceptedProcedures = [] } = req.body;
+  const { name, ansCode, contactEmail, contactPhone, acceptedProcedures = [], procedureRules = [] } = req.body;
   if (!name) return res.status(400).json({ error: 'Nome é obrigatório.' });
   try {
-    const result = db.prepare('UPDATE insurers SET name = ?, ans_code = ?, contact_email = ?, contact_phone = ?, accepted_procedures = ? WHERE id = ? AND clinic_id = ?').run(name, ansCode || null, contactEmail || null, contactPhone || null, JSON.stringify(acceptedProcedures), req.params.id, req.session.clinicId);
+    const rules = normalizeProcedureRules(procedureRules);
+    const unknownCodes = unknownProcedureCodes(rules);
+    if (unknownCodes.length) return res.status(400).json({ error: `Código TUSS não encontrado na versão oficial: ${unknownCodes.join(', ')}.` });
+    const codes = rules.length ? rules.map(rule => rule.code) : acceptedProcedures;
+    const result = db.prepare('UPDATE insurers SET name = ?, ans_code = ?, contact_email = ?, contact_phone = ?, accepted_procedures = ?, procedure_rules = ? WHERE id = ? AND clinic_id = ?').run(name, ansCode || null, contactEmail || null, contactPhone || null, JSON.stringify(codes), JSON.stringify(rules), req.params.id, req.session.clinicId);
     if (!result.changes) return res.status(404).json({ error: 'Convênio não encontrado.' });
     res.json({ id: req.params.id });
   } catch (error) {

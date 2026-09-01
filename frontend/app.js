@@ -71,6 +71,45 @@ const views = { overview: 'Visão geral', agenda: 'Agenda', guides: 'Guias TISS'
 const appView = document.querySelector('#app-view');
 const breadcrumb = document.querySelector('#breadcrumb');
 const toast = document.querySelector('#toast');
+function procedureRulesToText(rules) {
+  return (rules || []).map(rule => `${rule.code} | ${Number(rule.unitValue || 0).toFixed(2).replace('.', ',')} | ${rule.requiresAuthorization ? 'sim' : 'não'}`).join('\n');
+}
+function parseProcedureRules(value) {
+  return String(value || '').split('\n').map(line => {
+    const [code = '', rawValue = '0', authorization = 'não'] = line.split('|').map(part => part.trim());
+    return { code, unitValue: Number(rawValue.replace(',', '.')), requiresAuthorization: /^s(im)?$/i.test(authorization) };
+  }).filter(rule => /^\d+$/.test(rule.code) && Number.isFinite(rule.unitValue));
+}
+function enhanceInsurerForm() {
+  const form = document.querySelector('#insurer-form');
+  if (!form || form.querySelector('#new-insurer-rules')) return;
+  const field = document.createElement('div');
+  field.className = 'field contract-rules-field';
+  field.innerHTML = '<div class="contract-heading"><div><label>Tabela contratada por procedimento</label><small>Pesquise na TUSS oficial e informe as regras negociadas com a operadora.</small></div><button type="button" class="secondary-button" data-action="add-contract-rule">＋ Adicionar procedimento</button></div><div id="contract-rule-list" class="contract-rule-list"></div><textarea id="new-insurer-rules" name="procedureRulesText" hidden></textarea>';
+  form.querySelector('.form-section')?.append(field);
+  const legacyCodes = form.querySelector('#new-insurer-procedures')?.closest('.field');
+  if (legacyCodes) legacyCodes.hidden = true;
+}
+function contractRuleRow(rule = {}) {
+  const row = document.createElement('div');
+  row.className = 'contract-rule-row';
+  row.dataset.code = rule.code || '';
+  row.innerHTML = `<div class="contract-procedure"><label>Procedimento TUSS</label><input class="contract-procedure-search" type="search" autocomplete="off" placeholder="Código ou descrição" value="${rule.code || ''}" /><div class="contract-search-results" hidden></div></div><div><label>Valor contratado</label><input class="contract-value" type="number" min="0" step="0.01" value="${Number(rule.unitValue || 0).toFixed(2)}" /></div><label class="contract-authorization"><input class="contract-requires-authorization" type="checkbox" ${rule.requiresAuthorization ? 'checked' : ''} /> Exige autorização</label><button type="button" class="finance-delete" data-action="remove-contract-rule">Remover</button>`;
+  return row;
+}
+function renderContractRules(rules = []) {
+  const list = document.querySelector('#contract-rule-list');
+  if (!list) return;
+  list.replaceChildren(...rules.map(contractRuleRow));
+  syncContractRules();
+}
+function syncContractRules() {
+  const hidden = document.querySelector('#new-insurer-rules');
+  if (!hidden) return;
+  const rules = [...document.querySelectorAll('.contract-rule-row')].map(row => ({ code: row.dataset.code || '', unitValue: Number(row.querySelector('.contract-value')?.value || 0), requiresAuthorization: Boolean(row.querySelector('.contract-requires-authorization')?.checked) })).filter(rule => rule.code);
+  hidden.value = procedureRulesToText(rules);
+}
+new MutationObserver(enhanceInsurerForm).observe(appView, { childList: true, subtree: true });
 const rolePermissions = {
   admin: ['overview', 'agenda', 'guides', 'financeiro', 'users', 'patients', 'convenios', 'feedback', 'reports', 'settings'],
   faturamento: ['overview', 'guides', 'financeiro', 'reports', 'users'],
@@ -86,6 +125,88 @@ async function apiRequest(path, options = {}) {
   if (!response.ok) throw new Error(payload.error || 'Não foi possível comunicar com a API.');
   return payload;
 }
+let tussSearchTimer;
+let tussSearchSequence = 0;
+let contractSearchTimer;
+function closeTussResults() {
+  const results = document.querySelector('#tuss-results');
+  if (results) { results.hidden = true; results.replaceChildren(); }
+}
+function applyContractRule(code) {
+  const insurerName = document.querySelector('#insurer')?.value;
+  const insurer = insurers.find(item => item.name === insurerName);
+  const rules = insurer?.procedureRules || [];
+  const rule = rules.find(item => item.code === code);
+  const help = document.querySelector('#tuss-help');
+  if (!rules.length) {
+    if (help) help.textContent = 'Procedimento oficial selecionado. Este convênio ainda não possui tabela contratada.';
+    return;
+  }
+  if (!rule) {
+    if (help) help.textContent = `Atenção: ${insurerName} não possui este procedimento na tabela contratada.`;
+    showToast(`Procedimento não configurado para ${insurerName}.`);
+    return;
+  }
+  const value = document.querySelector('#value');
+  if (value && rule.unitValue > 0) value.value = rule.unitValue.toFixed(2);
+  if (help) help.textContent = `Contrato ${insurerName}: ${formatMoney(rule.unitValue)}${rule.requiresAuthorization ? ' · exige autorização prévia' : ' · sem autorização prévia configurada'}.`;
+  if (rule.requiresAuthorization && !document.querySelector('#authorization-number')?.value) showToast('Este procedimento exige autorização prévia do convênio.');
+}
+function contractValidationMessage(data) {
+  const insurer = insurers.find(item => item.name === data.insurer);
+  const rules = insurer?.procedureRules || [];
+  if (!rules.length) return '';
+  const rule = rules.find(item => item.code === data.serviceCode);
+  if (!rule) return `O procedimento ${data.serviceCode} não está na tabela contratada com ${data.insurer}.`;
+  if (rule.requiresAuthorization && !String(data.authorizationNumber || '').trim()) return `Informe o número da autorização prévia exigida por ${data.insurer}.`;
+  if (rule.unitValue > 0 && Math.abs(Number(data.value || 0) - Number(rule.unitValue)) > 0.009) return `O valor deve ser o contratado com ${data.insurer}: ${formatMoney(rule.unitValue)}.`;
+  return '';
+}
+async function searchTussTerms(query) {
+  const results = document.querySelector('#tuss-results');
+  if (!results || query.length < 2) { closeTussResults(); return; }
+  const sequence = ++tussSearchSequence;
+  results.hidden = false;
+  results.textContent = 'Buscando na tabela oficial…';
+  try {
+    const catalog = await apiRequest(`/tuss?query=${encodeURIComponent(query)}&limit=10`);
+    if (sequence !== tussSearchSequence || !document.querySelector('#tuss-results')) return;
+    results.replaceChildren();
+    if (!catalog.terms.length) { results.textContent = 'Nenhum procedimento vigente encontrado.'; return; }
+    catalog.terms.forEach(term => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'tuss-result';
+      button.dataset.code = term.code;
+      button.dataset.term = term.term;
+      const code = document.createElement('strong');
+      code.textContent = term.code;
+      const description = document.createElement('span');
+      description.textContent = term.term;
+      button.append(code, description);
+      results.append(button);
+    });
+  } catch (error) {
+    if (sequence === tussSearchSequence) results.textContent = error.message;
+  }
+}
+document.addEventListener('submit', event => {
+  if (event.target.id !== 'guide-form') return;
+  const data = Object.fromEntries(new FormData(event.target));
+  let message = '';
+  let target = '#procedure';
+  if (!data.serviceCode || !data.procedure?.startsWith(`${data.serviceCode} - `)) message = 'Selecione um procedimento na lista oficial TUSS.';
+  else {
+    message = contractValidationMessage(data);
+    if (message.includes('autorização')) target = '#authorization-number';
+    if (message.includes('valor')) target = '#value';
+  }
+  if (!message) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  showToast(message);
+  document.querySelector(target)?.focus();
+}, true);
 function normalizeGuide(guide) { return { ...guide, sessions: guide.sessions || [], status: guide.status, label: { sent: 'Enviada', review: 'Em análise', approved: 'Aprovada', error: 'Com glosa', recurso: 'Recurso enviado' }[guide.status] || guide.status, value: formatMoney((guide.valueCents || 0) / 100), unitValue: Number(guide.unitValueCents || 0) / 100, date: guide.createdAt ? new Date(guide.createdAt).toLocaleDateString('pt-BR') : '' }; }
 function normalizeInvoice(invoice) { return { ...invoice, amount: Number(invoice.amountCents || 0) / 100 }; }
 function normalizeGlosa(glosa) { return { ...glosa, amount: Number(glosa.amountCents || 0) / 100 }; }
@@ -117,6 +238,9 @@ function configuredProfessionals() {
 function professionalOptions(includeRegister = false) {
   return configuredProfessionals().map(person => `<option value="${person.name}"${includeRegister ? ` data-register="${person.council || ''}"` : ''}>${person.name}${person.council ? ` · ${person.council}` : ''}</option>`).join('');
 }
+function tussProcedureField() {
+  return `<div class="field tuss-field"><label for="procedure">Procedimento TUSS *</label><input id="procedure" name="procedure" type="search" required autocomplete="off" placeholder="Digite o código ou nome do procedimento" aria-autocomplete="list" aria-controls="tuss-results" /><div id="tuss-results" class="tuss-results" role="listbox" hidden></div><small id="tuss-help">Consulte por código ou descrição na tabela 22 oficial da ANS.</small></div>`;
+}
 function overview() {
   return `<div class="page-heading"><div><p class="eyebrow">Quarta-feira, 19 de agosto de 2026</p><h1>Bom dia, Marina.</h1><p class="heading-copy">Aqui está o pulso do faturamento da sua clínica.</p></div><button class="primary-button" data-action="new-guide">＋ Nova guia</button></div>
   <div class="stats-grid"><article class="stat-card"><div class="stat-top"><span>Guias este mês</span><span class="stat-icon">▣</span></div><div class="stat-value">184</div><div class="stat-note"><b>↑ 12,4%</b> vs. mês anterior</div></article><article class="stat-card"><div class="stat-top"><span>Taxa de aprovação</span><span class="stat-icon">◉</span></div><div class="stat-value">94,8%</div><div class="stat-note"><b>↑ 2,1 p.p.</b> vs. mês anterior</div></article><article class="stat-card"><div class="stat-top"><span>Em análise</span><span class="stat-icon">◷</span></div><div class="stat-value">12</div><div class="stat-note warn"><b>3 vencem hoje</b> precisam de atenção</div></article><article class="stat-card"><div class="stat-top"><span>Valor faturado</span><span class="stat-icon">◇</span></div><div class="stat-value">R$ 42,8k</div><div class="stat-note"><b>↑ 8,7%</b> vs. mês anterior</div></article></div>
@@ -130,7 +254,7 @@ function guideFormComplete() {
     <div class="form-section"><h2>1. Identificação da operadora</h2><p>Dados da empresa responsável pelo plano de saúde.</p><div class="form-grid"><div class="field"><label for="insurer">Operadora *</label><select id="insurer" name="insurer" required><option value="">Selecione a operadora</option>${insurers.map(insurer => `<option value="${insurer.name}" data-code="${insurer.ansCode || ''}" data-logo="${(insurerLogos[insurer.name] || {}).logo || insurer.name.toUpperCase()}" data-logo-path="${(insurerLogos[insurer.name] || {}).logoPath || ''}">${insurer.name}</option>`).join('')}</select></div><div class="field"><label for="ans-code">Código ANS</label><input id="ans-code" name="ansCode" readonly placeholder="Preenchido pela operadora" /></div><div class="field"><label for="authorization-number">Número da autorização</label><input id="authorization-number" name="authorizationNumber" placeholder="Se autorizado previamente" /></div><div class="field"><label for="authorized-quantity">Quantidade autorizada</label><input id="authorized-quantity" name="authorizedQuantity" type="number" min="1" placeholder="Se pré-autorizado" /></div><div class="field"><label for="operator-guide">Guia da operadora</label><input id="operator-guide" name="operatorGuide" placeholder="Número informado pela operadora" /></div></div></div>
     <div class="form-section"><h2>2. Beneficiário</h2><p>Selecione um paciente cadastrado para preencher automaticamente os dados do plano.</p><div class="form-grid"><div class="field"><label for="patient">Paciente *</label><select id="patient" name="patient" required><option value="">Selecione o paciente</option>${patients.map(patient => `<option value="${patient.name}" data-patient-id="${patient.id}">${patient.name} · ${patient.insurer}</option>`).join('')}</select></div><div class="field"><label for="card-number">Número da carteira *</label><input id="card-number" name="cardNumber" required placeholder="Preenchido pelo paciente" /></div><div class="field"><label for="patient-birth">Data de nascimento</label><input id="patient-birth" name="patientBirth" type="date" /></div><div class="field"><label for="patient-plan">Plano</label><input id="patient-plan" name="patientPlan" placeholder="Preenchido pelo paciente" /></div><div class="field"><label for="plan-validity">Validade do plano</label><input id="plan-validity" name="planValidity" type="date" /></div></div></div>
     <div class="form-section"><h2>3. Prestador executante</h2><p>Dados da clínica e do profissional que realizou o atendimento.</p><div class="form-grid"><div class="field"><label for="provider-name">Nome da clínica *</label><input id="provider-name" name="providerName" value="${clinicSettings.tradeName || 'Clínica Sabiá'}" required /></div><div class="field"><label for="provider-cnpj">CNPJ</label><input id="provider-cnpj" name="providerCnpj" value="${clinicSettings.cnpj || ''}" /></div><div class="field"><label for="professional">Profissional executante *</label><select id="professional" name="professional" required><option value="">Selecione o profissional</option>${professionalOptions(true)}</select></div><div class="field"><label for="professional-register">Registro profissional</label><input id="professional-register" name="professionalRegister" readonly placeholder="Preenchido pelo profissional" /></div></div></div>
-    <div class="form-section"><h2>4. Atendimento e procedimento</h2><p>Informe o código TUSS, a data e os detalhes do serviço realizado.</p><div class="form-grid"><div class="field"><label for="date">Data do atendimento *</label><input id="date" name="date" type="date" required value="2026-08-20" /></div><div class="field"><label for="type">Tipo de atendimento *</label><select id="type" name="type" required><option value="">Selecione o tipo</option><option>Consulta</option><option>Exame</option><option>Terapia</option></select></div><div class="field"><label for="procedure">Procedimento TUSS *</label><select id="procedure" name="procedure" required><option value="">Selecione o procedimento</option><option value="10101012 - Consulta em consultório">10101012 · Consulta em consultório</option><option value="50000470 - Sessão de fisioterapia">50000470 · Sessão de fisioterapia</option><option value="40901122 - Ultrassonografia">40901122 · Ultrassonografia</option></select></div><div class="field"><label for="quantity">Quantidade *</label><input id="quantity" name="quantity" type="number" min="1" value="1" required /></div><div class="field"><label for="value">Valor do procedimento *</label><input id="value" name="value" type="number" min="0.01" step="0.01" value="180" required /></div><div class="field"><label for="service-code">Código do serviço</label><input id="service-code" name="serviceCode" readonly placeholder="Extraído do TUSS" /></div><div class="field"><label for="cid">CID-10 principal</label><input id="cid" name="cid" placeholder="Ex.: F84.0" pattern="^[A-Za-z][0-9]{2}(\.[0-9]{1,2})?$" title="Formato esperado: letra + 2 dígitos, ex. F84 ou F84.0" /></div></div></div>
+    <div class="form-section"><h2>4. Atendimento e procedimento</h2><p>Informe o código TUSS, a data e os detalhes do serviço realizado.</p><div class="form-grid"><div class="field"><label for="date">Data do atendimento *</label><input id="date" name="date" type="date" required value="2026-08-20" /></div><div class="field"><label for="type">Tipo de atendimento *</label><select id="type" name="type" required><option value="">Selecione o tipo</option><option>Consulta</option><option>Exame</option><option>Terapia</option></select></div>${tussProcedureField()}<div class="field"><label for="quantity">Quantidade *</label><input id="quantity" name="quantity" type="number" min="1" value="1" required /></div><div class="field"><label for="value">Valor do procedimento *</label><input id="value" name="value" type="number" min="0.01" step="0.01" value="180" required /></div><div class="field"><label for="service-code">Código do serviço</label><input id="service-code" name="serviceCode" readonly placeholder="Extraído do TUSS" /></div><div class="field"><label for="cid">CID-10 principal</label><input id="cid" name="cid" placeholder="Ex.: F84.0" pattern="^[A-Za-z][0-9]{2}(\.[0-9]{1,2})?$" title="Formato esperado: letra + 2 dígitos, ex. F84 ou F84.0" /></div></div></div>
     <div class="form-section"><h2>5. Observações</h2><p>Informações complementares para conferência da operadora.</p><div class="field"><label for="notes">Observações da guia</label><textarea id="notes" name="notes" rows="4" placeholder="Justificativa, informações clínicas ou observações administrativas"></textarea></div></div>
     <div class="form-footer"><button type="button" class="secondary-button" data-view="guides">Cancelar</button><button type="submit" class="primary-button">Validar e gerar XML</button></div>
   </form>`;
@@ -140,7 +264,7 @@ function guideFormMonthly() {
   const form = guideFormComplete().replace('<form class="guide-form" id="guide-form">', '<form class="guide-form" id="guide-form"><input type="hidden" name="guideType" value="sp_sadt" />');
   return form.replace(
     '<div class="form-section"><h2>4. Atendimento e procedimento</h2><p>Informe o código TUSS, a data e os detalhes do serviço realizado.</p><div class="form-grid"><div class="field"><label for="date">Data do atendimento *</label><input id="date" name="date" type="date" required value="2026-08-20" /></div><div class="field"><label for="type">Tipo de atendimento *</label><select id="type" name="type" required><option value="">Selecione o tipo</option><option>Consulta</option><option>Exame</option><option>Terapia</option></select></div><div class="field"><label for="procedure">Procedimento TUSS *</label><select id="procedure" name="procedure" required><option value="">Selecione o procedimento</option><option value="10101012 - Consulta em consultório">10101012 · Consulta em consultório</option><option value="50000470 - Sessão de fisioterapia">50000470 · Sessão de fisioterapia</option><option value="40901122 - Ultrassonografia">40901122 · Ultrassonografia</option></select></div><div class="field"><label for="quantity">Quantidade *</label><input id="quantity" name="quantity" type="number" min="1" value="1" required /></div><div class="field"><label for="value">Valor do procedimento *</label><input id="value" name="value" type="number" min="0.01" step="0.01" value="180" required /></div><div class="field"><label for="service-code">Código do serviço</label><input id="service-code" name="serviceCode" readonly placeholder="Extraído do TUSS" /></div><div class="field"><label for="cid">CID-10 principal</label><input id="cid" name="cid" placeholder="Ex.: F84.0" pattern="^[A-Za-z][0-9]{2}(\.[0-9]{1,2})?$" title="Formato esperado: letra + 2 dígitos, ex. F84 ou F84.0" /></div></div></div>',
-    '<div class="form-section"><h2>4. Competência e atendimentos</h2><p>Registre todos os atendimentos do mês, como nas terapias ABA e acompanhamentos recorrentes.</p><div class="form-grid"><div class="field"><label for="competence">Competência *</label><input id="competence" name="competence" type="month" required value="2026-08" /></div><div class="field"><label for="attendance-type">Tipo de atendimento *</label><select id="attendance-type" name="type" required><option value="">Selecione o tipo</option><option>Consulta</option><option>Exame</option><option>Terapia ABA</option><option>Fisioterapia</option><option>Fonoaudiologia</option><option>Terapia ocupacional</option></select></div><div class="field"><label for="procedure">Procedimento TUSS *</label><select id="procedure" name="procedure" required><option value="">Selecione o procedimento</option><option value="10101012 - Consulta em consultório">10101012 · Consulta em consultório</option><option value="50000470 - Sessão de fisioterapia">50000470 · Sessão de fisioterapia</option><option value="40901122 - Ultrassonografia">40901122 · Ultrassonografia</option><option value="50000000 - Atendimento terapêutico ABA">50000000 · Atendimento terapêutico ABA</option></select></div><div class="field"><label for="quantity">Quantidade prevista no mês</label><input id="quantity" name="quantity" type="number" min="1" value="1" /></div><div class="field"><label for="value">Valor por atendimento *</label><input id="value" name="value" type="number" min="0.01" step="0.01" value="180" required /></div><div class="field"><label for="service-code">Código do serviço</label><input id="service-code" name="serviceCode" readonly placeholder="Extraído do TUSS" /></div><div class="field"><label for="cid">CID-10 principal</label><input id="cid" name="cid" placeholder="Ex.: F84.0" pattern="^[A-Za-z][0-9]{2}(\.[0-9]{1,2})?$" title="Formato esperado: letra + 2 dígitos, ex. F84 ou F84.0" /></div></div><div class="session-entry"><div class="form-grid"><div class="field"><label for="session-date">Data *</label><input id="session-date" type="date" value="2026-08-20" /></div><div class="field"><label for="session-start">Início *</label><input id="session-start" type="time" value="08:00" /></div><div class="field"><label for="session-end">Fim *</label><input id="session-end" type="time" value="09:00" /></div></div><button type="button" class="secondary-button" data-action="add-session">＋ Adicionar atendimento</button></div><div class="session-list" id="session-list"><p class="session-empty">Nenhum atendimento adicionado ainda.</p></div><input type="hidden" id="guide-sessions" name="sessions" value="[]" /></div>'
+    `<div class="form-section"><h2>4. Competência e atendimentos</h2><p>Registre todos os atendimentos do mês, como nas terapias ABA e acompanhamentos recorrentes.</p><div class="form-grid"><div class="field"><label for="competence">Competência *</label><input id="competence" name="competence" type="month" required value="2026-08" /></div><div class="field"><label for="attendance-type">Tipo de atendimento *</label><select id="attendance-type" name="type" required><option value="">Selecione o tipo</option><option>Consulta</option><option>Exame</option><option>Terapia ABA</option><option>Fisioterapia</option><option>Fonoaudiologia</option><option>Terapia ocupacional</option></select></div>${tussProcedureField()}<div class="field"><label for="quantity">Quantidade prevista no mês</label><input id="quantity" name="quantity" type="number" min="1" value="1" /></div><div class="field"><label for="value">Valor por atendimento *</label><input id="value" name="value" type="number" min="0.01" step="0.01" value="180" required /></div><div class="field"><label for="service-code">Código do serviço</label><input id="service-code" name="serviceCode" readonly placeholder="Extraído do TUSS" /></div><div class="field"><label for="cid">CID-10 principal</label><input id="cid" name="cid" placeholder="Ex.: F84.0" pattern="^[A-Za-z][0-9]{2}(\.[0-9]{1,2})?$" title="Formato esperado: letra + 2 dígitos, ex. F84 ou F84.0" /></div></div><div class="session-entry"><div class="form-grid"><div class="field"><label for="session-date">Data *</label><input id="session-date" type="date" value="2026-08-20" /></div><div class="field"><label for="session-start">Início *</label><input id="session-start" type="time" value="08:00" /></div><div class="field"><label for="session-end">Fim *</label><input id="session-end" type="time" value="09:00" /></div></div><button type="button" class="secondary-button" data-action="add-session">＋ Adicionar atendimento</button></div><div class="session-list" id="session-list"><p class="session-empty">Nenhum atendimento adicionado ainda.</p></div><input type="hidden" id="guide-sessions" name="sessions" value="[]" /></div>`
   );
 }
 
@@ -258,6 +382,7 @@ function editInsurer(insurerId) {
   form.querySelector('#new-insurer-email').value = insurer.contactEmail || '';
   form.querySelector('#new-insurer-phone').value = insurer.contactPhone || '';
   form.querySelector('#new-insurer-procedures').value = (insurer.acceptedProcedures || []).join(', ');
+  renderContractRules(insurer.procedureRules || []);
   form.querySelector('.panel-title').textContent = 'Editar convênio';
   form.querySelector('button[type="submit"]').textContent = 'Atualizar convênio';
   const cancelButton = form.querySelector('[data-action="cancel-insurer-edit"]');
@@ -448,12 +573,14 @@ function printFeedback(feedback) {
 document.addEventListener('submit', async event => {
   if (event.target.id !== 'insurer-form') return;
   event.preventDefault();
+  syncContractRules();
   const data = Object.fromEntries(new FormData(event.target));
   const acceptedProcedures = String(data.acceptedProcedures || '').split(',').map(code => code.trim()).filter(Boolean);
+  const procedureRules = parseProcedureRules(data.procedureRulesText);
   const insurerId = event.target.dataset.insurerId;
   try {
     if (insurerId) {
-      const payload = { name: data.name, ansCode: data.ansCode, contactEmail: data.contactEmail, contactPhone: data.contactPhone, acceptedProcedures };
+      const payload = { name: data.name, ansCode: data.ansCode, contactEmail: data.contactEmail, contactPhone: data.contactPhone, acceptedProcedures, procedureRules };
       if (activeSession?.token) {
         await apiRequest(`/insurers/${insurerId}`, { method: 'PUT', body: JSON.stringify(payload) });
         insurers = await apiRequest('/insurers');
@@ -463,7 +590,7 @@ document.addEventListener('submit', async event => {
       }
       showToast('Convênio atualizado.');
     } else {
-      const insurer = { id: nextSequentialId(insurers, 'INS-', 3), name: data.name, ansCode: data.ansCode, contactEmail: data.contactEmail, contactPhone: data.contactPhone, acceptedProcedures };
+      const insurer = { id: nextSequentialId(insurers, 'INS-', 3), name: data.name, ansCode: data.ansCode, contactEmail: data.contactEmail, contactPhone: data.contactPhone, acceptedProcedures, procedureRules };
       if (activeSession?.token) {
         await apiRequest('/insurers', { method: 'POST', body: JSON.stringify(insurer) });
         insurers = await apiRequest('/insurers');
@@ -658,6 +785,7 @@ document.addEventListener('submit', async event => {
   const form = event.target;
   if (!form.checkValidity()) { form.reportValidity(); return; }
   const data = Object.fromEntries(new FormData(form));
+  if (!data.serviceCode || !data.procedure.startsWith(`${data.serviceCode} - `)) { showToast('Selecione um procedimento na lista oficial TUSS.'); document.querySelector('#procedure')?.focus(); return; }
   let sessions = JSON.parse(data.sessions || '[]');
   if (!sessions.length) {
     if (data.guideType === 'consulta' && data.date && data.procedure && data.professional) {
@@ -746,6 +874,38 @@ document.addEventListener('submit', event => {
 
 document.addEventListener('click', event => { const viewButton = event.target.closest('[data-view]'); if (viewButton) { document.querySelectorAll('.nav-item').forEach(item => item.classList.toggle('active', item.dataset.view === viewButton.dataset.view)); render(viewButton.dataset.view); } const statusButton = event.target.closest('[data-status]'); if (statusButton) { const guideId = document.querySelector('#status-guide')?.value; if (!guideId) { showToast('Selecione uma guia antes de registrar o retorno.'); return; } if (statusButton.dataset.status === 'error') { document.querySelectorAll('.nav-item').forEach(item => item.classList.toggle('active', item.dataset.view === 'guides')); breadcrumb.textContent = 'Pasta da guia'; appView.innerHTML = guideFolderView(guideId); showToast('Registre o motivo e o valor da glosa na pasta da guia.'); return; } const statusLabels = { review: 'Em análise', approved: 'Aprovada' }; const guide = guides.find(item => item.id === guideId); guide.status = statusButton.dataset.status; guide.label = statusLabels[guide.status]; saveGuides(); render('guides'); showToast(`Retorno registrado: ${guide.label}.`); } const action = event.target.closest('[data-action]')?.dataset.action; if (action === 'logout') { localStorage.removeItem('tiss-session'); window.location.reload(); } if (action === 'open-guide-folder') { breadcrumb.textContent = 'Pasta da guia'; appView.innerHTML = guideFolderView(event.target.closest('[data-guide-id]').dataset.guideId); } if (action === 'print-folder') { const guide = guides.find(item => item.id === event.target.closest('[data-guide-id]').dataset.guideId); if (guide) downloadGuidePdf(guide.id); } if (action === 'print-session') { const button = event.target.closest('[data-guide-id]'); const guide = guides.find(item => item.id === button.dataset.guideId); if (guide) printGuideFolder(guide, guide.sessions[Number(button.dataset.sessionIndex)]); } if (action === 'new-guide') { document.querySelectorAll('.nav-item').forEach(item => item.classList.toggle('active', item.dataset.view === 'guides')); const guideType = event.target.closest('[data-guide-type]')?.dataset.guideType; breadcrumb.textContent = guideType === 'consulta' ? 'Nova guia de Consulta' : 'Nova guia'; appView.innerHTML = guideType === 'consulta' ? guideFormConsulta() : guideFormMonthly(); restoreDraft(); } if (action === 'new-appointment') { breadcrumb.textContent = 'Novo atendimento'; document.querySelectorAll('.nav-item').forEach(item => item.classList.toggle('active', item.dataset.view === 'agenda')); appView.innerHTML = agendaView(); document.querySelector('#appointment-patient')?.focus(); } if (action === 'clear-guides') { guides = [...defaultGuides]; saveGuides(); render('guides'); showToast('Dados demo restaurados.'); } if (action === 'resolve-glosa' && !activeSession?.token) { const button = event.target.closest('[data-glosa-id]'); const glosa = glosas.find(item => item.id === button.dataset.glosaId); if (!glosa) return; glosa.status = button.dataset.outcome; glosa.resolvedAt = new Date().toISOString(); const guide = guides.find(item => item.id === glosa.guideId); if (guide) { guide.status = glosa.status === 'revertida' ? 'approved' : 'error'; guide.label = glosa.status === 'revertida' ? 'Aprovada' : 'Com glosa'; } saveGlosas(); saveGuides(); appView.innerHTML = guideFolderView(glosa.guideId); showToast(glosa.status === 'revertida' ? 'Glosa revertida.' : 'Glosa mantida.'); } if (action === 'soon') showToast('Demonstração em preparação.'); });
 document.addEventListener('input', event => {
+  if (event.target.classList.contains('contract-procedure-search')) {
+    const row = event.target.closest('.contract-rule-row');
+    row.dataset.code = '';
+    syncContractRules();
+    clearTimeout(contractSearchTimer);
+    const query = event.target.value.trim();
+    const results = row.querySelector('.contract-search-results');
+    if (query.length < 2) { results.hidden = true; results.replaceChildren(); return; }
+    contractSearchTimer = setTimeout(async () => {
+      results.hidden = false;
+      results.textContent = 'Buscando…';
+      try {
+        const catalog = await apiRequest(`/tuss?query=${encodeURIComponent(query)}&limit=8`);
+        results.replaceChildren();
+        catalog.terms.forEach(term => {
+          const button = document.createElement('button');
+          button.type = 'button'; button.className = 'contract-search-result'; button.dataset.code = term.code; button.dataset.term = term.term;
+          button.textContent = `${term.code} · ${term.term}`;
+          results.append(button);
+        });
+        if (!catalog.terms.length) results.textContent = 'Nenhum procedimento encontrado.';
+      } catch (error) { results.textContent = error.message; }
+    }, 250);
+  }
+  if (event.target.id === 'procedure') {
+    const serviceCode = document.querySelector('#service-code');
+    if (serviceCode) serviceCode.value = '';
+    event.target.setCustomValidity('Selecione um procedimento da lista oficial TUSS.');
+    clearTimeout(tussSearchTimer);
+    const query = event.target.value.trim();
+    tussSearchTimer = setTimeout(() => searchTussTerms(query), 250);
+  }
   if (event.target.id === 'guide-search') {
     const body = document.querySelector('#guide-table-body');
     if (body) body.innerHTML = guideRowsHtml(event.target.value);
@@ -764,6 +924,40 @@ document.addEventListener('input', event => {
   }
 });
 document.addEventListener('click', event => {
+  const addContractRule = event.target.closest('[data-action="add-contract-rule"]');
+  if (addContractRule) {
+    const list = document.querySelector('#contract-rule-list');
+    const row = contractRuleRow();
+    list?.append(row);
+    row.querySelector('.contract-procedure-search')?.focus();
+    return;
+  }
+  const removeContractRule = event.target.closest('[data-action="remove-contract-rule"]');
+  if (removeContractRule) { removeContractRule.closest('.contract-rule-row')?.remove(); syncContractRules(); return; }
+  const contractResult = event.target.closest('.contract-search-result');
+  if (contractResult) {
+    const row = contractResult.closest('.contract-rule-row');
+    row.dataset.code = contractResult.dataset.code;
+    row.querySelector('.contract-procedure-search').value = `${contractResult.dataset.code} - ${contractResult.dataset.term}`;
+    row.querySelector('.contract-search-results').hidden = true;
+    syncContractRules();
+    row.querySelector('.contract-value')?.focus();
+    return;
+  }
+  const tussResult = event.target.closest('.tuss-result');
+  if (tussResult) {
+    const procedure = document.querySelector('#procedure');
+    const serviceCode = document.querySelector('#service-code');
+    if (procedure && serviceCode) {
+      procedure.value = `${tussResult.dataset.code} - ${tussResult.dataset.term}`;
+      procedure.setCustomValidity('');
+      serviceCode.value = tussResult.dataset.code;
+      closeTussResults();
+      applyContractRule(tussResult.dataset.code);
+      procedure.focus();
+    }
+    return;
+  }
   const editButton = event.target.closest('[data-action="edit-patient"]');
   if (editButton) editPatient(editButton.dataset.patientId);
 });
@@ -797,6 +991,7 @@ document.addEventListener('click', event => {
 });
 
 document.addEventListener('change', event => {
+  if (event.target.matches('.contract-value, .contract-requires-authorization')) syncContractRules();
   if (event.target.id === 'patient') {
     const patient = patients.find(item => item.name === event.target.value);
     if (patient) {
@@ -852,17 +1047,14 @@ document.addEventListener('change', event => {
     if (logo) logo.hidden = Boolean(option.dataset.logoPath);
     if (name) name.textContent = option.value || 'Selecione a operadora';
     if (ansCode) ansCode.value = option.dataset.code || '';
+    const selectedProcedureCode = document.querySelector('#service-code')?.value;
+    if (selectedProcedureCode) applyContractRule(selectedProcedureCode);
   }
 
   if (event.target.id === 'professional') {
     const option = event.target.selectedOptions[0];
     const register = document.querySelector('#professional-register');
     if (register) register.value = option.dataset.register || '';
-  }
-
-  if (event.target.id === 'procedure') {
-    const serviceCode = document.querySelector('#service-code');
-    if (serviceCode) serviceCode.value = event.target.value.split(' - ')[0] || '';
   }
 
   if (event.target.id !== 'invoice-filter') return;

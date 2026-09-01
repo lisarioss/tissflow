@@ -20,6 +20,7 @@ Protótipo de portfólio para operação de faturamento clínico. Demonstra o ci
 - **Relatórios**: distribuição de guias por status (incluindo em recurso), valor pendente/recebido e valor em glosa aberta.
 - **Modo somente-visual**: guias, agenda, pacientes, convênios, feedbacks e notas fiscais funcionam offline via `localStorage` (ver limitações abaixo).
 - **PDF da pasta da guia**: gera um arquivo A4 com a capa de atendimentos e a guia SP/SADT na página seguinte. A capa usa o timbrado, os responsáveis e os profissionais cadastrados em Configurações.
+- **Catálogo TUSS oficial**: importa a planilha de procedimentos da ANS, preserva histórico por versão e disponibiliza busca por código ou descrição, considerando a vigência do termo.
 
 ### Configurar a capa e o timbrado
 
@@ -58,6 +59,17 @@ npm.cmd start
 
 A API ficará disponível em `http://localhost:3000` e servirá o front-end automaticamente. O banco SQLite `backend/tiss-flow.db` é criado (e populado com dados demo) na primeira execução.
 
+### Atualizar o catálogo TUSS
+
+Baixe no portal da ANS a planilha da tabela 22 da versão desejada e execute:
+
+```powershell
+cd backend
+npm.cmd run import:tuss -- --file="caminho\tuss-22.xlsx" --version=202603 --table=22
+```
+
+O importador lê as colunas normativas, mantém os códigos como texto e substitui somente a mesma tabela e versão. A rota autenticada `GET /api/tuss?query=fisioterapia` pesquisa os termos vigentes; use `activeOn=AAAA-MM-DD` para consultar outra data e `includeInactive=true` para incluir termos encerrados.
+
 ### Testes automatizados
 
 As funções puras do front-end (geração de ID sequencial, escape de XML, conflito de agenda, validações de negócio, filtros de busca) ficam em `frontend/lib.js` e têm cobertura de testes com `node:test`:
@@ -79,6 +91,8 @@ frontend/
 backend/
   server.js        API Express (auth, RBAC, guias, glosas, convênios, feedbacks, pacientes, notas fiscais)
   db.js            schema SQLite, migrations e seed de dados demo
+  scripts/
+    importTuss.js   importador versionado das planilhas oficiais TUSS
 README.md          este arquivo
 ```
 

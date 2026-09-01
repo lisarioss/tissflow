@@ -72,12 +72,12 @@ const appView = document.querySelector('#app-view');
 const breadcrumb = document.querySelector('#breadcrumb');
 const toast = document.querySelector('#toast');
 function procedureRulesToText(rules) {
-  return (rules || []).map(rule => `${rule.code} | ${Number(rule.unitValue || 0).toFixed(2).replace('.', ',')} | ${rule.requiresAuthorization ? 'sim' : 'não'}`).join('\n');
+  return (rules || []).map(rule => `${rule.code} | ${Number(rule.unitValue || 0).toFixed(2).replace('.', ',')} | ${rule.requiresAuthorization ? 'sim' : 'não'} | ${rule.maxSessions || 0} | ${rule.validFrom || ''} | ${rule.validTo || ''}`).join('\n');
 }
 function parseProcedureRules(value) {
   return String(value || '').split('\n').map(line => {
-    const [code = '', rawValue = '0', authorization = 'não'] = line.split('|').map(part => part.trim());
-    return { code, unitValue: Number(rawValue.replace(',', '.')), requiresAuthorization: /^s(im)?$/i.test(authorization) };
+    const [code = '', rawValue = '0', authorization = 'não', maxSessions = '0', validFrom = '', validTo = ''] = line.split('|').map(part => part.trim());
+    return { code, unitValue: Number(rawValue.replace(',', '.')), requiresAuthorization: /^s(im)?$/i.test(authorization), maxSessions: Number(maxSessions || 0), validFrom, validTo };
   }).filter(rule => /^\d+$/.test(rule.code) && Number.isFinite(rule.unitValue));
 }
 function enhanceInsurerForm() {
@@ -94,7 +94,7 @@ function contractRuleRow(rule = {}) {
   const row = document.createElement('div');
   row.className = 'contract-rule-row';
   row.dataset.code = rule.code || '';
-  row.innerHTML = `<div class="contract-procedure"><label>Procedimento TUSS</label><input class="contract-procedure-search" type="search" autocomplete="off" placeholder="Código ou descrição" value="${rule.code || ''}" /><div class="contract-search-results" hidden></div></div><div><label>Valor contratado</label><input class="contract-value" type="number" min="0" step="0.01" value="${Number(rule.unitValue || 0).toFixed(2)}" /></div><label class="contract-authorization"><input class="contract-requires-authorization" type="checkbox" ${rule.requiresAuthorization ? 'checked' : ''} /> Exige autorização</label><button type="button" class="finance-delete" data-action="remove-contract-rule">Remover</button>`;
+  row.innerHTML = `<div class="contract-procedure"><label>Procedimento TUSS</label><input class="contract-procedure-search" type="search" autocomplete="off" placeholder="Código ou descrição" value="${rule.code || ''}" /><div class="contract-search-results" hidden></div></div><div><label>Valor contratado</label><input class="contract-value" type="number" min="0" step="0.01" value="${Number(rule.unitValue || 0).toFixed(2)}" /></div><div><label>Limite por guia</label><input class="contract-max-sessions" type="number" min="0" step="1" value="${rule.maxSessions || ''}" placeholder="Sem limite" /></div><div><label>Início da vigência</label><input class="contract-valid-from" type="date" value="${rule.validFrom || ''}" /></div><div><label>Fim da vigência</label><input class="contract-valid-to" type="date" value="${rule.validTo || ''}" /></div><label class="contract-authorization"><input class="contract-requires-authorization" type="checkbox" ${rule.requiresAuthorization ? 'checked' : ''} /> Exige autorização</label><div class="contract-row-actions"><button type="button" class="text-button" data-action="new-contract-adjustment">Novo reajuste</button><button type="button" class="finance-delete" data-action="remove-contract-rule">Remover</button></div>`;
   return row;
 }
 function renderContractRules(rules = []) {
@@ -106,7 +106,7 @@ function renderContractRules(rules = []) {
 function syncContractRules() {
   const hidden = document.querySelector('#new-insurer-rules');
   if (!hidden) return;
-  const rules = [...document.querySelectorAll('.contract-rule-row')].map(row => ({ code: row.dataset.code || '', unitValue: Number(row.querySelector('.contract-value')?.value || 0), requiresAuthorization: Boolean(row.querySelector('.contract-requires-authorization')?.checked) })).filter(rule => rule.code);
+  const rules = [...document.querySelectorAll('.contract-rule-row')].map(row => ({ code: row.dataset.code || '', unitValue: Number(row.querySelector('.contract-value')?.value || 0), requiresAuthorization: Boolean(row.querySelector('.contract-requires-authorization')?.checked), maxSessions: Number(row.querySelector('.contract-max-sessions')?.value || 0), validFrom: row.querySelector('.contract-valid-from')?.value || '', validTo: row.querySelector('.contract-valid-to')?.value || '' })).filter(rule => rule.code);
   hidden.value = procedureRulesToText(rules);
 }
 new MutationObserver(enhanceInsurerForm).observe(appView, { childList: true, subtree: true });
@@ -136,7 +136,7 @@ function applyContractRule(code) {
   const insurerName = document.querySelector('#insurer')?.value;
   const insurer = insurers.find(item => item.name === insurerName);
   const rules = insurer?.procedureRules || [];
-  const rule = rules.find(item => item.code === code);
+  const rule = contractRuleFor(rules, code, guideContractReferenceDate());
   const help = document.querySelector('#tuss-help');
   if (!rules.length) {
     if (help) help.textContent = 'Procedimento oficial selecionado. Este convênio ainda não possui tabela contratada.';
@@ -149,17 +149,30 @@ function applyContractRule(code) {
   }
   const value = document.querySelector('#value');
   if (value && rule.unitValue > 0) value.value = rule.unitValue.toFixed(2);
-  if (help) help.textContent = `Contrato ${insurerName}: ${formatMoney(rule.unitValue)}${rule.requiresAuthorization ? ' · exige autorização prévia' : ' · sem autorização prévia configurada'}.`;
+  const authorizedQuantity = document.querySelector('#authorized-quantity');
+  if (authorizedQuantity && rule.maxSessions > 0) authorizedQuantity.value = rule.maxSessions;
+  const validity = rule.validFrom || rule.validTo ? ` · vigência de referência ${rule.validFrom || 'aberta'} a ${rule.validTo || 'aberta'}` : '';
+  const limit = rule.maxSessions > 0 ? ` · referência de ${rule.maxSessions} atendimentos` : '';
+  if (help) help.textContent = `Referência do contrato ${insurerName}: ${formatMoney(rule.unitValue)}${rule.requiresAuthorization ? ' · exige autorização prévia' : ' · sem autorização prévia configurada'}${limit}${validity}. Valor, quantidade e competência podem ser ajustados para o faturamento mensal.`;
   if (rule.requiresAuthorization && !document.querySelector('#authorization-number')?.value) showToast('Este procedimento exige autorização prévia do convênio.');
+}
+function guideContractReferenceDate(data = {}) {
+  const competence = data.competence || document.querySelector('#competence')?.value;
+  if (competence) return `${competence}-01`;
+  return data.date || document.querySelector('#date')?.value || '';
+}
+function contractRuleFor(rules, code, referenceDate) {
+  const versions = (rules || []).filter(rule => rule.code === code);
+  const applicable = versions.filter(rule => (!rule.validFrom || !referenceDate || rule.validFrom <= referenceDate) && (!rule.validTo || !referenceDate || rule.validTo >= referenceDate));
+  return [...(applicable.length ? applicable : versions)].sort((first, second) => String(second.validFrom || '').localeCompare(String(first.validFrom || '')))[0];
 }
 function contractValidationMessage(data) {
   const insurer = insurers.find(item => item.name === data.insurer);
   const rules = insurer?.procedureRules || [];
   if (!rules.length) return '';
-  const rule = rules.find(item => item.code === data.serviceCode);
+  const rule = contractRuleFor(rules, data.serviceCode, guideContractReferenceDate(data));
   if (!rule) return `O procedimento ${data.serviceCode} não está na tabela contratada com ${data.insurer}.`;
   if (rule.requiresAuthorization && !String(data.authorizationNumber || '').trim()) return `Informe o número da autorização prévia exigida por ${data.insurer}.`;
-  if (rule.unitValue > 0 && Math.abs(Number(data.value || 0) - Number(rule.unitValue)) > 0.009) return `O valor deve ser o contratado com ${data.insurer}: ${formatMoney(rule.unitValue)}.`;
   return '';
 }
 async function searchTussTerms(query) {
@@ -797,7 +810,6 @@ document.addEventListener('submit', async event => {
   }
   const outOfValidityDate = findSessionOutsidePlanValidity(sessions, data.planValidity);
   if (outOfValidityDate) { showToast(`Atendimento em ${new Date(`${outOfValidityDate}T12:00:00`).toLocaleDateString('pt-BR')} está fora da vigência do plano (válido até ${new Date(`${data.planValidity}T12:00:00`).toLocaleDateString('pt-BR')}).`); return; }
-  if (exceedsAuthorizedQuantity(sessions.length, data.authorizedQuantity)) { showToast(`Quantidade de atendimentos (${sessions.length}) excede a quantidade autorizada (${data.authorizedQuantity}).`); return; }
   const cidIssue = findCidIncompatibility(data.procedure, data.cid);
   if (cidIssue) { showToast(`CID ${data.cid.toUpperCase()} é incomum para ${cidIssue.label} (esperado capítulo ${cidIssue.chapters.join('/')}). Confira antes de enviar.`); return; }
   const guideId = nextSequentialId(guides, 'G-2026-', 5);
@@ -934,6 +946,19 @@ document.addEventListener('click', event => {
   }
   const removeContractRule = event.target.closest('[data-action="remove-contract-rule"]');
   if (removeContractRule) { removeContractRule.closest('.contract-rule-row')?.remove(); syncContractRules(); return; }
+  const newAdjustment = event.target.closest('[data-action="new-contract-adjustment"]');
+  if (newAdjustment) {
+    const source = newAdjustment.closest('.contract-rule-row');
+    if (!source.dataset.code) { showToast('Selecione primeiro um procedimento TUSS para criar o reajuste.'); source.querySelector('.contract-procedure-search')?.focus(); return; }
+    const rule = { code: source.dataset.code, unitValue: Number(source.querySelector('.contract-value')?.value || 0), maxSessions: Number(source.querySelector('.contract-max-sessions')?.value || 0), requiresAuthorization: Boolean(source.querySelector('.contract-requires-authorization')?.checked), validFrom: '', validTo: '' };
+    const row = contractRuleRow(rule);
+    row.querySelector('.contract-procedure-search').value = source.querySelector('.contract-procedure-search').value;
+    source.after(row);
+    syncContractRules();
+    row.querySelector('.contract-value')?.focus();
+    showToast('Novo período criado. Informe o valor e a vigência do reajuste.');
+    return;
+  }
   const contractResult = event.target.closest('.contract-search-result');
   if (contractResult) {
     const row = contractResult.closest('.contract-rule-row');
@@ -969,7 +994,7 @@ document.addEventListener('submit', event => {
   // rede — isso é uma limitação conhecida do modo somente-visual, não um bug
   // deste bloco. Guias, agenda e notas fiscais têm fallback local abaixo porque
   // não dependem de autenticação real.
-  if (event.target.id === 'appointment-form') { event.preventDefault(); const form = event.target; if (!form.checkValidity()) { form.reportValidity(); return; } const data = Object.fromEntries(new FormData(form)); const conflict = hasScheduleConflict(data); if (conflict) { showToast(`Conflito: ${conflict.professional} já atende ${conflict.patient} às ${conflict.start}.`); return; } appointments.push({ id: nextSequentialId(appointments, 'A-', 3), ...data, duration: Number(data.duration) }); saveAppointments(); render('agenda'); showToast('Horário reservado sem conflito.'); return; } if (event.target.id !== 'guide-form') return; event.preventDefault(); const form = event.target; if (!form.checkValidity()) { form.reportValidity(); return; } const data = Object.fromEntries(new FormData(form)); let sessions = JSON.parse(data.sessions || '[]'); if (!sessions.length) { if (data.guideType === 'consulta' && data.date && data.procedure && data.professional) { sessions = [{ date: data.date, start: '08:00', end: '09:00', type: data.type, procedure: data.procedure, professional: data.professional }]; } else { showToast('Adicione pelo menos um atendimento à competência antes de enviar.'); return; } } const outOfValidityDate = findSessionOutsidePlanValidity(sessions, data.planValidity); if (outOfValidityDate) { showToast(`Atendimento em ${new Date(`${outOfValidityDate}T12:00:00`).toLocaleDateString('pt-BR')} está fora da vigência do plano (válido até ${new Date(`${data.planValidity}T12:00:00`).toLocaleDateString('pt-BR')}).`); return; } if (exceedsAuthorizedQuantity(sessions.length, data.authorizedQuantity)) { showToast(`Quantidade de atendimentos (${sessions.length}) excede a quantidade autorizada (${data.authorizedQuantity}).`); return; } const cidIssueLocal = findCidIncompatibility(data.procedure, data.cid); if (cidIssueLocal) { showToast(`CID ${data.cid.toUpperCase()} é incomum para ${cidIssueLocal.label} (esperado capítulo ${cidIssueLocal.chapters.join('/')}). Confira antes de enviar.`); return; } const guideId = nextSequentialId(guides, 'G-2026-', 5); const xml = createTissXml(data, guideId); const totalValue = Number(data.value || 0) * sessions.length; guides.unshift({ id: guideId, patient: data.patient, procedure: data.procedure.split(' - ')[1] || data.procedure, insurer: data.insurer, status: 'sent', label: 'Pronta para envio', date: data.competence || sessions[0].date, competence: data.competence, guideType: data.guideType || 'sp_sadt', value: formatMoney(totalValue), sessions }); saveGuides(); localStorage.removeItem(clinicStorageKey('draft')); downloadXml(xml, guideId); showToast(`${sessions.length} atendimentos validados, guia salva e XML baixado.`); });
+  if (event.target.id === 'appointment-form') { event.preventDefault(); const form = event.target; if (!form.checkValidity()) { form.reportValidity(); return; } const data = Object.fromEntries(new FormData(form)); const conflict = hasScheduleConflict(data); if (conflict) { showToast(`Conflito: ${conflict.professional} já atende ${conflict.patient} às ${conflict.start}.`); return; } appointments.push({ id: nextSequentialId(appointments, 'A-', 3), ...data, duration: Number(data.duration) }); saveAppointments(); render('agenda'); showToast('Horário reservado sem conflito.'); return; } if (event.target.id !== 'guide-form') return; event.preventDefault(); const form = event.target; if (!form.checkValidity()) { form.reportValidity(); return; } const data = Object.fromEntries(new FormData(form)); let sessions = JSON.parse(data.sessions || '[]'); if (!sessions.length) { if (data.guideType === 'consulta' && data.date && data.procedure && data.professional) { sessions = [{ date: data.date, start: '08:00', end: '09:00', type: data.type, procedure: data.procedure, professional: data.professional }]; } else { showToast('Adicione pelo menos um atendimento à competência antes de enviar.'); return; } } const outOfValidityDate = findSessionOutsidePlanValidity(sessions, data.planValidity); if (outOfValidityDate) { showToast(`Atendimento em ${new Date(`${outOfValidityDate}T12:00:00`).toLocaleDateString('pt-BR')} está fora da vigência do plano (válido até ${new Date(`${data.planValidity}T12:00:00`).toLocaleDateString('pt-BR')}).`); return; } const cidIssueLocal = findCidIncompatibility(data.procedure, data.cid); if (cidIssueLocal) { showToast(`CID ${data.cid.toUpperCase()} é incomum para ${cidIssueLocal.label} (esperado capítulo ${cidIssueLocal.chapters.join('/')}). Confira antes de enviar.`); return; } const guideId = nextSequentialId(guides, 'G-2026-', 5); const xml = createTissXml(data, guideId); const totalValue = Number(data.value || 0) * sessions.length; guides.unshift({ id: guideId, patient: data.patient, procedure: data.procedure.split(' - ')[1] || data.procedure, insurer: data.insurer, status: 'sent', label: 'Pronta para envio', date: data.competence || sessions[0].date, competence: data.competence, guideType: data.guideType || 'sp_sadt', value: formatMoney(totalValue), sessions }); saveGuides(); localStorage.removeItem(clinicStorageKey('draft')); downloadXml(xml, guideId); showToast(`${sessions.length} atendimentos validados, guia salva e XML baixado.`); });
 document.addEventListener('click', event => {
   const deleteButton = event.target.closest('[data-delete-invoice-id]');
   if (deleteButton) {
@@ -991,7 +1016,11 @@ document.addEventListener('click', event => {
 });
 
 document.addEventListener('change', event => {
-  if (event.target.matches('.contract-value, .contract-requires-authorization')) syncContractRules();
+  if (event.target.matches('.contract-value, .contract-max-sessions, .contract-valid-from, .contract-valid-to, .contract-requires-authorization')) syncContractRules();
+  if (event.target.matches('#competence, #date')) {
+    const selectedProcedureCode = document.querySelector('#service-code')?.value;
+    if (selectedProcedureCode) applyContractRule(selectedProcedureCode);
+  }
   if (event.target.id === 'patient') {
     const patient = patients.find(item => item.name === event.target.value);
     if (patient) {

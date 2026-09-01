@@ -51,14 +51,15 @@
 .contract-rules-field small { display:block; margin-top:6px; color:var(--muted); font-size:9px; }
 .contract-heading { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:12px; }
 .contract-rule-list { display:grid; gap:10px; }
-.contract-rule-row { display:grid; grid-template-columns:minmax(260px,1fr) 140px 150px auto; align-items:end; gap:10px; padding:12px; border:1px solid var(--line); border-radius:7px; background:#f8fbf9; }
-.contract-rule-row input[type="search"], .contract-rule-row input[type="number"] { width:100%; border:1px solid #dfe7e1; border-radius:5px; padding:10px; background:#fff; color:var(--ink); font:11px Manrope,sans-serif; }
+.contract-rule-row { display:grid; grid-template-columns:minmax(260px,1.5fr) repeat(3,minmax(125px,.7fr)); align-items:end; gap:10px; padding:12px; border:1px solid var(--line); border-radius:7px; background:#f8fbf9; }
+.contract-rule-row input[type="search"], .contract-rule-row input[type="number"], .contract-rule-row input[type="date"] { width:100%; border:1px solid #dfe7e1; border-radius:5px; padding:10px; background:#fff; color:var(--ink); font:11px Manrope,sans-serif; }
 .contract-procedure { position:relative; }
 .contract-search-results { position:absolute; z-index:25; top:59px; left:0; right:0; max-height:230px; overflow:auto; padding:5px; border:1px solid #ccd9d1; border-radius:6px; background:#fff; box-shadow:0 12px 26px rgba(23,61,48,.16); }
 .contract-search-result { display:block; width:100%; padding:9px; border-radius:4px; background:#fff; color:var(--ink); font-size:10px; line-height:1.4; text-align:left; }
 .contract-search-result:hover, .contract-search-result:focus { background:var(--mint); outline:none; }
-.contract-authorization { display:flex !important; align-items:center; gap:7px; min-height:37px; margin:0 !important; }
+.contract-authorization { display:flex !important; align-items:center; gap:7px; min-height:37px; margin:0 !important; grid-column:span 2; }
 .contract-authorization input { width:auto !important; }
+.contract-row-actions { display:flex; align-items:center; justify-content:flex-end; gap:8px; }
 @media (max-width:900px) { .contract-rule-row { grid-template-columns:1fr 1fr; } .contract-procedure { grid-column:1 / -1; } }
 .session-entry .form-grid { margin-bottom:14px; }
 .session-list { margin-top:14px; border-top:1px solid var(--line); }

@@ -160,19 +160,18 @@ app.post('/api/guides', auth, requireRole('admin', 'faturamento'), (req, res) =>
   const insurerContract = db.prepare('SELECT procedure_rules FROM insurers WHERE clinic_id = ? AND name = ?').get(req.session.clinicId, insurer);
   const contractRules = insurerContract ? JSON.parse(insurerContract.procedure_rules || '[]') : [];
   const procedureCode = String(serviceCode || procedure).split(' - ')[0].trim();
-  const contractRule = contractRules.find(rule => rule.code === procedureCode);
-  if (contractRules.length && !contractRule) return res.status(400).json({ error: `O procedimento ${procedureCode} não está na tabela contratada com ${insurer}.` });
+  const procedureRules = contractRules.filter(rule => rule.code === procedureCode);
+  const referenceDate = competence ? `${competence}-01` : String(sessions[0]?.date || '');
+  const applicableRules = procedureRules.filter(rule => (!rule.validFrom || !referenceDate || rule.validFrom <= referenceDate) && (!rule.validTo || !referenceDate || rule.validTo >= referenceDate));
+  const contractRule = [...(applicableRules.length ? applicableRules : procedureRules)].sort((first, second) => String(second.validFrom || '').localeCompare(String(first.validFrom || '')))[0];
+  if (contractRules.length && !procedureRules.length) return res.status(400).json({ error: `O procedimento ${procedureCode} não está na tabela contratada com ${insurer}.` });
   if (contractRule?.requiresAuthorization && !String(authorizationNumber || '').trim()) return res.status(400).json({ error: `O procedimento ${procedureCode} exige número de autorização prévia.` });
-  if (contractRule?.unitValue > 0 && Math.abs(Number(unitValue || 0) - Number(contractRule.unitValue)) > 0.009) return res.status(400).json({ error: `O valor deve ser o contratado com ${insurer}: R$ ${Number(contractRule.unitValue).toFixed(2).replace('.', ',')}.` });
   // Validações de negócio no servidor (o front-end já checa isso, mas não confiamos só no cliente).
   if (planValidity && sessions.some(session => session.date > planValidity)) {
     return res.status(400).json({ error: `Existe atendimento fora da vigência do plano (válido até ${planValidity}).` });
   }
-  if (authorizedQuantity && sessions.length > Number(authorizedQuantity)) {
-    return res.status(400).json({ error: `Quantidade de atendimentos (${sessions.length}) excede a quantidade autorizada (${authorizedQuantity}).` });
-  }
   try {
-    db.prepare('INSERT INTO guides (id, clinic_id, patient, procedure, insurer, competence, ans_code, card_number, patient_birth, patient_plan, plan_validity, authorization_number, operator_guide, provider_name, provider_cnpj, professional, professional_register, attendance_type, service_code, quantity, unit_value_cents, status, value_cents, sessions_json, guide_type, cid, authorized_quantity) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, req.session.clinicId, patient, procedure, insurer, competence || '', ansCode || '', cardNumber || '', patientBirth || '', patientPlan || '', planValidity || '', authorizationNumber || '', operatorGuide || '', providerName || '', providerCnpj || '', professional || '', professionalRegister || '', attendanceType || '', serviceCode || '', Number(quantity), moneyToCents(unitValue), status, moneyToCents(value), JSON.stringify(sessions), guideType, cid || null, authorizedQuantity || null);
+    db.prepare('INSERT INTO guides (id, clinic_id, patient, procedure, insurer, competence, ans_code, card_number, patient_birth, patient_plan, plan_validity, authorization_number, operator_guide, provider_name, provider_cnpj, professional, professional_register, attendance_type, service_code, quantity, unit_value_cents, status, value_cents, sessions_json, guide_type, cid, authorized_quantity) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, req.session.clinicId, patient, procedure, insurer, competence || '', ansCode || '', cardNumber || '', patientBirth || '', patientPlan || '', planValidity || '', authorizationNumber || '', operatorGuide || '', providerName || '', providerCnpj || '', professional || '', professionalRegister || '', attendanceType || '', serviceCode || '', Number(quantity), moneyToCents(unitValue), status, moneyToCents(value), JSON.stringify(sessions), guideType, cid || null, authorizedQuantity || null);
     res.status(201).json({ id });
   } catch (error) {
     res.status(409).json({ error: error.message });
@@ -228,7 +227,7 @@ app.get('/api/insurers', auth, (req, res) => {
 
 function normalizeProcedureRules(rules) {
   if (!Array.isArray(rules)) return [];
-  return rules.map(rule => ({ code: String(rule.code || '').trim(), unitValue: Number(rule.unitValue || 0), requiresAuthorization: Boolean(rule.requiresAuthorization) }))
+  return rules.map(rule => ({ code: String(rule.code || '').trim(), unitValue: Number(rule.unitValue || 0), requiresAuthorization: Boolean(rule.requiresAuthorization), maxSessions: Math.max(0, Math.floor(Number(rule.maxSessions || 0))), validFrom: /^\d{4}-\d{2}-\d{2}$/.test(rule.validFrom || '') ? rule.validFrom : '', validTo: /^\d{4}-\d{2}-\d{2}$/.test(rule.validTo || '') ? rule.validTo : '' }))
     .filter(rule => /^\d+$/.test(rule.code) && Number.isFinite(rule.unitValue) && rule.unitValue >= 0);
 }
 function unknownProcedureCodes(rules) {
@@ -243,9 +242,10 @@ app.post('/api/insurers', auth, requireRole('admin'), (req, res) => {
   if (!id || !name) return res.status(400).json({ error: 'Nome e identificador são obrigatórios.' });
   try {
     const rules = normalizeProcedureRules(procedureRules);
+    if (rules.some(rule => rule.validFrom && rule.validTo && rule.validFrom > rule.validTo)) return res.status(400).json({ error: 'A data final da vigência não pode ser anterior à data inicial.' });
     const unknownCodes = unknownProcedureCodes(rules);
     if (unknownCodes.length) return res.status(400).json({ error: `Código TUSS não encontrado na versão oficial: ${unknownCodes.join(', ')}.` });
-    db.prepare('INSERT INTO insurers (id, clinic_id, name, ans_code, contact_email, contact_phone, accepted_procedures, procedure_rules) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(id, req.session.clinicId, name, ansCode || null, contactEmail || null, contactPhone || null, JSON.stringify(rules.length ? rules.map(rule => rule.code) : acceptedProcedures), JSON.stringify(rules));
+    db.prepare('INSERT INTO insurers (id, clinic_id, name, ans_code, contact_email, contact_phone, accepted_procedures, procedure_rules) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(id, req.session.clinicId, name, ansCode || null, contactEmail || null, contactPhone || null, JSON.stringify(rules.length ? [...new Set(rules.map(rule => rule.code))] : acceptedProcedures), JSON.stringify(rules));
     res.status(201).json({ id });
   } catch (error) {
     res.status(409).json({ error: error.message });
@@ -257,9 +257,10 @@ app.put('/api/insurers/:id', auth, requireRole('admin'), (req, res) => {
   if (!name) return res.status(400).json({ error: 'Nome é obrigatório.' });
   try {
     const rules = normalizeProcedureRules(procedureRules);
+    if (rules.some(rule => rule.validFrom && rule.validTo && rule.validFrom > rule.validTo)) return res.status(400).json({ error: 'A data final da vigência não pode ser anterior à data inicial.' });
     const unknownCodes = unknownProcedureCodes(rules);
     if (unknownCodes.length) return res.status(400).json({ error: `Código TUSS não encontrado na versão oficial: ${unknownCodes.join(', ')}.` });
-    const codes = rules.length ? rules.map(rule => rule.code) : acceptedProcedures;
+    const codes = rules.length ? [...new Set(rules.map(rule => rule.code))] : acceptedProcedures;
     const result = db.prepare('UPDATE insurers SET name = ?, ans_code = ?, contact_email = ?, contact_phone = ?, accepted_procedures = ?, procedure_rules = ? WHERE id = ? AND clinic_id = ?').run(name, ansCode || null, contactEmail || null, contactPhone || null, JSON.stringify(codes), JSON.stringify(rules), req.params.id, req.session.clinicId);
     if (!result.changes) return res.status(404).json({ error: 'Convênio não encontrado.' });
     res.json({ id: req.params.id });

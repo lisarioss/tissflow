@@ -8,8 +8,9 @@ const ptDate = value => value ? new Date(`${value}T12:00:00`).toLocaleDateString
 const minutes = value => { const [h = 0, m = 0] = text(value).split(':').map(Number); return h * 60 + m; };
 const duration = session => Math.max(0, minutes(session.end) - minutes(session.start));
 const hoursLabel = total => Number.isInteger(total / 60) ? `${total / 60}h` : `${Math.floor(total / 60)}h${String(total % 60).padStart(2, '0')}`;
+const competenceLabel = value => { if (!value || !/^\d{4}-\d{2}$/.test(value)) return text(value); const [year, month] = value.split('-'); return `${month}/${year}`; };
 const field = (label, value, width = '*') => ({ width, stack: [{ text: label, fontSize: 6, bold: true }, { text: text(value) || ' ', fontSize: 8, margin: [0, 2, 0, 0] }], margin: [3, 3, 3, 4] });
-const ownerBlock = owner => ({ width: '*', alignment: 'center', stack: [{ text: '\n_______________________________', fontSize: 8 }, { text: text(owner.name), bold: true, fontSize: 8 }, { text: [owner.title, owner.council].filter(Boolean).join(' - '), fontSize: 7 }, { text: owner.isOwner ? 'Sócia Proprietária' : '', fontSize: 7 }] });
+const ownerBlock = (owner, compact = false) => ({ width: '*', alignment: 'center', stack: [{ text: '________________________________', fontSize: compact ? 6.5 : 8, margin: [0, compact ? 12 : 28, 0, 2] }, { text: 'RESPONSÁVEL PELA CLÍNICA', bold: true, fontSize: compact ? 6 : 7, color: '#496158', margin: [0, 0, 0, 2] }, { text: text(owner.name) || 'Responsável da clínica', bold: true, fontSize: compact ? 7 : 8 }, { text: [owner.title, owner.council].filter(Boolean).join(' - '), fontSize: compact ? 6 : 7, color: '#42534c' }] });
 const insurerLogoFiles = {
   unimed: 'unimed.png',
   amil: 'amil.png',
@@ -26,30 +27,46 @@ function insurerLogoPath(insurer) {
 }
 
 function coverContent(clinic, guide, sessions) {
+  const pointsPerMillimeter = 72 / 25.4;
+  const headerSafeSpace = Math.max(20, Math.min(Number(clinic.letterheadHeaderMm) || 35, 70)) * pointsPerMillimeter;
+  const footerSafeSpace = Math.max(15, Math.min(Number(clinic.letterheadFooterMm) || 25, 50)) * pointsPerMillimeter;
   const totalMinutes = sessions.reduce((sum, session) => sum + duration(session), 0);
-  const owners = clinic.owners.length ? clinic.owners : [{ name: 'Responsável da clínica', isOwner: true }];
-  const sessionRows = sessions.map(session => {
+  const activeOwners = clinic.owners.filter(owner => owner.active !== false);
+  const owners = activeOwners.length ? activeOwners : [{ name: 'Responsável da clínica', isOwner: true }];
+  const safeSessions = sessions.length ? sessions : [{}];
+  const compact = safeSessions.length > 12;
+  const ownerPositionY = clinic.letterheadDataUrl ? 841.89 - footerSafeSpace - (compact ? 58 : 82) : null;
+  const sessionRows = safeSessions.map(session => {
     const registered = clinic.professionals.find(person => text(person.name).trim().toLocaleLowerCase('pt-BR') === text(session.professional).trim().toLocaleLowerCase('pt-BR'));
-    const professionalLines = [session.professional, registered?.title, registered?.council].filter(Boolean).join('\n');
+    const professionalLines = [session.professional || guide.professional, registered?.title, registered?.council || guide.professional_register].filter(Boolean).join(' - ');
     return [
-    { text: ptDate(session.date), alignment: 'center', margin: [0, 9, 0, 9] },
-    { text: hoursLabel(duration(session)), alignment: 'center', margin: [0, 9, 0, 9] },
-    { text: professionalLines, fontSize: 7, margin: [3, 4, 3, 14] },
-    { text: '', margin: [0, 9, 0, 9] }
+    { text: ptDate(session.date), alignment: 'center', margin: [0, compact ? 1 : 7, 0, compact ? 1 : 7] },
+    { text: session.start && session.end ? `${session.start} - ${session.end}` : hoursLabel(duration(session)), alignment: 'center', margin: [0, compact ? 1 : 7, 0, compact ? 1 : 7] },
+    { stack: [{ text: professionalLines, fontSize: compact ? 5.7 : 7 }, { text: compact ? 'Ass.: ____________________' : '\nAss.: __________________________', fontSize: compact ? 5.7 : 6.5 }], margin: [4, compact ? 1 : 4, 3, compact ? 1 : 4] },
+    { text: compact ? 'Ass.: ____________________' : '\nAss.: __________________________', fontSize: compact ? 5.7 : 6.5, margin: [4, compact ? 1 : 4, 3, compact ? 1 : 4] }
     ];
   });
+  const infoCell = (label, value, options = {}) => ({
+    stack: [
+      { text: label, bold: true, fontSize: 6, color: '#496158', alignment: 'center' },
+      { text: text(value) || 'Não informado', fontSize: 8, color: '#17241f', alignment: 'center', margin: [0, 4, 0, 0] }
+    ],
+    colSpan: options.colSpan,
+    margin: [6, compact ? 3 : 6, 6, compact ? 4 : 7]
+  });
   return [
-    clinic.letterheadDataUrl ? { text: '', margin: [0, 75, 0, 0] } : clinic.logoDataUrl ? { image: clinic.logoDataUrl, width: 150, height: 75, fit: [150, 75], alignment: 'center', margin: [0, 0, 0, 12] } : { text: clinic.tradeName, fontSize: 20, bold: true, alignment: 'center', margin: [0, 12, 0, 18] },
-    { text: `ATENDIMENTOS ${text(guide.attendance_type || 'TERAPÊUTICOS').toUpperCase()}`, fontSize: 14, bold: true, alignment: 'center' },
-    { text: `Paciente: ${guide.patient}`, fontSize: 12, bold: true, alignment: 'center', margin: [0, 4, 0, 20] },
-    { table: { headerRows: 1, widths: [90, 55, '*', '*'], body: [[
-      { text: 'DATA DOS\nATENDIMENTOS', bold: true, fillColor: '#c8dff1', alignment: 'center' },
-      { text: 'CARGA\nHORÁRIA', bold: true, fillColor: '#c8dff1', alignment: 'center' },
-      { text: 'PROFISSIONAL /\nASSINATURA', bold: true, fillColor: '#c8dff1', alignment: 'center' },
-      { text: 'ASSINATURA DO RESPONSÁVEL\nPELA CRIANÇA', bold: true, fillColor: '#c8dff1', alignment: 'center' }
-    ], ...sessionRows, [{ text: 'TOTAL DE HORAS:', bold: true }, { text: hoursLabel(totalMinutes), bold: true, alignment: 'center' }, {}, {}]] }, layout: { hLineWidth: () => 0.7, vLineWidth: () => 0.7, hLineColor: () => '#222', vLineColor: () => '#222' }, margin: [0, 0, 0, 24] },
-    { text: `${clinic.city || '________________'} - ${clinic.state || '__'}, ____ de __________________ de ________.`, margin: [20, 10, 0, 24] },
-    { columns: owners.map(ownerBlock), columnGap: 10 },
+    clinic.letterheadDataUrl ? { text: '', margin: [0, Math.max(headerSafeSpace - 24, 0), 0, 0] } : clinic.logoDataUrl ? { image: clinic.logoDataUrl, fit: [145, 68], alignment: 'center', margin: [0, 0, 0, 10] } : { text: clinic.tradeName, fontSize: 19, bold: true, color: '#173d30', alignment: 'center', margin: [0, 8, 0, 12] },
+    { text: 'CAPA DE ATENDIMENTOS', fontSize: 13, bold: true, color: '#173d30', alignment: 'center', characterSpacing: 0.5 },
+    { text: text(guide.attendance_type || 'Atendimentos terapêuticos').toUpperCase(), fontSize: 8, color: '#617168', alignment: 'center', margin: [0, 3, 0, compact ? 6 : 12] },
+    { table: { widths: ['*', '*'], body: [[infoCell('PACIENTE', guide.patient), infoCell('CONVÊNIO', guide.insurer)], [infoCell('COMPETÊNCIA', competenceLabel(guide.competence) || ptDate(sessions[0]?.date)), infoCell('GUIA', guide.id)], [infoCell('PROCEDIMENTO TUSS', `${guide.service_code || text(sessions[0]?.procedure).split(' - ')[0]} - ${guide.procedure}`, { colSpan: 2 }), {}]] }, layout: { hLineColor: () => '#cdd9d3', vLineColor: () => '#cdd9d3', hLineWidth: () => 0.7, vLineWidth: () => 0.7, fillColor: rowIndex => rowIndex % 2 ? '#f7faf8' : '#ffffff' }, margin: [0, 0, 0, 12] },
+    { table: { headerRows: 1, widths: [78, 65, '*', '*'], body: [[
+      { text: 'DATA', bold: true, fillColor: '#d9e8f3', color: '#18364b', alignment: 'center', margin: [0, 4, 0, 4] },
+      { text: 'HORÁRIO', bold: true, fillColor: '#d9e8f3', color: '#18364b', alignment: 'center', margin: [0, 4, 0, 4] },
+      { text: 'PROFISSIONAL E ASSINATURA', bold: true, fillColor: '#d9e8f3', color: '#18364b', alignment: 'center', margin: [0, 4, 0, 4] },
+      { text: 'RESPONSÁVEL PELO PACIENTE', bold: true, fillColor: '#d9e8f3', color: '#18364b', alignment: 'center', margin: [0, 4, 0, 4] }
+    ], ...sessionRows, [{ text: 'TOTAL', bold: true, fillColor: '#eef4f0', margin: [4, compact ? 1 : 3, 0, compact ? 1 : 3] }, { text: hoursLabel(totalMinutes), bold: true, alignment: 'center', fillColor: '#eef4f0', margin: [0, compact ? 1 : 3, 0, compact ? 1 : 3] }, { text: `${sessions.length} atendimento(s)`, colSpan: 2, alignment: 'right', fillColor: '#eef4f0', margin: [0, compact ? 1 : 3, 5, compact ? 1 : 3] }, {}]] }, layout: { hLineWidth: () => 0.7, vLineWidth: () => 0.7, hLineColor: () => '#52665d', vLineColor: () => '#52665d' }, fontSize: compact ? 5.8 : 7.5, margin: [0, 0, 0, compact ? 10 : 24] },
+    { text: 'Data de fechamento: ____/____/________', fontSize: compact ? 7 : 8, alignment: 'right', margin: clinic.letterheadDataUrl ? undefined : [0, 0, 4, compact ? 4 : 14], absolutePosition: clinic.letterheadDataUrl ? { x: 25, y: ownerPositionY - 22 } : undefined, width: clinic.letterheadDataUrl ? 541 : undefined },
+    { columns: owners.map(owner => ownerBlock(owner, compact)), columnGap: 12, absolutePosition: clinic.letterheadDataUrl ? { x: 25, y: ownerPositionY } : undefined, width: clinic.letterheadDataUrl ? 545 : undefined },
     clinic.letterheadDataUrl ? { text: '' } : { text: [clinic.cnpj && `CNPJ: ${clinic.cnpj}`, clinic.phone && `Telefone: ${clinic.phone}`, clinic.instagram, [clinic.address, clinic.city && `${clinic.city}-${clinic.state}`, clinic.postalCode && `CEP ${clinic.postalCode}`].filter(Boolean).join(', ')].filter(Boolean).join('   |   '), fontSize: 7, color: '#555', alignment: 'center', absolutePosition: { x: 35, y: 790 }, width: 525 }
   ];
 }
@@ -95,7 +112,8 @@ function guideContent(guide, sessions) {
 function generateGuidePackagePDF(clinic, guide, res) {
   let sessions = [];
   try { sessions = JSON.parse(guide.sessions_json || '[]'); } catch { sessions = []; }
-  const definition = { pageSize: 'A4', pageMargins: [25, 24, 25, 30], background: currentPage => currentPage === 1 && clinic.letterheadDataUrl ? { image: clinic.letterheadDataUrl, width: 595.28, height: 841.89, absolutePosition: { x: 0, y: 0 } } : null, defaultStyle: { font: 'Helvetica', fontSize: 9 }, content: [...coverContent(clinic, guide, sessions), ...guideContent(guide, sessions)], info: { title: `Capa e guia ${guide.id}`, author: clinic.tradeName } };
+  const footerSafeSpace = clinic.letterheadDataUrl ? Math.max(15, Math.min(Number(clinic.letterheadFooterMm) || 25, 50)) * (72 / 25.4) : 30;
+  const definition = { pageSize: 'A4', pageMargins: [25, 24, 25, footerSafeSpace], background: currentPage => currentPage === 1 && clinic.letterheadDataUrl ? { image: clinic.letterheadDataUrl, width: 595.28, height: 841.89, absolutePosition: { x: 0, y: 0 } } : null, defaultStyle: { font: 'Helvetica', fontSize: 9 }, content: [...coverContent(clinic, guide, sessions), ...guideContent(guide, sessions)], info: { title: `Capa e guia ${guide.id}`, author: clinic.tradeName } };
   const pdfDoc = printer.createPdfKitDocument(definition);
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `attachment; filename="capa-e-guia-${guide.id}.pdf"`);

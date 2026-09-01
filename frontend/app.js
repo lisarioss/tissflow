@@ -66,7 +66,7 @@ let insurers = JSON.parse(localStorage.getItem(clinicStorageKey('insurers')) || 
 function saveInsurers() { localStorage.setItem(clinicStorageKey('insurers'), JSON.stringify(insurers)); }
 let feedbacks = JSON.parse(localStorage.getItem(clinicStorageKey('feedbacks')) || 'null') || [];
 function saveFeedbacks() { localStorage.setItem(clinicStorageKey('feedbacks'), JSON.stringify(feedbacks)); }
-let clinicSettings = JSON.parse(localStorage.getItem(clinicStorageKey('settings')) || 'null') || { tradeName: clinicProfiles[activeClinicId]?.name || '', legalName: '', cnpj: '', phone: '', instagram: '', address: '', city: '', state: '', postalCode: '', logoDataUrl: '', letterheadDataUrl: '', owners: [], professionals: [] };
+let clinicSettings = JSON.parse(localStorage.getItem(clinicStorageKey('settings')) || 'null') || { tradeName: clinicProfiles[activeClinicId]?.name || '', legalName: '', cnpj: '', phone: '', instagram: '', address: '', city: '', state: '', postalCode: '', logoDataUrl: '', letterheadDataUrl: '', letterheadHeaderMm: 35, letterheadFooterMm: 25, owners: [], professionals: [] };
 const views = { overview: 'Visão geral', agenda: 'Agenda', guides: 'Guias TISS', financeiro: 'Financeiro', users: 'Usuários', patients: 'Pacientes', convenios: 'Convênios', feedback: 'Feedbacks', reports: 'Relatórios', settings: 'Configurações' };
 const appView = document.querySelector('#app-view');
 const breadcrumb = document.querySelector('#breadcrumb');
@@ -423,9 +423,46 @@ function reportsView() {
   <div class="content-grid"><div class="panel"><div class="panel-header"><div><h2 class="panel-title">Status das guias</h2><p class="panel-subtitle">Distribuição atual do faturamento TISS</p></div></div><div class="report-status-list"><div><span>Enviadas</span><strong>${guideCounts.sent || 0}</strong></div><div><span>Em análise</span><strong>${guideCounts.review || 0}</strong></div><div><span>Aprovadas</span><strong>${guideCounts.approved || 0}</strong></div><div><span>Com glosa</span><strong>${guideCounts.error || 0}</strong></div><div><span>Recurso enviado</span><strong>${guideCounts.recurso || 0}</strong></div></div></div><div class="panel"><div class="panel-header"><div><h2 class="panel-title">Próximos pagamentos</h2><p class="panel-subtitle">Notas pendentes em ordem de vencimento</p></div></div><div class="report-payment-list">${upcomingInvoices.length ? upcomingInvoices.slice(0, 5).map(invoice => `<div class="report-payment-row"><div><strong>${invoice.id}</strong><small>${invoice.guideId || 'Sem guia vinculada'}</small></div><strong>${formatMoney(invoice.amount)}</strong><time>${new Date(`${invoice.expectedDate}T12:00:00`).toLocaleDateString('pt-BR')}</time></div>`).join('') : '<p class="panel-subtitle">Nenhum pagamento pendente.</p>'}</div></div></div>`;
 }
 function peopleToText(people) { return (people || []).map(person => [person.name, person.title, person.council].filter(Boolean).join(' | ')).join('\n'); }
+function ownerRowHtml(owner = {}, index = 0) {
+  return `<div class="owner-settings-row" data-owner-row>
+    <div class="owner-settings-grid">
+      <div class="field"><label>Nome do responsável</label><input data-owner-field="name" value="${owner.name || ''}" placeholder="Nome completo" /></div>
+      <div class="field"><label>Cargo ou vínculo</label><input data-owner-field="title" value="${owner.title || ''}" placeholder="Ex.: Sócia proprietária" /></div>
+      <div class="field"><label>Conselho/registro</label><input data-owner-field="council" value="${owner.council || ''}" placeholder="Ex.: CRP 03/12239" /></div>
+    </div>
+    <div class="owner-settings-actions">
+      <label class="owner-active"><input type="checkbox" data-owner-field="active" ${owner.active !== false ? 'checked' : ''} /> Incluir automaticamente na capa</label>
+      <button type="button" class="text-button owner-remove" data-action="remove-owner" ${index === 0 ? 'hidden' : ''}>Remover</button>
+    </div>
+  </div>`;
+}
 function settingsView() {
   const logo = clinicSettings.letterheadDataUrl ? '<p class="panel-subtitle">Papel timbrado A4 cadastrado.</p>' : clinicSettings.logoDataUrl ? `<img src="${clinicSettings.logoDataUrl}" alt="Logotipo atual" style="max-width:180px;max-height:90px;object-fit:contain" />` : '<p class="panel-subtitle">Nenhum timbrado cadastrado.</p>';
-  return `<div class="page-heading"><div><p class="eyebrow">Identidade dos documentos</p><h1>Configurações da clínica</h1><p class="heading-copy">Estes dados serão usados na capa e na guia impressa.</p></div></div><form class="panel patient-form" id="settings-form"><div class="panel-header"><div><h2 class="panel-title">Timbrado e responsáveis</h2><p class="panel-subtitle">Somente administradores podem alterar estas informações.</p></div>${logo}</div><div class="form-section"><div class="form-grid"><div class="field"><label>Nome da clínica *</label><input name="tradeName" value="${clinicSettings.tradeName || ''}" required /></div><div class="field"><label>Razão social</label><input name="legalName" value="${clinicSettings.legalName || ''}" /></div><div class="field"><label>CNPJ</label><input name="cnpj" value="${clinicSettings.cnpj || ''}" /></div><div class="field"><label>Telefone</label><input name="phone" value="${clinicSettings.phone || ''}" /></div><div class="field"><label>Instagram</label><input name="instagram" value="${clinicSettings.instagram || ''}" /></div><div class="field"><label>CEP</label><input name="postalCode" value="${clinicSettings.postalCode || ''}" /></div><div class="field"><label>Endereço</label><input name="address" value="${clinicSettings.address || ''}" /></div><div class="field"><label>Cidade</label><input name="city" value="${clinicSettings.city || ''}" /></div><div class="field"><label>UF</label><input name="state" maxlength="2" value="${clinicSettings.state || ''}" /></div><div class="field"><label>Logotipo (PNG ou JPEG)</label><input id="settings-logo" type="file" accept="image/png,image/jpeg" /><input type="hidden" name="logoDataUrl" value="${clinicSettings.logoDataUrl || ''}" /></div><div class="field"><label>Papel timbrado A4 completo *</label><input id="settings-letterhead" type="file" accept="image/png,image/jpeg" /><input type="hidden" name="letterheadDataUrl" value="${clinicSettings.letterheadDataUrl || ''}" /><small>Envie uma imagem vertical A4, com cabeçalho, marca-d'água e rodapé. Ela será o fundo da capa.</small></div></div><div class="field"><label>Proprietárias que assinam a capa</label><textarea name="ownersText" rows="4" placeholder="Uma por linha: Nome | Cargo | Conselho/registro">${peopleToText(clinicSettings.owners)}</textarea><small>Exemplo: Roevelim Carneiro | Psicóloga / Sócia Proprietária | CRP 03/12239</small></div><div class="field"><label>Profissionais da clínica</label><textarea name="professionalsText" rows="5" placeholder="Uma por linha: Nome | Especialidade | Conselho/registro">${peopleToText(clinicSettings.professionals)}</textarea></div></div><div class="form-footer"><button class="primary-button" type="submit">Salvar configurações</button></div></form>`;
+  const owners = clinicSettings.owners?.length ? clinicSettings.owners : [{}];
+  return `<div class="page-heading"><div><p class="eyebrow">Identidade dos documentos</p><h1>Configurações da clínica</h1><p class="heading-copy">Estes dados serão usados na capa e na guia impressa.</p></div></div>
+    <form class="panel patient-form" id="settings-form">
+      <div class="panel-header"><div><h2 class="panel-title">Timbrado e responsáveis</h2><p class="panel-subtitle">Somente administradores podem alterar estas informações.</p></div>${logo}</div>
+      <div class="form-section">
+        <div class="form-grid">
+          <div class="field"><label>Nome da clínica *</label><input name="tradeName" value="${clinicSettings.tradeName || ''}" required /></div>
+          <div class="field"><label>Razão social</label><input name="legalName" value="${clinicSettings.legalName || ''}" /></div>
+          <div class="field"><label>CNPJ</label><input name="cnpj" value="${clinicSettings.cnpj || ''}" /></div>
+          <div class="field"><label>Telefone</label><input name="phone" value="${clinicSettings.phone || ''}" /></div>
+          <div class="field"><label>Instagram</label><input name="instagram" value="${clinicSettings.instagram || ''}" /></div>
+          <div class="field"><label>CEP</label><input name="postalCode" value="${clinicSettings.postalCode || ''}" /></div>
+          <div class="field"><label>Endereço</label><input name="address" value="${clinicSettings.address || ''}" /></div>
+          <div class="field"><label>Cidade</label><input name="city" value="${clinicSettings.city || ''}" /></div>
+          <div class="field"><label>UF</label><input name="state" maxlength="2" value="${clinicSettings.state || ''}" /></div>
+          <div class="field"><label>Logotipo (PNG ou JPEG)</label><input id="settings-logo" type="file" accept="image/png,image/jpeg" /><input type="hidden" name="logoDataUrl" value="${clinicSettings.logoDataUrl || ''}" /></div>
+          <div class="field"><label>Papel timbrado A4 completo *</label><input id="settings-letterhead" type="file" accept="image/png,image/jpeg" /><input type="hidden" name="letterheadDataUrl" value="${clinicSettings.letterheadDataUrl || ''}" /><small>Envie uma imagem vertical A4, com cabeçalho, marca-d'água e rodapé. Ela será o fundo da capa.</small></div>
+          <div class="field"><label>Área reservada para o cabeçalho (mm)</label><input name="letterheadHeaderMm" type="number" min="20" max="70" value="${clinicSettings.letterheadHeaderMm || 35}" /><small>Protege a logo e os dados no topo do timbrado.</small></div>
+          <div class="field"><label>Área reservada para o rodapé (mm)</label><input name="letterheadFooterMm" type="number" min="15" max="50" value="${clinicSettings.letterheadFooterMm || 25}" /><small>Impede que atendimentos e assinaturas cubram o rodapé.</small></div>
+        </div>
+        <div class="owners-settings"><div class="owners-settings-heading"><div><label>Responsáveis e sócios que assinam a capa</label><small>Ative somente quem deve aparecer automaticamente no PDF.</small></div><button type="button" class="secondary-button" data-action="add-owner">＋ Adicionar responsável</button></div><div id="owners-settings-list">${owners.map(ownerRowHtml).join('')}</div></div>
+        <div class="field"><label>Profissionais da clínica</label><textarea name="professionalsText" rows="5" placeholder="Uma por linha: Nome | Especialidade | Conselho/registro">${peopleToText(clinicSettings.professionals)}</textarea></div>
+      </div>
+      <div class="form-footer"><button class="primary-button" type="submit">Salvar configurações</button></div>
+    </form>`;
 }
 function saveGuides() { localStorage.setItem(clinicStorageKey('guides'), JSON.stringify(guides)); }
 function restoreDraft() { const draft = JSON.parse(localStorage.getItem(clinicStorageKey('draft')) || 'null'); if (!draft) return; Object.entries(draft).forEach(([key, value]) => { const field = document.querySelector(`#${key}`); if (field) field.value = value; }); }
@@ -500,6 +537,27 @@ function parsePeople(value, isOwner = false) {
   });
 }
 
+function ownersFromSettingsForm(form) {
+  return [...form.querySelectorAll('[data-owner-row]')].map(row => ({
+    name: row.querySelector('[data-owner-field="name"]')?.value.trim() || '',
+    title: row.querySelector('[data-owner-field="title"]')?.value.trim() || '',
+    council: row.querySelector('[data-owner-field="council"]')?.value.trim() || '',
+    active: Boolean(row.querySelector('[data-owner-field="active"]')?.checked),
+    isOwner: true
+  })).filter(owner => owner.name);
+}
+
+document.addEventListener('click', event => {
+  const addButton = event.target.closest('[data-action="add-owner"]');
+  if (addButton) {
+    const list = document.querySelector('#owners-settings-list');
+    if (list) list.insertAdjacentHTML('beforeend', ownerRowHtml({}, list.children.length));
+    return;
+  }
+  const removeButton = event.target.closest('[data-action="remove-owner"]');
+  if (removeButton) removeButton.closest('[data-owner-row]')?.remove();
+});
+
 document.addEventListener('change', event => {
   if (!['settings-logo', 'settings-letterhead'].includes(event.target.id) || !event.target.files[0]) return;
   const file = event.target.files[0];
@@ -514,8 +572,8 @@ document.addEventListener('submit', async event => {
   if (event.target.id !== 'settings-form') return;
   event.preventDefault(); event.stopImmediatePropagation();
   const data = Object.fromEntries(new FormData(event.target));
-  const payload = { ...data, owners: parsePeople(data.ownersText, true), professionals: parsePeople(data.professionalsText) };
-  delete payload.ownersText; delete payload.professionalsText;
+  const payload = { ...data, owners: ownersFromSettingsForm(event.target), professionals: parsePeople(data.professionalsText) };
+  delete payload.professionalsText;
   try {
     if (activeSession?.token) { await apiRequest('/settings', { method: 'PUT', body: JSON.stringify(payload) }); clinicSettings = await apiRequest('/settings'); }
     else { clinicSettings = payload; localStorage.setItem(clinicStorageKey('settings'), JSON.stringify(payload)); }

@@ -122,6 +122,8 @@ db.exec(`
     postal_code TEXT NOT NULL DEFAULT '',
     logo_data_url TEXT NOT NULL DEFAULT '',
     letterhead_data_url TEXT NOT NULL DEFAULT '',
+    letterhead_header_mm INTEGER NOT NULL DEFAULT 35,
+    letterhead_footer_mm INTEGER NOT NULL DEFAULT 25,
     owners_json TEXT NOT NULL DEFAULT '[]',
     professionals_json TEXT NOT NULL DEFAULT '[]',
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -180,6 +182,8 @@ const patientColumns = new Set(db.prepare('PRAGMA table_info(patients)').all().m
 if (!patientColumns.has('active')) db.exec('ALTER TABLE patients ADD COLUMN active INTEGER NOT NULL DEFAULT 1');
 const settingsColumns = new Set(db.prepare('PRAGMA table_info(clinic_settings)').all().map(column => column.name));
 if (!settingsColumns.has('letterhead_data_url')) db.exec("ALTER TABLE clinic_settings ADD COLUMN letterhead_data_url TEXT NOT NULL DEFAULT ''");
+if (!settingsColumns.has('letterhead_header_mm')) db.exec('ALTER TABLE clinic_settings ADD COLUMN letterhead_header_mm INTEGER NOT NULL DEFAULT 35');
+if (!settingsColumns.has('letterhead_footer_mm')) db.exec('ALTER TABLE clinic_settings ADD COLUMN letterhead_footer_mm INTEGER NOT NULL DEFAULT 25');
 const insurerColumns = new Set(db.prepare('PRAGMA table_info(insurers)').all().map(column => column.name));
 if (!insurerColumns.has('procedure_rules')) db.exec("ALTER TABLE insurers ADD COLUMN procedure_rules TEXT NOT NULL DEFAULT '[]'");
 const clinicCount = db.prepare('SELECT COUNT(*) AS count FROM clinics').get().count;

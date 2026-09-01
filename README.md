@@ -19,6 +19,19 @@ Protótipo de portfólio para operação de faturamento clínico. Demonstra o ci
 - **Busca/filtro** nas listagens de guias, pacientes, convênios e feedbacks.
 - **Relatórios**: distribuição de guias por status (incluindo em recurso), valor pendente/recebido e valor em glosa aberta.
 - **Modo somente-visual**: guias, agenda, pacientes, convênios, feedbacks e notas fiscais funcionam offline via `localStorage` (ver limitações abaixo).
+- **PDF da pasta da guia**: gera um arquivo A4 com a capa de atendimentos e a guia SP/SADT na página seguinte. A capa usa o timbrado, os responsáveis e os profissionais cadastrados em Configurações.
+
+### Configurar a capa e o timbrado
+
+Entre com um usuário administrador e abra **Configurações**. Cadastre os dados institucionais, o logotipo (PNG ou JPEG), as proprietárias que assinam a capa e os profissionais da clínica. Em seguida, abra uma guia TISS e use **Gerar PDF da pasta**.
+
+Cada pessoa deve ser informada em uma linha, no formato:
+
+```text
+Nome | Cargo ou especialidade | Conselho e registro
+```
+
+O PDF deixa os campos de assinatura em branco para assinatura manual do profissional e do responsável pela criança. O XML continua sendo gerado separadamente para transmissão eletrônica.
 
 ## Executar
 
@@ -85,6 +98,7 @@ Escolha uma clínica na tela de login (contas demo listadas na própria tela). O
 ## Limitações conhecidas
 
 - O XML gerado é **demonstrativo**: segue a estrutura geral do padrão TISS 4.01, mas não foi validado contra o XSD oficial da ANS nem contempla epílogo/assinatura de lote.
+- A guia SP/SADT em PDF é um modelo imprimível baseado na estrutura visual fornecida, mas ainda precisa ser conferida campo a campo com a versão vigente do formulário da ANS antes do uso comercial.
 - A tabela de compatibilidade CID-procedimento cobre só os quatro procedimentos usados no demo — não é uma base de conhecimento clínico real.
 - Sem suporte a envio real para operadoras (webservice/portal) — o "envio" é a geração e download do XML.
 - RBAC cobre rotas de escrita; leitura não é restrita por papel (ver decisões técnicas acima).

@@ -5,6 +5,7 @@ const bcrypt = require('bcryptjs');
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 const db = require('./db');
+const { generateGuidePackagePDF } = require('./pdfService');
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
@@ -15,6 +16,7 @@ if (!jwtSecret) throw new Error('JWT_SECRET não configurado no arquivo backend/
 app.use(cors());
 app.use(express.json({ limit: '8mb' })); // fotos de feedback em base64 podem passar do limite padrão de 100kb
 app.use(express.static(path.join(__dirname, '..', 'frontend')));
+app.get('/login', (req, res) => res.redirect('/'));
 
 function auth(req, res, next) {
   const token = req.headers.authorization?.replace('Bearer ', '');
@@ -47,6 +49,19 @@ function moneyToCents(value) {
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok', service: 'tiss-flow-api' }));
 
+function parseJsonArray(value) {
+  try { const parsed = JSON.parse(value || '[]'); return Array.isArray(parsed) ? parsed : []; } catch { return []; }
+}
+
+function mapClinicSettings(row, clinic) {
+  return {
+    legalName: row?.legal_name || clinic?.name || '', tradeName: row?.trade_name || clinic?.name || '',
+    cnpj: row?.cnpj || '', phone: row?.phone || '', instagram: row?.instagram || '',
+    address: row?.address || '', city: row?.city || '', state: row?.state || '', postalCode: row?.postal_code || '',
+    logoDataUrl: row?.logo_data_url || '', letterheadDataUrl: row?.letterhead_data_url || '', owners: parseJsonArray(row?.owners_json), professionals: parseJsonArray(row?.professionals_json)
+  };
+}
+
 app.post('/api/auth/login', (req, res) => {
   const { clinicId, email, password } = req.body;
   const user = db.prepare('SELECT * FROM users WHERE clinic_id = ? AND lower(email) = lower(?)').get(clinicId, email);
@@ -54,6 +69,33 @@ app.post('/api/auth/login', (req, res) => {
 
   const token = jwt.sign({ userId: user.id, clinicId: user.clinic_id, role: user.role }, jwtSecret, { expiresIn: '8h' });
   res.json({ token, user: { id: user.id, name: user.name, email: user.email, role: user.role }, clinicId: user.clinic_id });
+});
+
+app.get('/api/settings', auth, (req, res) => {
+  const clinic = db.prepare('SELECT id, name, unit FROM clinics WHERE id = ?').get(req.session.clinicId);
+  const settings = db.prepare('SELECT * FROM clinic_settings WHERE clinic_id = ?').get(req.session.clinicId);
+  res.json(mapClinicSettings(settings, clinic));
+});
+
+app.put('/api/settings', auth, requireRole('admin'), (req, res) => {
+  const { legalName, tradeName, cnpj, phone, instagram, address, city, state, postalCode, logoDataUrl, letterheadDataUrl, owners = [], professionals = [] } = req.body;
+  if (!tradeName) return res.status(400).json({ error: 'O nome da clínica é obrigatório.' });
+  if (!Array.isArray(owners) || !Array.isArray(professionals)) return res.status(400).json({ error: 'Responsáveis e profissionais devem ser listas.' });
+  if (logoDataUrl && !/^data:image\/(png|jpeg);base64,/i.test(logoDataUrl)) return res.status(400).json({ error: 'Use um logotipo PNG ou JPEG.' });
+  if (letterheadDataUrl && !/^data:image\/(png|jpeg);base64,/i.test(letterheadDataUrl)) return res.status(400).json({ error: 'Use um papel timbrado em PNG ou JPEG.' });
+  db.prepare(`INSERT INTO clinic_settings (clinic_id, legal_name, trade_name, cnpj, phone, instagram, address, city, state, postal_code, logo_data_url, letterhead_data_url, owners_json, professionals_json)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(clinic_id) DO UPDATE SET legal_name=excluded.legal_name, trade_name=excluded.trade_name, cnpj=excluded.cnpj, phone=excluded.phone, instagram=excluded.instagram, address=excluded.address, city=excluded.city, state=excluded.state, postal_code=excluded.postal_code, logo_data_url=excluded.logo_data_url, letterhead_data_url=excluded.letterhead_data_url, owners_json=excluded.owners_json, professionals_json=excluded.professionals_json, updated_at=CURRENT_TIMESTAMP`)
+    .run(req.session.clinicId, legalName || '', tradeName, cnpj || '', phone || '', instagram || '', address || '', city || '', state || '', postalCode || '', logoDataUrl || '', letterheadDataUrl || '', JSON.stringify(owners), JSON.stringify(professionals));
+  res.json({ saved: true });
+});
+
+app.get('/api/guides/:id/pdf', auth, (req, res) => {
+  const guide = db.prepare('SELECT * FROM guides WHERE id = ? AND clinic_id = ?').get(req.params.id, req.session.clinicId);
+  if (!guide) return res.status(404).json({ error: 'Guia não encontrada.' });
+  const clinic = db.prepare('SELECT id, name, unit FROM clinics WHERE id = ?').get(req.session.clinicId);
+  const row = db.prepare('SELECT * FROM clinic_settings WHERE clinic_id = ?').get(req.session.clinicId);
+  generateGuidePackagePDF(mapClinicSettings(row, clinic), guide, res);
 });
 
 app.get('/api/patients', auth, (req, res) => {

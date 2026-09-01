@@ -109,6 +109,23 @@ db.exec(`
     photo TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
+  CREATE TABLE IF NOT EXISTS clinic_settings (
+    clinic_id TEXT PRIMARY KEY REFERENCES clinics(id),
+    legal_name TEXT NOT NULL DEFAULT '',
+    trade_name TEXT NOT NULL DEFAULT '',
+    cnpj TEXT NOT NULL DEFAULT '',
+    phone TEXT NOT NULL DEFAULT '',
+    instagram TEXT NOT NULL DEFAULT '',
+    address TEXT NOT NULL DEFAULT '',
+    city TEXT NOT NULL DEFAULT '',
+    state TEXT NOT NULL DEFAULT '',
+    postal_code TEXT NOT NULL DEFAULT '',
+    logo_data_url TEXT NOT NULL DEFAULT '',
+    letterhead_data_url TEXT NOT NULL DEFAULT '',
+    owners_json TEXT NOT NULL DEFAULT '[]',
+    professionals_json TEXT NOT NULL DEFAULT '[]',
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
 `);
 
 const guideColumns = db.prepare('PRAGMA table_info(guides)').all();
@@ -138,6 +155,8 @@ const guideMigrations = {
 Object.entries(guideMigrations).forEach(([column, statement]) => { if (!guideColumnNames.has(column)) db.exec(statement); });
 const patientColumns = new Set(db.prepare('PRAGMA table_info(patients)').all().map(column => column.name));
 if (!patientColumns.has('active')) db.exec('ALTER TABLE patients ADD COLUMN active INTEGER NOT NULL DEFAULT 1');
+const settingsColumns = new Set(db.prepare('PRAGMA table_info(clinic_settings)').all().map(column => column.name));
+if (!settingsColumns.has('letterhead_data_url')) db.exec("ALTER TABLE clinic_settings ADD COLUMN letterhead_data_url TEXT NOT NULL DEFAULT ''");
 const clinicCount = db.prepare('SELECT COUNT(*) AS count FROM clinics').get().count;
 if (clinicCount === 0) {
   const insertClinic = db.prepare('INSERT INTO clinics (id, name, unit) VALUES (?, ?, ?)');

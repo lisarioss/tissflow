@@ -3,3 +3,6 @@ backend/.env
 backend/tiss-flow.db
 *.db-wal
 *.db-shm
+output/
+tmp/
+references/

@@ -44,6 +44,7 @@ const defaultAppointments = [
   { id: 'A-003', patient: 'Bianca Torres', professional: 'Lucas Andrade', date: '2026-08-20', start: '09:30', duration: 60, type: 'Fisioterapia' }
 ];
 let appointments = JSON.parse(localStorage.getItem(clinicStorageKey('appointments')) || 'null') || defaultAppointments;
+let selectedAgendaDate = new Date().toISOString().slice(0, 10);
 let glosas = JSON.parse(localStorage.getItem(clinicStorageKey('glosas')) || 'null') || [];
 // Logos empacotados no projeto — usados só como enfeite visual no cabeçalho da
 // guia. Convênios cadastrados depois via tela de Convênios não têm logo
@@ -253,7 +254,7 @@ function normalizeBatch(batch) { return { ...batch, totalValue: Number(batch.tot
 async function loadApiData() {
   if (!activeSession?.token) return;
   try {
-    const [apiGuides, apiInvoices, apiPatients, apiGlosas, apiInsurers, apiFeedbacks, apiSettings, apiBatches, apiAuthorizations, apiPatientDocuments] = await Promise.all([apiRequest('/guides'), apiRequest('/invoices'), apiRequest('/patients'), apiRequest('/glosas'), apiRequest('/insurers'), apiRequest('/feedbacks'), apiRequest('/settings'), apiRequest('/batches'), apiRequest('/authorizations'), userCan('patients') ? apiRequest('/patient-documents') : Promise.resolve([])]);
+    const [apiGuides, apiInvoices, apiPatients, apiGlosas, apiInsurers, apiFeedbacks, apiSettings, apiBatches, apiAuthorizations, apiPatientDocuments, apiAppointments] = await Promise.all([apiRequest('/guides'), apiRequest('/invoices'), apiRequest('/patients'), apiRequest('/glosas'), apiRequest('/insurers'), apiRequest('/feedbacks'), apiRequest('/settings'), apiRequest('/batches'), apiRequest('/authorizations'), userCan('patients') ? apiRequest('/patient-documents') : Promise.resolve([]), userCan('agenda') ? apiRequest('/appointments') : Promise.resolve([])]);
     guides = apiGuides.map(normalizeGuide);
     invoices = apiInvoices.map(normalizeInvoice);
     if (apiPatients.length) patients = apiPatients;
@@ -264,6 +265,7 @@ async function loadApiData() {
     batches = apiBatches.map(normalizeBatch);
     authorizations = apiAuthorizations;
     patientDocuments = apiPatientDocuments;
+    if (userCan('agenda')) appointments = apiAppointments;
     render();
   } catch (error) {
     showToast(`Modo local: ${error.message}`);
@@ -430,7 +432,12 @@ function financeView() {
 function saveInvoices() { localStorage.setItem(clinicStorageKey('invoices'), JSON.stringify(invoices)); }
 function hasScheduleConflict(data) { return hasScheduleConflictWith(appointments, data); }
 function saveAppointments() { localStorage.setItem(clinicStorageKey('appointments'), JSON.stringify(appointments)); }
-function agendaView() { const date = '2026-08-20'; const dayAppointments = appointments.filter(appointment => appointment.date === date).sort((first, second) => timeToMinutes(first.start) - timeToMinutes(second.start)); return `<div class="page-heading"><div><p class="eyebrow">Quinta-feira, 20 de agosto de 2026</p><h1>Agenda da clínica</h1><p class="heading-copy">Horários ocupados são bloqueados automaticamente por profissional.</p></div><button class="primary-button" data-action="new-appointment">＋ Novo atendimento</button></div><div class="agenda-layout"><div class="panel"><div class="panel-header"><div><h2 class="panel-title">Atendimentos de hoje</h2><p class="panel-subtitle">${dayAppointments.length} horários reservados</p></div><span class="status approved">Agenda protegida</span></div><div class="appointment-list">${dayAppointments.map(appointment => `<div class="appointment-row"><div class="appointment-time"><strong>${appointment.start}</strong><small>${appointment.duration} min</small></div><div class="appointment-info"><strong>${appointment.patient}</strong><small>${appointment.type} · ${appointment.professional}</small></div><span class="appointment-professional">${appointment.professional}</span></div>`).join('')}</div></div><form class="panel appointment-form" id="appointment-form"><div class="panel-header"><div><h2 class="panel-title">Reservar horário</h2><p class="panel-subtitle">A checagem acontece antes de salvar.</p></div></div><div class="form-section"><div class="field"><label for="appointment-patient">Paciente *</label><input id="appointment-patient" name="patient" required placeholder="Nome completo" /></div><div class="field"><label for="appointment-professional">Profissional *</label><select id="appointment-professional" name="professional" required><option value="">Selecione</option>${professionalOptions()}</select></div><div class="field"><label for="appointment-date">Data *</label><input id="appointment-date" name="date" type="date" value="${date}" required /></div><div class="appointment-fields"><div class="field"><label for="appointment-start">Início *</label><input id="appointment-start" name="start" type="time" value="09:00" required /></div><div class="field"><label for="appointment-duration">Duração *</label><select id="appointment-duration" name="duration" required><option value="30">30 min</option><option value="50" selected>50 min</option><option value="60">60 min</option></select></div></div><div class="field"><label for="appointment-type">Tipo de atendimento *</label><select id="appointment-type" name="type" required><option>Consulta</option><option>Fisioterapia</option><option>Exame</option></select></div></div><div class="form-footer"><button class="primary-button" type="submit">Verificar e reservar</button></div></form></div>`; }
+const appointmentStatusLabels = { scheduled: 'Agendado', confirmed: 'Confirmado', completed: 'Presença', missed: 'Falta', cancelled: 'Cancelado' };
+function agendaView() {
+  const dayAppointments = appointments.filter(appointment => appointment.date === selectedAgendaDate).sort((first, second) => timeToMinutes(first.start) - timeToMinutes(second.start));
+  const dateLabel = new Date(`${selectedAgendaDate}T12:00:00`).toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  return `<div class="page-heading"><div><p class="eyebrow">${dateLabel}</p><h1>Agenda da clínica</h1><p class="heading-copy">Agenda compartilhada, com recorrência e controle de presença.</p></div><div class="folder-actions"><label class="agenda-date-picker">Exibir data <input id="agenda-date" type="date" value="${selectedAgendaDate}" /></label><button class="primary-button" data-action="new-appointment">＋ Novo atendimento</button></div></div><div class="agenda-layout"><div class="panel"><div class="panel-header"><div><h2 class="panel-title">Atendimentos do dia</h2><p class="panel-subtitle">${dayAppointments.length} horário(s) reservado(s)</p></div><span class="status approved">Sincronizada</span></div><div class="appointment-list">${dayAppointments.length ? dayAppointments.map(appointment => `<div class="appointment-row ${appointment.status || 'scheduled'}"><div class="appointment-time"><strong>${appointment.start}</strong><small>${appointment.duration} min</small></div><div class="appointment-info"><strong>${appointment.patient}</strong><small>${appointment.type} · ${appointment.professional}${appointment.recurrenceId ? ' · recorrente' : ''}</small></div><select class="appointment-status" data-appointment-id="${appointment.id}">${Object.entries(appointmentStatusLabels).map(([value, label]) => `<option value="${value}" ${(appointment.status || 'scheduled') === value ? 'selected' : ''}>${label}</option>`).join('')}</select><button class="finance-delete" data-action="delete-appointment" data-appointment-id="${appointment.id}">Excluir</button></div>`).join('') : '<div class="patient-folder-empty">Nenhum atendimento agendado nesta data.</div>'}</div></div><form class="panel appointment-form" id="appointment-form"><div class="panel-header"><div><h2 class="panel-title">Reservar horário</h2><p class="panel-subtitle">Repita semanalmente para terapias recorrentes.</p></div></div><div class="form-section"><div class="field"><label for="appointment-patient">Paciente *</label><select id="appointment-patient" name="patientId" required><option value="">Selecione</option>${patients.filter(patient => patient.active !== 0).map(patient => `<option value="${patient.id}">${patient.name}</option>`).join('')}</select></div><div class="field"><label for="appointment-professional">Profissional *</label><select id="appointment-professional" name="professional" required><option value="">Selecione</option>${professionalOptions()}</select></div><div class="field"><label for="appointment-date">Primeira data *</label><input id="appointment-date" name="date" type="date" value="${selectedAgendaDate}" required /></div><div class="appointment-fields"><div class="field"><label for="appointment-start">Início *</label><input id="appointment-start" name="start" type="time" value="09:00" required /></div><div class="field"><label for="appointment-duration">Duração *</label><select id="appointment-duration" name="duration" required><option value="30">30 min</option><option value="50" selected>50 min</option><option value="60">60 min</option></select></div></div><div class="field"><label for="appointment-type">Tipo de atendimento *</label><select id="appointment-type" name="type" required><option>Consulta</option><option>Fisioterapia</option><option>Terapia ABA</option><option>Psicologia</option><option>Fonoaudiologia</option><option>Terapia ocupacional</option><option>Exame</option></select></div><div class="field"><label for="appointment-repeat">Repetição semanal</label><select id="appointment-repeat" name="repeatWeeks"><option value="1">Somente esta data</option><option value="4">4 semanas</option><option value="8">8 semanas</option><option value="12">12 semanas</option><option value="24">24 semanas</option></select></div></div><div class="form-footer"><button class="primary-button" type="submit">Verificar e reservar</button></div></form></div>`;
+}
 function editPatient(patientId) {
   const patient = patients.find(item => item.id === patientId);
   if (!patient) return;
@@ -1112,6 +1119,58 @@ document.addEventListener('submit', async event => {
     submitButton.textContent = 'Anexar documento';
     showToast(error.message);
   }
+});
+
+document.addEventListener('submit', async event => {
+  if (event.target.id !== 'appointment-form') return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  const form = event.target;
+  if (!form.checkValidity()) { form.reportValidity(); return; }
+  const data = Object.fromEntries(new FormData(form));
+  const patient = patients.find(item => item.id === data.patientId);
+  try {
+    if (activeSession?.token) {
+      const result = await apiRequest('/appointments', { method: 'POST', body: JSON.stringify(data) });
+      appointments = await apiRequest('/appointments');
+      selectedAgendaDate = data.date;
+      render('agenda');
+      showToast(result.ids.length > 1 ? `${result.ids.length} atendimentos semanais reservados.` : 'Atendimento reservado.');
+    } else {
+      const repeatWeeks = Number(data.repeatWeeks || 1);
+      const recurrenceId = repeatWeeks > 1 ? `REC-${Date.now()}` : null;
+      const candidates = Array.from({ length: repeatWeeks }, (_, index) => { const date = new Date(`${data.date}T12:00:00`); date.setDate(date.getDate() + index * 7); return { id: `A-${Date.now()}-${index + 1}`, patientId: data.patientId, patient: patient?.name || '', professional: data.professional, date: date.toISOString().slice(0, 10), start: data.start, duration: Number(data.duration), type: data.type, status: 'scheduled', recurrenceId }; });
+      const conflict = candidates.find(candidate => hasScheduleConflict(candidate));
+      if (conflict) throw new Error(`Existe conflito de horário em ${new Date(`${conflict.date}T12:00:00`).toLocaleDateString('pt-BR')}.`);
+      appointments.push(...candidates); saveAppointments(); selectedAgendaDate = data.date; render('agenda'); showToast(`${candidates.length} atendimento(s) reservado(s).`);
+    }
+  } catch (error) { showToast(error.message); }
+}, true);
+
+document.addEventListener('change', async event => {
+  if (event.target.id === 'agenda-date') { selectedAgendaDate = event.target.value; render('agenda'); return; }
+  if (!event.target.classList.contains('appointment-status')) return;
+  const appointment = appointments.find(item => item.id === event.target.dataset.appointmentId);
+  if (!appointment) return;
+  const previous = appointment.status || 'scheduled';
+  try {
+    if (activeSession?.token) await apiRequest(`/appointments/${appointment.id}/status`, { method: 'PATCH', body: JSON.stringify({ status: event.target.value }) });
+    appointment.status = event.target.value;
+    if (!activeSession?.token) saveAppointments();
+    render('agenda'); showToast(`Atendimento marcado como ${appointmentStatusLabels[appointment.status].toLowerCase()}.`);
+  } catch (error) { appointment.status = previous; render('agenda'); showToast(error.message); }
+});
+
+document.addEventListener('click', async event => {
+  const button = event.target.closest('[data-action="delete-appointment"]');
+  if (!button) return;
+  const appointment = appointments.find(item => item.id === button.dataset.appointmentId);
+  if (!appointment || !window.confirm(`Excluir o atendimento de ${appointment.patient} em ${new Date(`${appointment.date}T12:00:00`).toLocaleDateString('pt-BR')}?`)) return;
+  try {
+    if (activeSession?.token) { await apiRequest(`/appointments/${appointment.id}`, { method: 'DELETE' }); appointments = await apiRequest('/appointments'); }
+    else { appointments = appointments.filter(item => item.id !== appointment.id); saveAppointments(); }
+    render('agenda'); showToast('Atendimento excluído.');
+  } catch (error) { showToast(error.message); }
 });
 
 document.addEventListener('click', async event => {

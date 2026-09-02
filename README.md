@@ -20,7 +20,7 @@ Protótipo de portfólio para operação de faturamento clínico. Demonstra o ci
 - **Autenticação real** via JWT + bcrypt, com dados persistidos em SQLite e isolados por `clinic_id` em todas as consultas.
 - **RBAC nas rotas de escrita**: cada papel (admin, faturamento, recepção, médico) só cria/edita/exclui os recursos que a navegação já expõe para ele — reforçado no servidor, não só escondendo botões na UI.
 - **Financeiro**: cadastro, baixa e exclusão de notas fiscais vinculadas a guias aprovadas.
-- **Agenda**: checagem de conflito de horário por profissional/data.
+- **Agenda compartilhada**: horários persistidos no servidor, checagem de conflitos, recorrência semanal de até 24 semanas e controle de confirmação, presença, falta e cancelamento.
 - **Busca/filtro** nas listagens de guias, pacientes, convênios e feedbacks.
 - **Relatórios**: distribuição de guias por status (incluindo em recurso), valor pendente/recebido e valor em glosa aberta.
 - **Modo somente-visual**: guias, agenda, pacientes, convênios, feedbacks e notas fiscais funcionam offline via `localStorage` (ver limitações abaixo).
@@ -121,11 +121,9 @@ Escolha uma clínica na tela de login (contas demo listadas na própria tela). O
 - A tabela de compatibilidade CID-procedimento cobre só os quatro procedimentos usados no demo — não é uma base de conhecimento clínico real.
 - Sem suporte a envio real para operadoras (webservice/portal) — o "envio" é a geração e download do XML.
 - RBAC cobre rotas de escrita; leitura não é restrita por papel (ver decisões técnicas acima).
-- Agenda existe só no `localStorage` — não é persistida no backend, então não sincroniza entre dispositivos/usuários.
 
 ## Próximos passos
 
-- Persistir a agenda no backend (hoje é só local).
 - Tela de Configurações real (hoje é placeholder).
 - Ficha do paciente reunindo guias e feedbacks daquele paciente em um só lugar.
 - Trilha de auditoria (quem alterou o quê e quando).

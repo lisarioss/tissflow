@@ -167,6 +167,21 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
   CREATE INDEX IF NOT EXISTS idx_patient_documents_patient ON patient_documents(clinic_id, patient_id, created_at);
+  CREATE TABLE IF NOT EXISTS appointments (
+    id TEXT PRIMARY KEY,
+    clinic_id TEXT NOT NULL REFERENCES clinics(id),
+    patient_id TEXT NOT NULL REFERENCES patients(id),
+    professional TEXT NOT NULL,
+    appointment_date TEXT NOT NULL,
+    start_time TEXT NOT NULL,
+    duration INTEGER NOT NULL,
+    attendance_type TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'scheduled' CHECK (status IN ('scheduled', 'confirmed', 'completed', 'missed', 'cancelled')),
+    recurrence_id TEXT,
+    created_by TEXT NOT NULL REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE INDEX IF NOT EXISTS idx_appointments_schedule ON appointments(clinic_id, appointment_date, professional);
   CREATE TABLE IF NOT EXISTS clinic_settings (
     clinic_id TEXT PRIMARY KEY REFERENCES clinics(id),
     legal_name TEXT NOT NULL DEFAULT '',

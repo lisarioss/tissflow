@@ -8,6 +8,7 @@ require('dotenv').config({ path: path.join(__dirname, '.env') });
 const db = require('./db');
 const { generateGuidePackagePDF, generateGuideAuditPDF } = require('./pdfService');
 const { feedbackDateBelongsToGuide } = require('./feedbackService');
+const { hasAppointmentConflict, weeklyDates } = require('./appointmentService');
 const { TISS_VERSION, calculateTissHash, validateTissXml } = require('./tissValidationService');
 
 const app = express();
@@ -305,6 +306,43 @@ app.delete('/api/patient-documents/:id', auth, requireRole('admin', 'recepcao', 
   db.prepare('DELETE FROM patient_documents WHERE id = ? AND clinic_id = ?').run(req.params.id, req.session.clinicId);
   const storagePath = path.join(documentUploadRoot, req.session.clinicId, document.storage_name);
   if (fs.existsSync(storagePath)) fs.unlinkSync(storagePath);
+  res.status(204).end();
+});
+
+const appointmentSelect = `SELECT appointments.id, appointments.patient_id AS patientId, patients.name AS patient, appointments.professional, appointments.appointment_date AS date, appointments.start_time AS start, appointments.duration, appointments.attendance_type AS type, appointments.status, appointments.recurrence_id AS recurrenceId, appointments.created_at AS createdAt
+  FROM appointments JOIN patients ON patients.id = appointments.patient_id AND patients.clinic_id = appointments.clinic_id`;
+
+app.get('/api/appointments', auth, requireRole('admin', 'recepcao', 'medico'), (req, res) => {
+  res.json(db.prepare(`${appointmentSelect} WHERE appointments.clinic_id = ? ORDER BY appointments.appointment_date, appointments.start_time`).all(req.session.clinicId));
+});
+
+app.post('/api/appointments', auth, requireRole('admin', 'recepcao', 'medico'), (req, res) => {
+  const { patientId, professional, date, start, duration, type, repeatWeeks = 1 } = req.body;
+  const weeks = Math.min(Math.max(Number(repeatWeeks) || 1, 1), 24);
+  if (!patientId || !professional || !/^\d{4}-\d{2}-\d{2}$/.test(date || '') || !/^\d{2}:\d{2}$/.test(start || '') || !Number(duration) || !type) return res.status(400).json({ error: 'Paciente, profissional, data, horário, duração e tipo são obrigatórios.' });
+  if (!db.prepare('SELECT id FROM patients WHERE id = ? AND clinic_id = ? AND active = 1').get(patientId, req.session.clinicId)) return res.status(404).json({ error: 'Paciente ativo não encontrado.' });
+  const dates = weeklyDates(date, weeks);
+  const existing = db.prepare(`SELECT professional, appointment_date AS date, start_time AS start, duration, status FROM appointments WHERE clinic_id = ? AND appointment_date IN (${dates.map(() => '?').join(',')})`).all(req.session.clinicId, ...dates);
+  const candidates = dates.map((appointmentDate, index) => ({ id: `AG-${Date.now()}-${index + 1}`, patientId, professional, date: appointmentDate, start, duration: Number(duration), type }));
+  const conflict = candidates.find(candidate => hasAppointmentConflict(existing, candidate));
+  if (conflict) return res.status(409).json({ error: `O profissional já possui atendimento conflitante em ${conflict.date}.` });
+  const recurrenceId = weeks > 1 ? `REC-${Date.now()}` : null;
+  const insert = db.prepare('INSERT INTO appointments (id, clinic_id, patient_id, professional, appointment_date, start_time, duration, attendance_type, recurrence_id, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+  db.transaction(() => candidates.forEach(item => insert.run(item.id, req.session.clinicId, item.patientId, item.professional, item.date, item.start, item.duration, item.type, recurrenceId, req.session.userId)))();
+  res.status(201).json({ ids: candidates.map(item => item.id), recurrenceId });
+});
+
+app.patch('/api/appointments/:id/status', auth, requireRole('admin', 'recepcao', 'medico'), (req, res) => {
+  const allowed = new Set(['scheduled', 'confirmed', 'completed', 'missed', 'cancelled']);
+  if (!allowed.has(req.body.status)) return res.status(400).json({ error: 'Situação do atendimento inválida.' });
+  const result = db.prepare('UPDATE appointments SET status = ? WHERE id = ? AND clinic_id = ?').run(req.body.status, req.params.id, req.session.clinicId);
+  if (!result.changes) return res.status(404).json({ error: 'Atendimento não encontrado.' });
+  res.json({ id: req.params.id, status: req.body.status });
+});
+
+app.delete('/api/appointments/:id', auth, requireRole('admin', 'recepcao'), (req, res) => {
+  const result = db.prepare('DELETE FROM appointments WHERE id = ? AND clinic_id = ?').run(req.params.id, req.session.clinicId);
+  if (!result.changes) return res.status(404).json({ error: 'Atendimento não encontrado.' });
   res.status(204).end();
 });
 

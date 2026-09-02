@@ -255,7 +255,22 @@ function normalizeBatch(batch) { return { ...batch, totalValue: Number(batch.tot
 async function loadApiData() {
   if (!activeSession?.token) return;
   try {
-    const [apiGuides, apiInvoices, apiPatients, apiGlosas, apiInsurers, apiFeedbacks, apiSettings, apiBatches, apiAuthorizations, apiPatientDocuments, apiAppointments] = await Promise.all([apiRequest('/guides'), apiRequest('/invoices'), apiRequest('/patients'), apiRequest('/glosas'), apiRequest('/insurers'), apiRequest('/feedbacks'), apiRequest('/settings'), apiRequest('/batches'), apiRequest('/authorizations'), userCan('patients') ? apiRequest('/patient-documents') : Promise.resolve([]), userCan('agenda') ? apiRequest('/appointments') : Promise.resolve([])]);
+    const permittedRequest = (allowed, path, fallback = []) => allowed ? apiRequest(path) : Promise.resolve(fallback);
+    const canReadFinancial = userCan('financeiro');
+    const canReadFeedbacks = userCan('feedback');
+    const [apiGuides, apiInvoices, apiPatients, apiGlosas, apiInsurers, apiFeedbacks, apiSettings, apiBatches, apiAuthorizations, apiPatientDocuments, apiAppointments] = await Promise.all([
+      apiRequest('/guides'),
+      permittedRequest(canReadFinancial, '/invoices'),
+      apiRequest('/patients'),
+      permittedRequest(canReadFinancial, '/glosas'),
+      apiRequest('/insurers'),
+      permittedRequest(canReadFeedbacks, '/feedbacks'),
+      apiRequest('/settings'),
+      permittedRequest(userCan('batches'), '/batches'),
+      apiRequest('/authorizations'),
+      permittedRequest(userCan('patients'), '/patient-documents'),
+      permittedRequest(userCan('agenda'), '/appointments')
+    ]);
     guides = apiGuides.map(normalizeGuide);
     invoices = apiInvoices.map(normalizeInvoice);
     if (apiPatients.length) patients = apiPatients;

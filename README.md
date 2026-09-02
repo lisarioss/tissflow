@@ -19,7 +19,7 @@ Protótipo de portfólio para operação de faturamento clínico. Demonstra o ci
 - **Documentos do paciente**: armazena PDFs e imagens em diretórios separados por clínica, com categoria, validade, vínculo opcional à guia/autorização e controle de download e exclusão.
 - **Trilha de auditoria**: registra automaticamente criações, alterações, exclusões e downloads, identificando usuário, data, registro e origem sem duplicar conteúdo clínico sensível no log.
 - **Autenticação real** via JWT + bcrypt, com dados persistidos em SQLite e isolados por `clinic_id` em todas as consultas.
-- **RBAC nas rotas de escrita**: cada papel (admin, faturamento, recepção, médico) só cria/edita/exclui os recursos que a navegação já expõe para ele — reforçado no servidor, não só escondendo botões na UI.
+- **RBAC no servidor**: cada papel (admin, faturamento, recepção, médico) só consulta ou altera os recursos necessários ao seu trabalho; dados financeiros, feedbacks, documentos e agenda possuem leitura protegida pela API, não apenas menus ocultos.
 - **Financeiro**: cadastro, baixa e exclusão de notas fiscais vinculadas a guias aprovadas.
 - **Agenda compartilhada**: horários persistidos no servidor, checagem de conflitos, recorrência semanal de até 24 semanas e controle de confirmação, presença, falta e cancelamento. A presença consome uma sessão da autorização válida e libera o feedback já pré-preenchido.
 - **Busca/filtro** nas listagens de guias, pacientes, convênios e feedbacks.
@@ -108,7 +108,7 @@ README.md          este arquivo
 - **SQLite via `better-sqlite3`**: suficiente para um protótipo single-tenant-per-clinic, com API síncrona que simplifica transações (usadas nos fluxos de glosa/recurso).
 - **Migrations manuais em `db.js`**: cada coluna nova tem um `ALTER TABLE` idempotente, aplicado uma vez por coluna ausente — evita `DROP TABLE`/perda de dados ao evoluir o schema.
 - **Funções puras extraídas para `lib.js`**: o restante de `app.js` manipula DOM diretamente e não é facilmente testável; separar a lógica de negócio permite testá-la sem um DOM simulado.
-- **RBAC só no lado de escrita**: leitura (GET) continua aberta a qualquer usuário autenticado da clínica, porque o dashboard carrega todos os dados de uma vez no login. Restringir leitura por papel exigiria repensar esse carregamento; o que importa por segurança — impedir escrita indevida via chamada direta à API — já está coberto.
+- **RBAC também na leitura**: o front-end carrega apenas os conjuntos autorizados para o perfil conectado e a API responde `403` a consultas diretas sem permissão.
 - **Feedback com foto em base64 no SQLite**: adequado para o volume de um protótipo; não é como se guardaria arquivo em produção (isso viraria object storage / S3).
 
 ## Acesso da demonstração
@@ -121,7 +121,6 @@ Escolha uma clínica na tela de login (contas demo listadas na própria tela). O
 - A guia SP/SADT em PDF é um modelo imprimível baseado na estrutura visual fornecida, mas ainda precisa ser conferida campo a campo com a versão vigente do formulário da ANS antes do uso comercial.
 - A tabela de compatibilidade CID-procedimento cobre só os quatro procedimentos usados no demo — não é uma base de conhecimento clínico real.
 - Sem suporte a envio real para operadoras (webservice/portal) — o "envio" é a geração e download do XML.
-- RBAC cobre rotas de escrita; leitura não é restrita por papel (ver decisões técnicas acima).
 
 ## Próximos passos
 

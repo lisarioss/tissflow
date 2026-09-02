@@ -33,12 +33,8 @@ function auth(req, res, next) {
   }
 }
 
-// RBAC leve: restringe rotas de escrita por papel. Leitura (GET) continua
-// aberta para qualquer usuário autenticado da clínica - o dashboard carrega
-// tudo de uma vez hoje, então bloquear leitura por papel exigiria refatorar
-// o carregamento de dados do front-end. O que importa por segurança é
-// impedir que alguém sem o papel certo escreva/apague dados via chamada
-// direta à API, mesmo que a UI já esconda os botões correspondentes.
+// A autorização é aplicada no servidor, tanto nas alterações quanto nas
+// consultas sensíveis. A interface apenas reflete essas mesmas permissões.
 function requireRole(...roles) {
   return (req, res, next) => {
     if (!roles.includes(req.session.role)) return res.status(403).json({ error: 'Seu perfil não tem permissão para esta ação.' });
@@ -235,7 +231,7 @@ app.patch('/api/guides/:id/sessions/:index', auth, requireRole('admin', 'faturam
   res.json({ id: req.params.id, index, procedure: sessions[index].procedure });
 });
 
-app.get('/api/invoices', auth, (req, res) => {
+app.get('/api/invoices', auth, requireRole('admin', 'faturamento'), (req, res) => {
   const invoices = db.prepare(`SELECT invoices.id, invoices.guide_id AS guideId, invoices.provider, invoices.description, invoices.amount_cents AS amountCents, invoices.expected_date AS expectedDate, invoices.status, guides.patient FROM invoices LEFT JOIN guides ON guides.id = invoices.guide_id WHERE invoices.clinic_id = ? ORDER BY invoices.expected_date`).all(req.session.clinicId);
   res.json(invoices);
 });
@@ -521,7 +517,7 @@ function batchDetails(batch) {
   };
 }
 
-app.get('/api/batches', auth, (req, res) => {
+app.get('/api/batches', auth, requireRole('admin', 'faturamento'), (req, res) => {
   const batches = db.prepare(`SELECT billing_batches.id, billing_batches.insurer_id AS insurerId, insurers.name AS insurer,
       billing_batches.competence, billing_batches.delivery_format AS deliveryFormat, billing_batches.status,
       billing_batches.protocol, billing_batches.sent_at AS sentAt, billing_batches.xml_generated AS xmlGenerated,
@@ -621,7 +617,7 @@ app.delete('/api/batches/:id', auth, requireRole('admin', 'faturamento'), (req, 
   res.status(204).end();
 });
 
-app.get('/api/feedbacks', auth, (req, res) => {
+app.get('/api/feedbacks', auth, requireRole('admin', 'recepcao', 'medico'), (req, res) => {
   const feedbacks = db.prepare(`SELECT feedbacks.id, feedbacks.guide_id AS guideId, feedbacks.patient, feedbacks.professional, feedbacks.attendance_date AS attendanceDate, feedbacks.attendance_type AS attendanceType, feedbacks.content, feedbacks.photo, feedbacks.created_at AS createdAt, guides.competence AS guideCompetence, guides.procedure AS guideProcedure
     FROM feedbacks LEFT JOIN guides ON guides.id = feedbacks.guide_id AND guides.clinic_id = feedbacks.clinic_id
     WHERE feedbacks.clinic_id = ? ORDER BY feedbacks.created_at DESC`).all(req.session.clinicId);
@@ -653,7 +649,7 @@ app.delete('/api/feedbacks/:id', auth, requireRole('admin', 'recepcao', 'medico'
   res.status(204).end();
 });
 
-app.get('/api/glosas', auth, (req, res) => {
+app.get('/api/glosas', auth, requireRole('admin', 'faturamento'), (req, res) => {
   const glosas = db.prepare('SELECT id, guide_id AS guideId, code, reason, amount_cents AS amountCents, status, justification, created_at AS createdAt, resolved_at AS resolvedAt FROM glosas WHERE clinic_id = ? ORDER BY created_at DESC').all(req.session.clinicId);
   res.json(glosas);
 });

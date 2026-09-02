@@ -20,6 +20,52 @@
 .finance-status.received { color:var(--green); background:var(--mint); }
 .finance-filter { border:1px solid #dfe7e1; border-radius:5px; padding:9px 12px; background:#fbfcfb; color:var(--ink); font:11px Manrope, sans-serif; }
 .finance-delete { color:var(--red); background:transparent; font-size:10px; font-weight:700; padding:6px; }
+.delivery-format { display:inline-flex; align-items:center; padding:5px 8px; border-radius:999px; font-size:9px; font-weight:700; white-space:nowrap; }
+.delivery-format.pdf { color:var(--orange); background:var(--orange-bg); }
+.delivery-format.xml { color:var(--blue); background:var(--blue-bg); }
+.delivery-format.both { color:var(--green); background:var(--mint); }
+.batch-stats { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; margin-bottom:20px; }
+.batch-stats > div { padding:18px 20px; border:1px solid var(--line); border-radius:8px; background:#fff; box-shadow:var(--shadow); }
+.batch-stats span, .batch-summary span { display:block; color:var(--muted); font-size:10px; margin-bottom:7px; }
+.batch-stats strong { font-size:22px; }
+.batch-form { overflow:hidden; margin-bottom:22px; }
+.batch-form .panel-header { border-bottom:1px solid var(--line); }
+.batch-form .form-section { padding:20px 21px 0; margin:0; border:0; }
+.batch-form .form-footer { padding:0 21px 21px; }
+.batch-guide-label { display:block; margin:18px 0 8px; color:#63736b; font-size:10px; font-weight:700; }
+.batch-guide-options { display:grid; gap:8px; }
+.batch-guide-option { display:flex; align-items:center; gap:10px; padding:11px 13px; border:1px solid var(--line); border-radius:6px; background:#f8fbf9; cursor:pointer; }
+.batch-guide-option input { accent-color:var(--green); }
+.batch-guide-option strong, .batch-guide-option small { display:block; }
+.batch-guide-option strong { font-size:10px; }
+.batch-guide-option small { color:var(--muted); font-size:9px; margin-top:3px; }
+.batch-empty { color:var(--muted); font-size:10px; padding:14px; border:1px dashed var(--line); border-radius:6px; }
+.batch-list { display:grid; gap:16px; }
+.batch-card { padding:20px; border:1px solid var(--line); border-radius:8px; background:#fff; box-shadow:var(--shadow); }
+.batch-card-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
+.batch-card-heading h2 { margin:2px 0 4px; font-size:17px; }
+.batch-card-heading small { color:var(--muted); }
+.batch-summary { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; margin:17px 0 12px; }
+.batch-summary > div { padding:12px; border-radius:6px; background:#f7faf8; }
+.batch-summary strong { font-size:11px; }
+.batch-requirements { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:14px; }
+.requirement { padding:6px 9px; border-radius:999px; font-size:9px; font-weight:700; }
+.requirement.done { color:var(--green); background:var(--mint); }
+.requirement.pending { color:var(--orange); background:var(--orange-bg); }
+.batch-guide-list { border-top:1px solid var(--line); }
+.batch-guide-row { display:flex; align-items:center; justify-content:space-between; gap:14px; padding:11px 2px; border-bottom:1px solid #eef1ef; }
+.batch-guide-row strong, .batch-guide-row small { display:block; }
+.batch-guide-row strong { font-size:10px; }
+.batch-guide-row small { color:var(--muted); font-size:9px; margin-top:3px; }
+.batch-guide-row label { display:flex; align-items:center; gap:7px; color:#53625b; font-size:9px; }
+.batch-guide-row input { accent-color:var(--green); }
+.batch-actions { display:grid; grid-template-columns:auto minmax(155px,.7fr) minmax(190px,1fr) auto; gap:9px; margin-top:15px; }
+.batch-actions select, .batch-actions input { border:1px solid #dfe7e1; border-radius:5px; padding:10px; background:#fbfcfb; color:var(--ink); font:10px Manrope,sans-serif; }
+.status.draft { color:var(--muted); background:#eef2f0; }
+.status.ready { color:var(--green); background:var(--mint); }
+.status.processing { color:var(--blue); background:var(--blue-bg); }
+@media (max-width:900px) { .batch-actions { grid-template-columns:1fr 1fr; } }
+@media (max-width:620px) { .batch-stats, .batch-summary, .batch-actions { grid-template-columns:1fr; } .batch-guide-row { align-items:flex-start; flex-direction:column; } }
 .report-status-list { display:grid; grid-template-columns:repeat(4, 1fr); gap:10px; padding:0 21px 21px; }
 .report-status-list div { background:#f7faf8; border:1px solid var(--line); border-radius:6px; padding:13px; }
 .report-status-list span { display:block; color:var(--muted); font-size:10px; margin-bottom:8px; }

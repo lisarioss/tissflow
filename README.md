@@ -10,7 +10,8 @@ Protótipo de portfólio para operação de faturamento clínico. Demonstra o ci
   - Vigência do plano do beneficiário
   - Quantidade de atendimentos vs. quantidade pré-autorizada
   - Compatibilidade demonstrativa entre CID-10 e procedimento (tabela simplificada, não substitui a tabela oficial da ANS)
-- **Convênios**: CRUD de operadoras (nome, código ANS, contato, procedimentos aceitos) que alimenta dinamicamente os seletores de guia e de paciente.
+- **Convênios**: CRUD de operadoras (nome, código ANS, contato, forma de envio e procedimentos aceitos) que alimenta dinamicamente os seletores de guia e de paciente.
+- **Lotes de faturamento**: agrupa guias por convênio e competência, confere os PDFs assinados, gera o XML exigido, registra o protocolo e bloqueia o envio enquanto houver pendências.
 - **Feedback de atendimento**: profissionais registram evolução/observações por atendimento, com foto opcional e vínculo à guia faturada quando o paciente é de convênio; geração de PDF do feedback.
 - **Autenticação real** via JWT + bcrypt, com dados persistidos em SQLite e isolados por `clinic_id` em todas as consultas.
 - **RBAC nas rotas de escrita**: cada papel (admin, faturamento, recepção, médico) só cria/edita/exclui os recursos que a navegação já expõe para ele — reforçado no servidor, não só escondendo botões na UI.

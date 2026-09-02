@@ -93,10 +93,32 @@ db.exec(`
     ans_code TEXT,
     contact_email TEXT,
     contact_phone TEXT,
+    delivery_format TEXT NOT NULL DEFAULT 'both' CHECK (delivery_format IN ('pdf', 'xml', 'both')),
     accepted_procedures TEXT NOT NULL DEFAULT '[]',
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(clinic_id, name)
   );
+  CREATE TABLE IF NOT EXISTS billing_batches (
+    id TEXT PRIMARY KEY,
+    clinic_id TEXT NOT NULL REFERENCES clinics(id),
+    insurer_id TEXT NOT NULL REFERENCES insurers(id),
+    competence TEXT NOT NULL,
+    delivery_format TEXT NOT NULL CHECK (delivery_format IN ('pdf', 'xml', 'both')),
+    status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'ready', 'sent', 'processing', 'approved', 'error')),
+    protocol TEXT,
+    sent_at TEXT,
+    xml_generated INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(clinic_id, insurer_id, competence)
+  );
+  CREATE TABLE IF NOT EXISTS billing_batch_guides (
+    batch_id TEXT NOT NULL REFERENCES billing_batches(id) ON DELETE CASCADE,
+    guide_id TEXT NOT NULL REFERENCES guides(id),
+    signed_pdf_received INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY(batch_id, guide_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_billing_batches_clinic ON billing_batches(clinic_id, competence);
+  CREATE INDEX IF NOT EXISTS idx_billing_batch_guides_guide ON billing_batch_guides(guide_id);
   CREATE TABLE IF NOT EXISTS feedbacks (
     id TEXT PRIMARY KEY,
     clinic_id TEXT NOT NULL REFERENCES clinics(id),
@@ -186,6 +208,7 @@ if (!settingsColumns.has('letterhead_header_mm')) db.exec('ALTER TABLE clinic_se
 if (!settingsColumns.has('letterhead_footer_mm')) db.exec('ALTER TABLE clinic_settings ADD COLUMN letterhead_footer_mm INTEGER NOT NULL DEFAULT 25');
 const insurerColumns = new Set(db.prepare('PRAGMA table_info(insurers)').all().map(column => column.name));
 if (!insurerColumns.has('procedure_rules')) db.exec("ALTER TABLE insurers ADD COLUMN procedure_rules TEXT NOT NULL DEFAULT '[]'");
+if (!insurerColumns.has('delivery_format')) db.exec("ALTER TABLE insurers ADD COLUMN delivery_format TEXT NOT NULL DEFAULT 'both' CHECK (delivery_format IN ('pdf', 'xml', 'both'))");
 const clinicCount = db.prepare('SELECT COUNT(*) AS count FROM clinics').get().count;
 if (clinicCount === 0) {
   const insertClinic = db.prepare('INSERT INTO clinics (id, name, unit) VALUES (?, ?, ?)');

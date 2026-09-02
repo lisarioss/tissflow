@@ -53,6 +53,10 @@ function parseJsonArray(value) {
   try { const parsed = JSON.parse(value || '[]'); return Array.isArray(parsed) ? parsed : []; } catch { return []; }
 }
 
+function guideCompetence(guide) {
+  return guide.competence || parseJsonArray(guide.sessions_json)[0]?.date?.slice(0, 7) || '';
+}
+
 function mapClinicSettings(row, clinic) {
   return {
     legalName: row?.legal_name || clinic?.name || '', tradeName: row?.trade_name || clinic?.name || '',
@@ -225,7 +229,7 @@ app.delete('/api/invoices/:id', auth, requireRole('admin', 'faturamento'), (req,
 });
 
 app.get('/api/insurers', auth, (req, res) => {
-  const insurers = db.prepare('SELECT id, name, ans_code AS ansCode, contact_email AS contactEmail, contact_phone AS contactPhone, accepted_procedures AS acceptedProcedures, procedure_rules AS procedureRules FROM insurers WHERE clinic_id = ? ORDER BY name').all(req.session.clinicId);
+  const insurers = db.prepare('SELECT id, name, ans_code AS ansCode, contact_email AS contactEmail, contact_phone AS contactPhone, delivery_format AS deliveryFormat, accepted_procedures AS acceptedProcedures, procedure_rules AS procedureRules FROM insurers WHERE clinic_id = ? ORDER BY name').all(req.session.clinicId);
   res.json(insurers.map(insurer => ({ ...insurer, acceptedProcedures: JSON.parse(insurer.acceptedProcedures || '[]'), procedureRules: JSON.parse(insurer.procedureRules || '[]') })));
 });
 
@@ -242,14 +246,15 @@ function unknownProcedureCodes(rules) {
 }
 
 app.post('/api/insurers', auth, requireRole('admin'), (req, res) => {
-  const { id, name, ansCode, contactEmail, contactPhone, acceptedProcedures = [], procedureRules = [] } = req.body;
+  const { id, name, ansCode, contactEmail, contactPhone, deliveryFormat = 'both', acceptedProcedures = [], procedureRules = [] } = req.body;
   if (!id || !name) return res.status(400).json({ error: 'Nome e identificador são obrigatórios.' });
+  if (!['pdf', 'xml', 'both'].includes(deliveryFormat)) return res.status(400).json({ error: 'Forma de envio inválida.' });
   try {
     const rules = normalizeProcedureRules(procedureRules);
     if (rules.some(rule => rule.validFrom && rule.validTo && rule.validFrom > rule.validTo)) return res.status(400).json({ error: 'A data final da vigência não pode ser anterior à data inicial.' });
     const unknownCodes = unknownProcedureCodes(rules);
     if (unknownCodes.length) return res.status(400).json({ error: `Código TUSS não encontrado na versão oficial: ${unknownCodes.join(', ')}.` });
-    db.prepare('INSERT INTO insurers (id, clinic_id, name, ans_code, contact_email, contact_phone, accepted_procedures, procedure_rules) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(id, req.session.clinicId, name, ansCode || null, contactEmail || null, contactPhone || null, JSON.stringify(rules.length ? [...new Set(rules.map(rule => rule.code))] : acceptedProcedures), JSON.stringify(rules));
+    db.prepare('INSERT INTO insurers (id, clinic_id, name, ans_code, contact_email, contact_phone, delivery_format, accepted_procedures, procedure_rules) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, req.session.clinicId, name, ansCode || null, contactEmail || null, contactPhone || null, deliveryFormat, JSON.stringify(rules.length ? [...new Set(rules.map(rule => rule.code))] : acceptedProcedures), JSON.stringify(rules));
     res.status(201).json({ id });
   } catch (error) {
     res.status(409).json({ error: error.message });
@@ -257,15 +262,16 @@ app.post('/api/insurers', auth, requireRole('admin'), (req, res) => {
 });
 
 app.put('/api/insurers/:id', auth, requireRole('admin'), (req, res) => {
-  const { name, ansCode, contactEmail, contactPhone, acceptedProcedures = [], procedureRules = [] } = req.body;
+  const { name, ansCode, contactEmail, contactPhone, deliveryFormat = 'both', acceptedProcedures = [], procedureRules = [] } = req.body;
   if (!name) return res.status(400).json({ error: 'Nome é obrigatório.' });
+  if (!['pdf', 'xml', 'both'].includes(deliveryFormat)) return res.status(400).json({ error: 'Forma de envio inválida.' });
   try {
     const rules = normalizeProcedureRules(procedureRules);
     if (rules.some(rule => rule.validFrom && rule.validTo && rule.validFrom > rule.validTo)) return res.status(400).json({ error: 'A data final da vigência não pode ser anterior à data inicial.' });
     const unknownCodes = unknownProcedureCodes(rules);
     if (unknownCodes.length) return res.status(400).json({ error: `Código TUSS não encontrado na versão oficial: ${unknownCodes.join(', ')}.` });
     const codes = rules.length ? [...new Set(rules.map(rule => rule.code))] : acceptedProcedures;
-    const result = db.prepare('UPDATE insurers SET name = ?, ans_code = ?, contact_email = ?, contact_phone = ?, accepted_procedures = ?, procedure_rules = ? WHERE id = ? AND clinic_id = ?').run(name, ansCode || null, contactEmail || null, contactPhone || null, JSON.stringify(codes), JSON.stringify(rules), req.params.id, req.session.clinicId);
+    const result = db.prepare('UPDATE insurers SET name = ?, ans_code = ?, contact_email = ?, contact_phone = ?, delivery_format = ?, accepted_procedures = ?, procedure_rules = ? WHERE id = ? AND clinic_id = ?').run(name, ansCode || null, contactEmail || null, contactPhone || null, deliveryFormat, JSON.stringify(codes), JSON.stringify(rules), req.params.id, req.session.clinicId);
     if (!result.changes) return res.status(404).json({ error: 'Convênio não encontrado.' });
     res.json({ id: req.params.id });
   } catch (error) {
@@ -276,6 +282,118 @@ app.put('/api/insurers/:id', auth, requireRole('admin'), (req, res) => {
 app.delete('/api/insurers/:id', auth, requireRole('admin'), (req, res) => {
   const result = db.prepare('DELETE FROM insurers WHERE id = ? AND clinic_id = ?').run(req.params.id, req.session.clinicId);
   if (!result.changes) return res.status(404).json({ error: 'Convênio não encontrado.' });
+  res.status(204).end();
+});
+
+function batchDetails(batch) {
+  const guides = db.prepare(`SELECT guides.id, guides.patient, guides.procedure, guides.insurer, guides.competence,
+      guides.value_cents AS valueCents, guides.status, billing_batch_guides.signed_pdf_received AS signedPdfReceived
+    FROM billing_batch_guides
+    JOIN guides ON guides.id = billing_batch_guides.guide_id
+    WHERE billing_batch_guides.batch_id = ?
+    ORDER BY guides.patient, guides.id`).all(batch.id);
+  const requiresPdf = batch.deliveryFormat === 'pdf' || batch.deliveryFormat === 'both';
+  const requiresXml = batch.deliveryFormat === 'xml' || batch.deliveryFormat === 'both';
+  const missingSignedPdfs = requiresPdf ? guides.filter(guide => !guide.signedPdfReceived).length : 0;
+  const xmlPending = requiresXml && !batch.xmlGenerated;
+  return {
+    ...batch,
+    guideCount: guides.length,
+    totalValueCents: guides.reduce((sum, guide) => sum + Number(guide.valueCents || 0), 0),
+    missingSignedPdfs,
+    xmlPending,
+    readyForSending: guides.length > 0 && missingSignedPdfs === 0 && !xmlPending,
+    guides: guides.map(guide => ({ ...guide, signedPdfReceived: Boolean(guide.signedPdfReceived) }))
+  };
+}
+
+app.get('/api/batches', auth, (req, res) => {
+  const batches = db.prepare(`SELECT billing_batches.id, billing_batches.insurer_id AS insurerId, insurers.name AS insurer,
+      billing_batches.competence, billing_batches.delivery_format AS deliveryFormat, billing_batches.status,
+      billing_batches.protocol, billing_batches.sent_at AS sentAt, billing_batches.xml_generated AS xmlGenerated,
+      billing_batches.created_at AS createdAt
+    FROM billing_batches
+    JOIN insurers ON insurers.id = billing_batches.insurer_id
+    WHERE billing_batches.clinic_id = ?
+    ORDER BY billing_batches.competence DESC, billing_batches.created_at DESC`).all(req.session.clinicId);
+  res.json(batches.map(batch => batchDetails({ ...batch, xmlGenerated: Boolean(batch.xmlGenerated) })));
+});
+
+app.post('/api/batches', auth, requireRole('admin', 'faturamento'), (req, res) => {
+  const { insurerId, competence, guideIds = [] } = req.body;
+  if (!insurerId || !/^\d{4}-\d{2}$/.test(competence || '') || !Array.isArray(guideIds) || !guideIds.length) {
+    return res.status(400).json({ error: 'Informe convênio, competência e pelo menos uma guia.' });
+  }
+  const insurer = db.prepare('SELECT id, name, delivery_format AS deliveryFormat FROM insurers WHERE id = ? AND clinic_id = ?').get(insurerId, req.session.clinicId);
+  if (!insurer) return res.status(404).json({ error: 'Convênio não encontrado.' });
+  const uniqueGuideIds = [...new Set(guideIds.map(String))];
+  const placeholders = uniqueGuideIds.map(() => '?').join(',');
+  const guides = db.prepare(`SELECT id, insurer, competence, sessions_json FROM guides WHERE clinic_id = ? AND id IN (${placeholders})`).all(req.session.clinicId, ...uniqueGuideIds);
+  if (guides.length !== uniqueGuideIds.length) return res.status(400).json({ error: 'Uma ou mais guias não pertencem à clínica.' });
+  if (guides.some(guide => guide.insurer !== insurer.name || guideCompetence(guide) !== competence)) return res.status(400).json({ error: 'Todas as guias devem pertencer ao convênio e à competência do lote.' });
+  const alreadyAssigned = db.prepare(`SELECT guide_id AS guideId FROM billing_batch_guides WHERE guide_id IN (${placeholders})`).all(...uniqueGuideIds);
+  if (alreadyAssigned.length) return res.status(409).json({ error: `Guia já incluída em outro lote: ${alreadyAssigned.map(item => item.guideId).join(', ')}.` });
+  const year = competence.slice(0, 4);
+  const lastId = db.prepare("SELECT id FROM billing_batches WHERE clinic_id = ? AND id LIKE ? ORDER BY id DESC LIMIT 1").get(req.session.clinicId, `L-${year}-%`)?.id;
+  const nextNumber = Number(lastId?.split('-').pop() || 0) + 1;
+  const id = `L-${year}-${String(nextNumber).padStart(4, '0')}`;
+  try {
+    db.transaction(() => {
+      db.prepare('INSERT INTO billing_batches (id, clinic_id, insurer_id, competence, delivery_format) VALUES (?, ?, ?, ?, ?)').run(id, req.session.clinicId, insurer.id, competence, insurer.deliveryFormat);
+      const insertGuide = db.prepare('INSERT INTO billing_batch_guides (batch_id, guide_id) VALUES (?, ?)');
+      uniqueGuideIds.forEach(guideId => insertGuide.run(id, guideId));
+    })();
+    res.status(201).json({ id });
+  } catch (error) {
+    res.status(409).json({ error: error.message.includes('UNIQUE') ? 'Já existe um lote para esse convênio e competência.' : error.message });
+  }
+});
+
+app.patch('/api/batches/:id/guides/:guideId', auth, requireRole('admin', 'faturamento'), (req, res) => {
+  const batch = db.prepare('SELECT id FROM billing_batches WHERE id = ? AND clinic_id = ?').get(req.params.id, req.session.clinicId);
+  if (!batch) return res.status(404).json({ error: 'Lote não encontrado.' });
+  const result = db.prepare('UPDATE billing_batch_guides SET signed_pdf_received = ? WHERE batch_id = ? AND guide_id = ?').run(req.body.signedPdfReceived ? 1 : 0, batch.id, req.params.guideId);
+  if (!result.changes) return res.status(404).json({ error: 'Guia não encontrada neste lote.' });
+  res.json({ batchId: batch.id, guideId: req.params.guideId, signedPdfReceived: Boolean(req.body.signedPdfReceived) });
+});
+
+function escapeXml(value) {
+  return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+}
+
+app.get('/api/batches/:id/xml', auth, requireRole('admin', 'faturamento'), (req, res) => {
+  const batch = db.prepare(`SELECT billing_batches.*, insurers.name AS insurer, insurers.ans_code AS ansCode
+    FROM billing_batches JOIN insurers ON insurers.id = billing_batches.insurer_id
+    WHERE billing_batches.id = ? AND billing_batches.clinic_id = ?`).get(req.params.id, req.session.clinicId);
+  if (!batch) return res.status(404).json({ error: 'Lote não encontrado.' });
+  if (batch.delivery_format === 'pdf') return res.status(400).json({ error: 'Este convênio exige somente PDF assinado.' });
+  const guides = db.prepare(`SELECT guides.* FROM billing_batch_guides JOIN guides ON guides.id = billing_batch_guides.guide_id WHERE billing_batch_guides.batch_id = ? ORDER BY guides.id`).all(batch.id);
+  const guideXml = guides.map(guide => `<guia><numeroGuiaPrestador>${escapeXml(guide.id)}</numeroGuiaPrestador><beneficiario>${escapeXml(guide.patient)}</beneficiario><numeroCarteira>${escapeXml(guide.card_number)}</numeroCarteira><codigoTUSS>${escapeXml(guide.service_code)}</codigoTUSS><quantidade>${escapeXml(guide.quantity)}</quantidade><valorTotal>${(Number(guide.value_cents || 0) / 100).toFixed(2)}</valorTotal></guia>`).join('');
+  const xml = `<?xml version="1.0" encoding="UTF-8"?><mensagemTISS versao="4.01.00"><loteGuias><numeroLote>${escapeXml(batch.id)}</numeroLote><registroANS>${escapeXml(batch.ansCode)}</registroANS><competencia>${escapeXml(batch.competence)}</competencia><guias>${guideXml}</guias></loteGuias></mensagemTISS>`;
+  db.prepare('UPDATE billing_batches SET xml_generated = 1 WHERE id = ? AND clinic_id = ?').run(batch.id, req.session.clinicId);
+  res.setHeader('Content-Type', 'application/xml; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="lote-${batch.id}.xml"`);
+  res.send(xml);
+});
+
+app.patch('/api/batches/:id', auth, requireRole('admin', 'faturamento'), (req, res) => {
+  const allowedStatuses = ['draft', 'ready', 'sent', 'processing', 'approved', 'error'];
+  const status = allowedStatuses.includes(req.body.status) ? req.body.status : 'draft';
+  const protocol = String(req.body.protocol || '').trim();
+  const batch = db.prepare(`SELECT id, delivery_format AS deliveryFormat, xml_generated AS xmlGenerated FROM billing_batches WHERE id = ? AND clinic_id = ?`).get(req.params.id, req.session.clinicId);
+  if (!batch) return res.status(404).json({ error: 'Lote não encontrado.' });
+  const readiness = batchDetails({ ...batch, xmlGenerated: Boolean(batch.xmlGenerated) });
+  if (['ready', 'sent', 'processing', 'approved'].includes(status) && !readiness.readyForSending) return res.status(409).json({ error: 'Conclua os PDFs assinados e/ou gere o XML antes de liberar o lote.' });
+  if (['sent', 'processing', 'approved'].includes(status) && !protocol) return res.status(400).json({ error: 'Informe o protocolo da operadora para esse status.' });
+  db.prepare(`UPDATE billing_batches SET status = ?, protocol = ?, sent_at = CASE WHEN ? = 'sent' AND sent_at IS NULL THEN CURRENT_TIMESTAMP ELSE sent_at END WHERE id = ? AND clinic_id = ?`).run(status, protocol || null, status, batch.id, req.session.clinicId);
+  res.json({ id: batch.id, status, protocol });
+});
+
+app.delete('/api/batches/:id', auth, requireRole('admin', 'faturamento'), (req, res) => {
+  const batch = db.prepare('SELECT status FROM billing_batches WHERE id = ? AND clinic_id = ?').get(req.params.id, req.session.clinicId);
+  if (!batch) return res.status(404).json({ error: 'Lote não encontrado.' });
+  if (batch.status !== 'draft') return res.status(409).json({ error: 'Somente lotes em preparação podem ser excluídos.' });
+  db.prepare('DELETE FROM billing_batches WHERE id = ? AND clinic_id = ?').run(req.params.id, req.session.clinicId);
   res.status(204).end();
 });
 

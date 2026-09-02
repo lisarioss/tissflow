@@ -20,10 +20,10 @@ const clinicStorageKey = key => `tiss-${activeClinicId}-${key}`;
 const apiBase = '/api';
 const moneyFormatter = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 const defaultGuides = [
-  { id: 'G-2026-00481', patient: 'Helena Martins', procedure: 'Consulta ambulatorial', insurer: 'Unimed', status: 'approved', label: 'Aprovada', date: '18 ago, 2026', value: 'R$ 180,00' },
-  { id: 'G-2026-00480', patient: 'Rafael Nogueira', procedure: 'Sessão de fisioterapia', insurer: 'Bradesco Saúde', status: 'review', label: 'Em análise', date: '18 ago, 2026', value: 'R$ 120,00' },
-  { id: 'G-2026-00479', patient: 'Bianca Torres', procedure: 'Ultrassonografia', insurer: 'SulAmérica', status: 'error', label: 'Com pendência', date: '17 ago, 2026', value: 'R$ 260,00' },
-  { id: 'G-2026-00478', patient: 'João Pedro Lima', procedure: 'Consulta ambulatorial', insurer: 'Amil', status: 'sent', label: 'Enviada', date: '17 ago, 2026', value: 'R$ 180,00' }
+  { id: 'G-2026-00481', patient: 'Helena Martins', procedure: 'Consulta ambulatorial', insurer: 'Unimed', competence: '2026-08', status: 'approved', label: 'Aprovada', date: '18 ago, 2026', value: 'R$ 180,00' },
+  { id: 'G-2026-00480', patient: 'Rafael Nogueira', procedure: 'Sessão de fisioterapia', insurer: 'Bradesco Saúde', competence: '2026-08', status: 'review', label: 'Em análise', date: '18 ago, 2026', value: 'R$ 120,00' },
+  { id: 'G-2026-00479', patient: 'Bianca Torres', procedure: 'Ultrassonografia', insurer: 'SulAmérica', competence: '2026-08', status: 'error', label: 'Com pendência', date: '17 ago, 2026', value: 'R$ 260,00' },
+  { id: 'G-2026-00478', patient: 'João Pedro Lima', procedure: 'Consulta ambulatorial', insurer: 'Amil', competence: '2026-08', status: 'sent', label: 'Enviada', date: '17 ago, 2026', value: 'R$ 180,00' }
 ];
 let guides = JSON.parse(localStorage.getItem(clinicStorageKey('guides')) || 'null') || defaultGuides;
 const defaultPatients = [
@@ -56,18 +56,20 @@ const insurerLogos = {
   'Promédica': { logo: 'PROMÉDICA', logoPath: 'assets/planos/promedica.png' }
 };
 const defaultInsurers = [
-  { id: 'INS-001', name: 'Unimed', ansCode: '004701', contactEmail: '', contactPhone: '', acceptedProcedures: ['10101012', '50000470', '50000000', '40901122'] },
-  { id: 'INS-002', name: 'Bradesco Saúde', ansCode: '005711', contactEmail: '', contactPhone: '', acceptedProcedures: ['10101012', '50000470', '40901122'] },
-  { id: 'INS-003', name: 'SulAmérica', ansCode: '006246', contactEmail: '', contactPhone: '', acceptedProcedures: ['10101012', '50000470'] },
-  { id: 'INS-004', name: 'Amil', ansCode: '326305', contactEmail: '', contactPhone: '', acceptedProcedures: ['10101012'] },
-  { id: 'INS-005', name: 'Promédica', ansCode: '', contactEmail: '', contactPhone: '', acceptedProcedures: [] }
+  { id: 'INS-001', name: 'Unimed', ansCode: '004701', contactEmail: '', contactPhone: '', deliveryFormat: 'both', acceptedProcedures: ['10101012', '50000470', '50000000', '40901122'] },
+  { id: 'INS-002', name: 'Bradesco Saúde', ansCode: '005711', contactEmail: '', contactPhone: '', deliveryFormat: 'pdf', acceptedProcedures: ['10101012', '50000470', '40901122'] },
+  { id: 'INS-003', name: 'SulAmérica', ansCode: '006246', contactEmail: '', contactPhone: '', deliveryFormat: 'xml', acceptedProcedures: ['10101012', '50000470'] },
+  { id: 'INS-004', name: 'Amil', ansCode: '326305', contactEmail: '', contactPhone: '', deliveryFormat: 'both', acceptedProcedures: ['10101012'] },
+  { id: 'INS-005', name: 'Promédica', ansCode: '', contactEmail: '', contactPhone: '', deliveryFormat: 'pdf', acceptedProcedures: [] }
 ];
 let insurers = JSON.parse(localStorage.getItem(clinicStorageKey('insurers')) || 'null') || defaultInsurers;
 function saveInsurers() { localStorage.setItem(clinicStorageKey('insurers'), JSON.stringify(insurers)); }
+let batches = JSON.parse(localStorage.getItem(clinicStorageKey('batches')) || 'null') || [];
+function saveBatches() { localStorage.setItem(clinicStorageKey('batches'), JSON.stringify(batches)); }
 let feedbacks = JSON.parse(localStorage.getItem(clinicStorageKey('feedbacks')) || 'null') || [];
 function saveFeedbacks() { localStorage.setItem(clinicStorageKey('feedbacks'), JSON.stringify(feedbacks)); }
 let clinicSettings = JSON.parse(localStorage.getItem(clinicStorageKey('settings')) || 'null') || { tradeName: clinicProfiles[activeClinicId]?.name || '', legalName: '', cnpj: '', phone: '', instagram: '', address: '', city: '', state: '', postalCode: '', logoDataUrl: '', letterheadDataUrl: '', letterheadHeaderMm: 35, letterheadFooterMm: 25, owners: [], professionals: [] };
-const views = { overview: 'Visão geral', agenda: 'Agenda', guides: 'Guias TISS', financeiro: 'Financeiro', users: 'Usuários', patients: 'Pacientes', convenios: 'Convênios', feedback: 'Feedbacks', reports: 'Relatórios', settings: 'Configurações' };
+const views = { overview: 'Visão geral', agenda: 'Agenda', guides: 'Guias TISS', batches: 'Lotes de faturamento', financeiro: 'Financeiro', users: 'Usuários', patients: 'Pacientes', convenios: 'Convênios', feedback: 'Feedbacks', reports: 'Relatórios', settings: 'Configurações' };
 const appView = document.querySelector('#app-view');
 const breadcrumb = document.querySelector('#breadcrumb');
 const toast = document.querySelector('#toast');
@@ -111,8 +113,8 @@ function syncContractRules() {
 }
 new MutationObserver(enhanceInsurerForm).observe(appView, { childList: true, subtree: true });
 const rolePermissions = {
-  admin: ['overview', 'agenda', 'guides', 'financeiro', 'users', 'patients', 'convenios', 'feedback', 'reports', 'settings'],
-  faturamento: ['overview', 'guides', 'financeiro', 'reports', 'users'],
+  admin: ['overview', 'agenda', 'guides', 'batches', 'financeiro', 'users', 'patients', 'convenios', 'feedback', 'reports', 'settings'],
+  faturamento: ['overview', 'guides', 'batches', 'financeiro', 'reports', 'users'],
   recepcao: ['overview', 'agenda', 'patients', 'feedback', 'users'],
   medico: ['overview', 'agenda', 'patients', 'feedback']
 };
@@ -220,13 +222,14 @@ document.addEventListener('submit', event => {
   showToast(message);
   document.querySelector(target)?.focus();
 }, true);
-function normalizeGuide(guide) { return { ...guide, sessions: guide.sessions || [], status: guide.status, label: { sent: 'Enviada', review: 'Em análise', approved: 'Aprovada', error: 'Com glosa', recurso: 'Recurso enviado' }[guide.status] || guide.status, value: formatMoney((guide.valueCents || 0) / 100), unitValue: Number(guide.unitValueCents || 0) / 100, date: guide.createdAt ? new Date(guide.createdAt).toLocaleDateString('pt-BR') : '' }; }
+function normalizeGuide(guide) { const sessions = guide.sessions || []; const competence = guide.competence || sessions[0]?.date?.slice(0, 7) || ''; return { ...guide, competence, sessions, status: guide.status, label: { sent: 'Enviada', review: 'Em análise', approved: 'Aprovada', error: 'Com glosa', recurso: 'Recurso enviado' }[guide.status] || guide.status, value: formatMoney((guide.valueCents || 0) / 100), unitValue: Number(guide.unitValueCents || 0) / 100, date: guide.createdAt ? new Date(guide.createdAt).toLocaleDateString('pt-BR') : '' }; }
 function normalizeInvoice(invoice) { return { ...invoice, amount: Number(invoice.amountCents || 0) / 100 }; }
 function normalizeGlosa(glosa) { return { ...glosa, amount: Number(glosa.amountCents || 0) / 100 }; }
+function normalizeBatch(batch) { return { ...batch, totalValue: Number(batch.totalValueCents || 0) / 100, guides: batch.guides || [] }; }
 async function loadApiData() {
   if (!activeSession?.token) return;
   try {
-    const [apiGuides, apiInvoices, apiPatients, apiGlosas, apiInsurers, apiFeedbacks, apiSettings] = await Promise.all([apiRequest('/guides'), apiRequest('/invoices'), apiRequest('/patients'), apiRequest('/glosas'), apiRequest('/insurers'), apiRequest('/feedbacks'), apiRequest('/settings')]);
+    const [apiGuides, apiInvoices, apiPatients, apiGlosas, apiInsurers, apiFeedbacks, apiSettings, apiBatches] = await Promise.all([apiRequest('/guides'), apiRequest('/invoices'), apiRequest('/patients'), apiRequest('/glosas'), apiRequest('/insurers'), apiRequest('/feedbacks'), apiRequest('/settings'), apiRequest('/batches')]);
     guides = apiGuides.map(normalizeGuide);
     invoices = apiInvoices.map(normalizeInvoice);
     if (apiPatients.length) patients = apiPatients;
@@ -234,6 +237,7 @@ async function loadApiData() {
     if (apiInsurers.length) insurers = apiInsurers;
     feedbacks = apiFeedbacks;
     clinicSettings = apiSettings;
+    batches = apiBatches.map(normalizeBatch);
     render();
   } catch (error) {
     showToast(`Modo local: ${error.message}`);
@@ -332,6 +336,43 @@ function guideRowsHtml(term) {
   return filtered.map(g => `<tr><td><strong>${g.id}</strong><small>${g.date}</small></td><td>${g.patient}<small>${g.procedure}</small></td><td>${g.insurer}</td><td><span class="guide-type-tag">${g.guideType === 'consulta' ? 'Consulta' : 'SP/SADT'}</span></td><td>${statusTag(g)}</td><td><strong>${g.value}</strong></td><td><button class="text-button" data-action="open-guide-folder" data-guide-id="${g.id}">Abrir pasta →</button></td></tr>`).join('');
 }
 function guideList() { return `<div class="page-heading"><div><p class="eyebrow">Operação de faturamento</p><h1>Guias TISS</h1><p class="heading-copy">Acompanhe o ciclo de cada guia, do preenchimento ao envio.</p></div><div class="folder-actions"><button class="secondary-button" data-action="new-guide" data-guide-type="consulta">＋ Nova guia de Consulta</button><button class="primary-button" data-action="new-guide" data-guide-type="sp_sadt">＋ Nova guia SP/SADT</button></div></div><div class="panel"><div class="panel-header"><div><h2 class="panel-title">Todas as guias</h2><p class="panel-subtitle">${guides.length} registros salvos neste navegador</p></div><button class="secondary-button" data-action="clear-guides">Limpar dados demo</button></div><div class="search-bar"><input type="search" id="guide-search" placeholder="Buscar por paciente, convênio, procedimento ou nº da guia" /></div><table><thead><tr><th>Guia</th><th>Paciente</th><th>Convênio</th><th>Tipo</th><th>Status</th><th>Valor</th><th></th></tr></thead><tbody id="guide-table-body">${guideRowsHtml('')}</tbody></table></div>${statusSimulator()}`; }
+
+const batchStatusLabels = { draft: 'Em preparação', ready: 'Pronto para envio', sent: 'Enviado', processing: 'Em processamento', approved: 'Aprovado', error: 'Com erro' };
+const deliveryFormatLabels = { pdf: 'PDF assinado', xml: 'XML', both: 'PDF assinado + XML' };
+function batchGuideOptions(insurerName = '', competence = '') {
+  const assignedIds = new Set(batches.flatMap(batch => batch.guides.map(guide => guide.id)));
+  const eligible = guides.filter(guide => guide.insurer === insurerName && guide.competence === competence && !assignedIds.has(guide.id));
+  if (!insurerName || !competence) return '<p class="batch-empty">Selecione o convênio e a competência para localizar as guias.</p>';
+  if (!eligible.length) return '<p class="batch-empty">Nenhuma guia disponível para essa combinação.</p>';
+  return eligible.map(guide => `<label class="batch-guide-option"><input type="checkbox" name="guideIds" value="${guide.id}" /><span><strong>${guide.id} · ${guide.patient}</strong><small>${guide.procedure} · ${guide.value}</small></span></label>`).join('');
+}
+function batchRequirementHtml(batch) {
+  const requiresPdf = batch.deliveryFormat === 'pdf' || batch.deliveryFormat === 'both';
+  const requiresXml = batch.deliveryFormat === 'xml' || batch.deliveryFormat === 'both';
+  return `<div class="batch-requirements">
+    <span class="requirement ${!requiresPdf || batch.missingSignedPdfs === 0 ? 'done' : 'pending'}">${requiresPdf ? `${batch.missingSignedPdfs || 0} PDF(s) pendente(s)` : 'PDF não exigido'}</span>
+    <span class="requirement ${!requiresXml || !batch.xmlPending ? 'done' : 'pending'}">${requiresXml ? (batch.xmlPending ? 'XML pendente' : 'XML gerado') : 'XML não exigido'}</span>
+  </div>`;
+}
+function batchCard(batch) {
+  const requiresPdf = batch.deliveryFormat === 'pdf' || batch.deliveryFormat === 'both';
+  const requiresXml = batch.deliveryFormat === 'xml' || batch.deliveryFormat === 'both';
+  return `<article class="batch-card" data-batch-id="${batch.id}">
+    <div class="batch-card-heading"><div><span class="eyebrow">${batch.id} · ${batch.competence}</span><h2>${batch.insurer}</h2><small>${deliveryFormatLabels[batch.deliveryFormat] || deliveryFormatLabels.both}</small></div><span class="status ${batch.status}">${batchStatusLabels[batch.status] || batch.status}</span></div>
+    <div class="batch-summary"><div><span>Guias</span><strong>${batch.guideCount ?? batch.guides.length}</strong></div><div><span>Valor total</span><strong>${formatMoney(batch.totalValue)}</strong></div><div><span>Protocolo</span><strong>${batch.protocol || 'Não informado'}</strong></div></div>
+    ${batchRequirementHtml(batch)}
+    <div class="batch-guide-list">${batch.guides.map(guide => `<div class="batch-guide-row"><div><strong>${guide.id} · ${guide.patient}</strong><small>${guide.procedure} · ${formatMoney(Number(guide.valueCents || 0) / 100)}</small></div>${requiresPdf ? `<label><input type="checkbox" data-action="toggle-signed-pdf" data-batch-id="${batch.id}" data-guide-id="${guide.id}" ${guide.signedPdfReceived ? 'checked' : ''} /> PDF assinado conferido</label>` : ''}</div>`).join('')}</div>
+    <div class="batch-actions">${requiresXml ? `<button type="button" class="secondary-button" data-action="download-batch-xml" data-batch-id="${batch.id}">Gerar XML</button>` : ''}<select data-batch-status><option value="draft">Em preparação</option><option value="ready">Pronto para envio</option><option value="sent">Enviado</option><option value="processing">Em processamento</option><option value="approved">Aprovado</option><option value="error">Com erro</option></select><input data-batch-protocol placeholder="Protocolo da operadora" value="${batch.protocol || ''}" /><button type="button" class="primary-button" data-action="update-batch" data-batch-id="${batch.id}">Salvar acompanhamento</button>${batch.status === 'draft' ? `<button type="button" class="finance-delete" data-action="delete-batch" data-batch-id="${batch.id}">Excluir lote</button>` : ''}</div>
+  </article>`;
+}
+function batchesView() {
+  const totalValue = batches.reduce((sum, batch) => sum + Number(batch.totalValue || 0), 0);
+  const pending = batches.filter(batch => !batch.readyForSending && ['draft', 'ready'].includes(batch.status)).length;
+  return `<div class="page-heading"><div><p class="eyebrow">Faturamento por competência</p><h1>Lotes TISS</h1><p class="heading-copy">Agrupe guias por convênio, confira os documentos exigidos e acompanhe o envio.</p></div></div>
+    <div class="batch-stats"><div><span>Lotes</span><strong>${batches.length}</strong></div><div><span>Valor agrupado</span><strong>${formatMoney(totalValue)}</strong></div><div><span>Com pendências</span><strong>${pending}</strong></div></div>
+    <form class="panel batch-form" id="batch-form"><div class="panel-header"><div><h2 class="panel-title">Criar lote</h2><p class="panel-subtitle">Cada lote reúne guias do mesmo convênio e da mesma competência.</p></div></div><div class="form-section"><div class="form-grid"><div class="field"><label for="batch-insurer">Convênio *</label><select id="batch-insurer" name="insurerId" required><option value="">Selecione</option>${insurers.map(insurer => `<option value="${insurer.id}">${insurer.name} · ${deliveryFormatLabels[insurer.deliveryFormat] || deliveryFormatLabels.both}</option>`).join('')}</select></div><div class="field"><label for="batch-competence">Competência *</label><input id="batch-competence" name="competence" type="month" required /></div></div><div><label class="batch-guide-label">Guias disponíveis *</label><div id="batch-guide-options" class="batch-guide-options">${batchGuideOptions()}</div></div></div><div class="form-footer"><button class="primary-button" type="submit">Criar lote</button></div></form>
+    <div class="batch-list">${batches.length ? batches.map(batchCard).join('') : '<div class="empty-state"><div><div class="empty-icon">▤</div><h2>Nenhum lote criado</h2><p>Escolha um convênio, uma competência e as guias que serão faturadas juntas.</p></div></div>'}</div>`;
+}
 function financeView() {
   const pendingCount = invoices.filter(invoice => invoice.status === 'pending').length;
   const receivedCount = invoices.filter(invoice => invoice.status === 'received').length;
@@ -378,11 +419,14 @@ function patientsView() {
 function listing(title, description, icon) { return `<div class="page-heading"><div><p class="eyebrow">Módulo operacional</p><h1>${title}</h1><p class="heading-copy">${description}</p></div><button class="primary-button" data-action="new-guide">＋ Nova guia</button></div><div class="empty-state"><div><div class="empty-icon">${icon}</div><h2>Este módulo está pronto para crescer</h2><p>A estrutura de navegação está funcionando. O próximo passo é conectar este fluxo aos dados reais da clínica.</p><button class="primary-button" data-action="soon">Explorar demonstração</button></div></div>`; }
 function insurerRowsHtml(term) {
   const filtered = filterInsurers(insurers, term);
-  if (!filtered.length) return '<tr><td colspan="5">Nenhum convênio encontrado.</td></tr>';
-  return filtered.map(insurer => `<tr><td><strong>${insurer.name}</strong></td><td>${insurer.ansCode || '—'}</td><td>${insurer.contactEmail || '—'}<br><small>${insurer.contactPhone || ''}</small></td><td>${(insurer.acceptedProcedures || []).length} procedimento(s)</td><td><button class="text-button" data-action="edit-insurer" data-insurer-id="${insurer.id}">Editar</button> <button class="finance-delete" data-action="delete-insurer" data-insurer-id="${insurer.id}">Excluir</button></td></tr>`).join('');
+  if (!filtered.length) return '<tr><td colspan="6">Nenhum convênio encontrado.</td></tr>';
+  const deliveryLabels = { pdf: 'PDF assinado', xml: 'XML', both: 'PDF + XML' };
+  return filtered.map(insurer => `<tr><td><strong>${insurer.name}</strong></td><td>${insurer.ansCode || '—'}</td><td>${insurer.contactEmail || '—'}<br><small>${insurer.contactPhone || ''}</small></td><td><span class="delivery-format ${insurer.deliveryFormat || 'both'}">${deliveryLabels[insurer.deliveryFormat] || deliveryLabels.both}</span></td><td>${(insurer.acceptedProcedures || []).length} procedimento(s)</td><td><button class="text-button" data-action="edit-insurer" data-insurer-id="${insurer.id}">Editar</button> <button class="finance-delete" data-action="delete-insurer" data-insurer-id="${insurer.id}">Excluir</button></td></tr>`).join('');
 }
 function insurersView() {
-  return `<div class="page-heading"><div><p class="eyebrow">Cadastro da clínica</p><h1>Convênios</h1><p class="heading-copy">Operadoras aceitas pela clínica — alimenta os seletores de guia e paciente.</p></div></div><div class="panel"><div class="panel-header"><div><h2 class="panel-title">Convênios cadastrados</h2><p class="panel-subtitle">${insurers.length} operadoras</p></div></div><div class="search-bar"><input type="search" id="insurer-search" placeholder="Buscar por nome, código ANS ou contato" /></div><table><thead><tr><th>Nome</th><th>Código ANS</th><th>Contato</th><th>Procedimentos aceitos</th><th></th></tr></thead><tbody id="insurer-table-body">${insurerRowsHtml('')}</tbody></table></div><form class="panel patient-form" id="insurer-form"><div class="panel-header"><div><h2 class="panel-title">Cadastrar convênio</h2><p class="panel-subtitle">Fica disponível imediatamente nos formulários de paciente e guia.</p></div></div><div class="form-section"><div class="form-grid"><div class="field"><label for="new-insurer-name">Nome *</label><input id="new-insurer-name" name="name" required /></div><div class="field"><label for="new-insurer-ans">Código ANS</label><input id="new-insurer-ans" name="ansCode" placeholder="Ex.: 004701" /></div><div class="field"><label for="new-insurer-email">E-mail de contato</label><input id="new-insurer-email" name="contactEmail" type="email" placeholder="faturamento@operadora.com.br" /></div><div class="field"><label for="new-insurer-phone">Telefone de contato</label><input id="new-insurer-phone" name="contactPhone" placeholder="(00) 0000-0000" /></div></div><div class="field"><label for="new-insurer-procedures">Códigos TUSS aceitos (separados por vírgula)</label><input id="new-insurer-procedures" name="acceptedProcedures" placeholder="Ex.: 10101012, 50000470" /></div></div><div class="form-footer"><button type="button" class="secondary-button" data-action="cancel-insurer-edit" hidden>Cancelar edição</button><button class="primary-button" type="submit">Salvar convênio</button></div></form>`;
+  return `<div class="page-heading"><div><p class="eyebrow">Cadastro da clínica</p><h1>Convênios</h1><p class="heading-copy">Operadoras aceitas pela clínica — alimenta os seletores de guia, paciente e lote.</p></div></div>
+  <div class="panel"><div class="panel-header"><div><h2 class="panel-title">Convênios cadastrados</h2><p class="panel-subtitle">${insurers.length} operadoras</p></div></div><div class="search-bar"><input type="search" id="insurer-search" placeholder="Buscar por nome, código ANS ou contato" /></div><table><thead><tr><th>Nome</th><th>Código ANS</th><th>Contato</th><th>Envio exigido</th><th>Procedimentos aceitos</th><th></th></tr></thead><tbody id="insurer-table-body">${insurerRowsHtml('')}</tbody></table></div>
+  <form class="panel patient-form" id="insurer-form"><div class="panel-header"><div><h2 class="panel-title">Cadastrar convênio</h2><p class="panel-subtitle">Defina também os documentos exigidos no fechamento do faturamento.</p></div></div><div class="form-section"><div class="form-grid"><div class="field"><label for="new-insurer-name">Nome *</label><input id="new-insurer-name" name="name" required /></div><div class="field"><label for="new-insurer-ans">Código ANS</label><input id="new-insurer-ans" name="ansCode" placeholder="Ex.: 004701" /></div><div class="field"><label for="new-insurer-email">E-mail de contato</label><input id="new-insurer-email" name="contactEmail" type="email" placeholder="faturamento@operadora.com.br" /></div><div class="field"><label for="new-insurer-phone">Telefone de contato</label><input id="new-insurer-phone" name="contactPhone" placeholder="(00) 0000-0000" /></div><div class="field"><label for="new-insurer-delivery">Forma de envio exigida *</label><select id="new-insurer-delivery" name="deliveryFormat" required><option value="pdf">PDF assinado</option><option value="xml">XML</option><option value="both" selected>PDF assinado + XML</option></select><small>O lote cobrará automaticamente os arquivos escolhidos.</small></div></div><div class="field"><label for="new-insurer-procedures">Códigos TUSS aceitos (separados por vírgula)</label><input id="new-insurer-procedures" name="acceptedProcedures" placeholder="Ex.: 10101012, 50000470" /></div></div><div class="form-footer"><button type="button" class="secondary-button" data-action="cancel-insurer-edit" hidden>Cancelar edição</button><button class="primary-button" type="submit">Salvar convênio</button></div></form>`;
 }
 function editInsurer(insurerId) {
   const insurer = insurers.find(item => item.id === insurerId);
@@ -394,6 +438,7 @@ function editInsurer(insurerId) {
   form.querySelector('#new-insurer-ans').value = insurer.ansCode || '';
   form.querySelector('#new-insurer-email').value = insurer.contactEmail || '';
   form.querySelector('#new-insurer-phone').value = insurer.contactPhone || '';
+  form.querySelector('#new-insurer-delivery').value = insurer.deliveryFormat || 'both';
   form.querySelector('#new-insurer-procedures').value = (insurer.acceptedProcedures || []).join(', ');
   renderContractRules(insurer.procedureRules || []);
   form.querySelector('.panel-title').textContent = 'Editar convênio';
@@ -467,7 +512,7 @@ function settingsView() {
 function saveGuides() { localStorage.setItem(clinicStorageKey('guides'), JSON.stringify(guides)); }
 function restoreDraft() { const draft = JSON.parse(localStorage.getItem(clinicStorageKey('draft')) || 'null'); if (!draft) return; Object.entries(draft).forEach(([key, value]) => { const field = document.querySelector(`#${key}`); if (field) field.value = value; }); }
 function saveDraft(form) { localStorage.setItem(clinicStorageKey('draft'), JSON.stringify(Object.fromEntries(new FormData(form)))); }
-function render(view = 'overview') { breadcrumb.textContent = views[view] || views.overview; const safeView = userCan(view) ? view : 'overview'; appView.innerHTML = safeView === 'overview' ? overview() : safeView === 'agenda' ? agendaView() : safeView === 'guides' ? guideList() : safeView === 'financeiro' ? financeView() : safeView === 'reports' ? reportsView() : safeView === 'patients' ? patientsView() : safeView === 'users' ? usersView() : safeView === 'convenios' ? insurersView() : safeView === 'feedback' ? feedbackView() : safeView === 'settings' ? settingsView() : listing(views[safeView], `Gerencie ${views[safeView].toLowerCase()} em um só lugar.`, '↗'); document.querySelectorAll('.nav-item').forEach(item => { const visible = userCan(item.dataset.view); item.style.display = visible ? '' : 'none'; item.classList.toggle('active', item.dataset.view === safeView && visible); }); }
+function render(view = 'overview') { breadcrumb.textContent = views[view] || views.overview; const safeView = userCan(view) ? view : 'overview'; appView.innerHTML = safeView === 'overview' ? overview() : safeView === 'agenda' ? agendaView() : safeView === 'guides' ? guideList() : safeView === 'batches' ? batchesView() : safeView === 'financeiro' ? financeView() : safeView === 'reports' ? reportsView() : safeView === 'patients' ? patientsView() : safeView === 'users' ? usersView() : safeView === 'convenios' ? insurersView() : safeView === 'feedback' ? feedbackView() : safeView === 'settings' ? settingsView() : listing(views[safeView], `Gerencie ${views[safeView].toLowerCase()} em um só lugar.`, '↗'); document.querySelectorAll('.nav-item').forEach(item => { const visible = userCan(item.dataset.view); item.style.display = visible ? '' : 'none'; item.classList.toggle('active', item.dataset.view === safeView && visible); }); if (safeView === 'batches') batches.forEach(batch => { const card = document.querySelector(`[data-batch-id="${batch.id}"]`); const select = card?.querySelector('[data-batch-status]'); if (select) select.value = batch.status; }); }
 function applySession() { const clinic = clinicProfiles[activeClinicId]; if (!clinic || !activeUser) return; document.querySelector('.workspace-switcher strong').textContent = clinic.name; document.querySelector('.workspace-switcher small').textContent = clinic.unit; document.querySelector('.workspace-switcher .avatar').textContent = clinic.initials; document.querySelector('#breadcrumb-clinic').textContent = clinic.name; document.querySelector('.profile strong').textContent = activeUser.name; document.querySelector('.profile small').textContent = activeUser.roleLabel || roleLabels[activeUser.role] || activeUser.role; document.querySelector('.user-button span:nth-child(2)').textContent = activeUser.name; document.querySelector('.user-button .avatar').textContent = activeUser.name.split(' ').map(name => name[0]).join('').slice(0, 2); }
 function usersView() { const clinicUsersList = clinicUsers[activeClinicId] || []; return `<div class="page-heading"><div><p class="eyebrow">Acesso e segurança</p><h1>Usuários da clínica</h1><p class="heading-copy">Cada perfil acessa apenas o que precisa.</p></div><button class="primary-button" data-action="new-user">＋ Novo usuário</button></div><div class="panel"><div class="panel-header"><div><h2 class="panel-title">Equipe</h2><p class="panel-subtitle">${clinicUsersList.length} usuários cadastrados</p></div></div><table><thead><tr><th>Nome</th><th>E-mail</th><th>Perfil</th><th>Permissão</th></tr></thead><tbody>${clinicUsersList.map(user => `<tr><td><strong>${user.name}</strong></td><td>${user.email}</td><td>${user.roleLabel}</td><td>${user.role === 'admin' ? 'Total' : user.role === 'faturamento' ? 'Guias e relatórios' : user.role === 'recepcao' ? 'Agenda e pacientes' : 'Agenda e prontuários'}</td></tr>`).join('')}</tbody></table></div>`; }
 function showToast(message) { toast.textContent = message; toast.classList.add('show'); setTimeout(() => toast.classList.remove('show'), 2800); }
@@ -530,6 +575,27 @@ async function downloadGuidePdf(guideId) {
   } catch (error) { showToast(error.message); }
 }
 
+async function refreshBatches() {
+  if (activeSession?.token) batches = (await apiRequest('/batches')).map(normalizeBatch);
+  else saveBatches();
+}
+
+async function downloadBatchXml(batchId) {
+  if (!activeSession?.token) { showToast('O XML do lote depende da API local.'); return; }
+  try {
+    const response = await fetch(`${apiBase}/batches/${encodeURIComponent(batchId)}/xml`, { headers: apiHeaders() });
+    if (!response.ok) { const payload = await response.json().catch(() => ({})); throw new Error(payload.error || 'Não foi possível gerar o XML do lote.'); }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url; link.download = `lote-${batchId}.xml`; link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    await refreshBatches();
+    render('batches');
+    showToast('XML demonstrativo do lote gerado.');
+  } catch (error) { showToast(error.message); }
+}
+
 function parsePeople(value, isOwner = false) {
   return String(value || '').split(/\r?\n/).map(line => line.trim()).filter(Boolean).map(line => {
     const [name = '', title = '', council = ''] = line.split('|').map(part => part.trim());
@@ -580,6 +646,90 @@ document.addEventListener('submit', async event => {
     render('settings'); showToast('Configurações da clínica salvas.');
   } catch (error) { showToast(error.message); }
 }, true);
+
+document.addEventListener('change', event => {
+  if (!['batch-insurer', 'batch-competence'].includes(event.target.id)) return;
+  const insurerId = document.querySelector('#batch-insurer')?.value;
+  const insurerName = insurers.find(insurer => insurer.id === insurerId)?.name || '';
+  const competence = document.querySelector('#batch-competence')?.value || '';
+  const options = document.querySelector('#batch-guide-options');
+  if (options) options.innerHTML = batchGuideOptions(insurerName, competence);
+});
+
+document.addEventListener('submit', async event => {
+  if (event.target.id !== 'batch-form') return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  const data = new FormData(event.target);
+  const insurerId = data.get('insurerId');
+  const competence = data.get('competence');
+  const guideIds = data.getAll('guideIds');
+  if (!guideIds.length) { showToast('Selecione pelo menos uma guia para criar o lote.'); return; }
+  try {
+    if (activeSession?.token) {
+      await apiRequest('/batches', { method: 'POST', body: JSON.stringify({ insurerId, competence, guideIds }) });
+      await refreshBatches();
+    } else {
+      const insurer = insurers.find(item => item.id === insurerId);
+      const selectedGuides = guides.filter(guide => guideIds.includes(guide.id));
+      const id = `L-${competence.slice(0, 4)}-${String(batches.length + 1).padStart(4, '0')}`;
+      batches.unshift({ id, insurerId, insurer: insurer.name, competence, deliveryFormat: insurer.deliveryFormat || 'both', status: 'draft', protocol: '', xmlGenerated: false, xmlPending: insurer.deliveryFormat !== 'pdf', missingSignedPdfs: insurer.deliveryFormat === 'xml' ? 0 : selectedGuides.length, readyForSending: false, guideCount: selectedGuides.length, totalValue: selectedGuides.reduce((sum, guide) => sum + Number(String(guide.value).replace(/[^0-9,]/g, '').replace(',', '.')), 0), guides: selectedGuides.map(guide => ({ ...guide, signedPdfReceived: false })) });
+      saveBatches();
+    }
+    render('batches');
+    showToast('Lote criado com as exigências do convênio.');
+  } catch (error) { showToast(error.message); }
+}, true);
+
+document.addEventListener('change', async event => {
+  if (event.target.dataset.action !== 'toggle-signed-pdf') return;
+  const { batchId, guideId } = event.target.dataset;
+  try {
+    if (activeSession?.token) {
+      await apiRequest(`/batches/${batchId}/guides/${guideId}`, { method: 'PATCH', body: JSON.stringify({ signedPdfReceived: event.target.checked }) });
+      await refreshBatches();
+    } else {
+      const batch = batches.find(item => item.id === batchId);
+      const guide = batch?.guides.find(item => item.id === guideId);
+      if (guide) guide.signedPdfReceived = event.target.checked;
+      if (batch) { batch.missingSignedPdfs = batch.guides.filter(item => !item.signedPdfReceived).length; batch.readyForSending = batch.missingSignedPdfs === 0 && !batch.xmlPending; }
+      saveBatches();
+    }
+    render('batches');
+  } catch (error) { event.target.checked = !event.target.checked; showToast(error.message); }
+});
+
+document.addEventListener('click', async event => {
+  const xmlButton = event.target.closest('[data-action="download-batch-xml"]');
+  if (xmlButton) { await downloadBatchXml(xmlButton.dataset.batchId); return; }
+  const deleteButton = event.target.closest('[data-action="delete-batch"]');
+  if (deleteButton) {
+    const batchId = deleteButton.dataset.batchId;
+    try {
+      if (activeSession?.token) { await apiRequest(`/batches/${batchId}`, { method: 'DELETE' }); await refreshBatches(); }
+      else { batches = batches.filter(batch => batch.id !== batchId); saveBatches(); }
+      render('batches'); showToast('Lote em preparação excluído.');
+    } catch (error) { showToast(error.message); }
+    return;
+  }
+  const updateButton = event.target.closest('[data-action="update-batch"]');
+  if (!updateButton) return;
+  const card = updateButton.closest('[data-batch-id]');
+  const batchId = updateButton.dataset.batchId;
+  const status = card.querySelector('[data-batch-status]').value;
+  const protocol = card.querySelector('[data-batch-protocol]').value.trim();
+  try {
+    if (activeSession?.token) {
+      await apiRequest(`/batches/${batchId}`, { method: 'PATCH', body: JSON.stringify({ status, protocol }) });
+      await refreshBatches();
+    } else {
+      Object.assign(batches.find(batch => batch.id === batchId), { status, protocol });
+      saveBatches();
+    }
+    render('batches');
+    showToast('Acompanhamento do lote atualizado.');
+  } catch (error) { showToast(error.message); }
+});
 
 document.addEventListener('submit', async event => {
   if (event.target.id !== 'login-form') return;
@@ -651,7 +801,7 @@ document.addEventListener('submit', async event => {
   const insurerId = event.target.dataset.insurerId;
   try {
     if (insurerId) {
-      const payload = { name: data.name, ansCode: data.ansCode, contactEmail: data.contactEmail, contactPhone: data.contactPhone, acceptedProcedures, procedureRules };
+      const payload = { name: data.name, ansCode: data.ansCode, contactEmail: data.contactEmail, contactPhone: data.contactPhone, deliveryFormat: data.deliveryFormat, acceptedProcedures, procedureRules };
       if (activeSession?.token) {
         await apiRequest(`/insurers/${insurerId}`, { method: 'PUT', body: JSON.stringify(payload) });
         insurers = await apiRequest('/insurers');
@@ -661,7 +811,7 @@ document.addEventListener('submit', async event => {
       }
       showToast('Convênio atualizado.');
     } else {
-      const insurer = { id: nextSequentialId(insurers, 'INS-', 3), name: data.name, ansCode: data.ansCode, contactEmail: data.contactEmail, contactPhone: data.contactPhone, acceptedProcedures, procedureRules };
+      const insurer = { id: nextSequentialId(insurers, 'INS-', 3), name: data.name, ansCode: data.ansCode, contactEmail: data.contactEmail, contactPhone: data.contactPhone, deliveryFormat: data.deliveryFormat, acceptedProcedures, procedureRules };
       if (activeSession?.token) {
         await apiRequest('/insurers', { method: 'POST', body: JSON.stringify(insurer) });
         insurers = await apiRequest('/insurers');

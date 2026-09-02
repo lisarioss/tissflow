@@ -12,6 +12,8 @@ Protótipo de portfólio para operação de faturamento clínico. Demonstra o ci
   - Compatibilidade demonstrativa entre CID-10 e procedimento (tabela simplificada, não substitui a tabela oficial da ANS)
 - **Convênios**: CRUD de operadoras (nome, código ANS, contato, forma de envio e procedimentos aceitos) que alimenta dinamicamente os seletores de guia e de paciente.
 - **Lotes de faturamento**: agrupa guias por convênio e competência, confere os PDFs assinados, gera o XML exigido, registra o protocolo e bloqueia o envio enquanto houver pendências.
+- **Controle de autorizações**: registra a guia/senha autorizada por paciente, período de validade, quantidade liberada e utilizada; destaca autorizações vigentes, próximas do vencimento ou vencidas e permite atualizar o saldo de sessões.
+- **Validação TISS oficial**: confere o XML com os schemas de Comunicação 04.03.00 publicados pela ANS, calcula o hash MD5 em ISO-8859-1 e mantém inválido qualquer lote que não passe no XSD.
 - **Feedback de atendimento**: profissionais registram evolução/observações por atendimento, com foto opcional e vínculo à guia faturada quando o paciente é de convênio; geração de PDF do feedback.
 - **Autenticação real** via JWT + bcrypt, com dados persistidos em SQLite e isolados por `clinic_id` em todas as consultas.
 - **RBAC nas rotas de escrita**: cada papel (admin, faturamento, recepção, médico) só cria/edita/exclui os recursos que a navegação já expõe para ele — reforçado no servidor, não só escondendo botões na UI.
@@ -25,7 +27,7 @@ Protótipo de portfólio para operação de faturamento clínico. Demonstra o ci
 
 ### Configurar a capa e o timbrado
 
-Entre com um usuário administrador e abra **Configurações**. Cadastre os dados institucionais, o logotipo (PNG ou JPEG), as proprietárias que assinam a capa e os profissionais da clínica. Em seguida, abra uma guia TISS e use **Gerar PDF da pasta**.
+Entre com um usuário administrador e abra **Configurações**. Cadastre os dados institucionais, o CNES, o logotipo (PNG ou JPEG), as proprietárias que assinam a capa e os profissionais da clínica. Para cada profissional, informe conselho, número, UF e CBO. No cadastro de cada convênio, informe também o código que a operadora atribuiu ao prestador. Esses campos serão reutilizados no XML TISS e nos documentos impressos.
 
 Cada pessoa deve ser informada em uma linha, no formato:
 
@@ -112,7 +114,7 @@ Escolha uma clínica na tela de login (contas demo listadas na própria tela). O
 
 ## Limitações conhecidas
 
-- O XML gerado é **demonstrativo**: segue a estrutura geral do padrão TISS 4.01, mas não foi validado contra o XSD oficial da ANS nem contempla epílogo/assinatura de lote.
+- O envelope do XML usa o padrão TISS 04.03.00 e é validado contra o XSD oficial da ANS. Os dados atuais ainda não contemplam todos os campos obrigatórios de uma guia SP/SADT; por isso o sistema exibe as incompatibilidades e bloqueia seu envio até os cadastros serem completados.
 - A guia SP/SADT em PDF é um modelo imprimível baseado na estrutura visual fornecida, mas ainda precisa ser conferida campo a campo com a versão vigente do formulário da ANS antes do uso comercial.
 - A tabela de compatibilidade CID-procedimento cobre só os quatro procedimentos usados no demo — não é uma base de conhecimento clínico real.
 - Sem suporte a envio real para operadoras (webservice/portal) — o "envio" é a geração e download do XML.

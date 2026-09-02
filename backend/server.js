@@ -6,6 +6,7 @@ const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 const db = require('./db');
 const { generateGuidePackagePDF } = require('./pdfService');
+const { TISS_VERSION, calculateTissHash, validateTissXml } = require('./tissValidationService');
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
@@ -60,7 +61,7 @@ function guideCompetence(guide) {
 function mapClinicSettings(row, clinic) {
   return {
     legalName: row?.legal_name || clinic?.name || '', tradeName: row?.trade_name || clinic?.name || '',
-    cnpj: row?.cnpj || '', phone: row?.phone || '', instagram: row?.instagram || '',
+    cnpj: row?.cnpj || '', cnes: row?.cnes || '', phone: row?.phone || '', instagram: row?.instagram || '',
     address: row?.address || '', city: row?.city || '', state: row?.state || '', postalCode: row?.postal_code || '',
     logoDataUrl: row?.logo_data_url || '', letterheadDataUrl: row?.letterhead_data_url || '',
     letterheadHeaderMm: Number(row?.letterhead_header_mm || 35), letterheadFooterMm: Number(row?.letterhead_footer_mm || 25),
@@ -111,17 +112,20 @@ app.get('/api/tuss', auth, (req, res) => {
 });
 
 app.put('/api/settings', auth, requireRole('admin'), (req, res) => {
-  const { legalName, tradeName, cnpj, phone, instagram, address, city, state, postalCode, logoDataUrl, letterheadDataUrl, letterheadHeaderMm = 35, letterheadFooterMm = 25, owners = [], professionals = [] } = req.body;
+  const { legalName, tradeName, cnpj, cnes, phone, instagram, address, city, state, postalCode, logoDataUrl, letterheadDataUrl, letterheadHeaderMm = 35, letterheadFooterMm = 25, owners = [], professionals = [] } = req.body;
   if (!tradeName) return res.status(400).json({ error: 'O nome da clínica é obrigatório.' });
   if (!Array.isArray(owners) || !Array.isArray(professionals)) return res.status(400).json({ error: 'Responsáveis e profissionais devem ser listas.' });
+  if (cnes && !/^\d{7}$/.test(String(cnes))) return res.status(400).json({ error: 'O CNES deve possuir 7 dígitos.' });
+  const invalidProfessional = professionals.find(professional => !professional.name || !professional.councilType || !professional.councilNumber || !/^[A-Z]{2}$/.test(String(professional.councilState || '').toUpperCase()) || !/^\d{6}$/.test(String(professional.cbo || '')));
+  if (invalidProfessional) return res.status(400).json({ error: `Complete conselho, número, UF e CBO do profissional ${invalidProfessional.name || 'sem nome'}.` });
   if (logoDataUrl && !/^data:image\/(png|jpeg);base64,/i.test(logoDataUrl)) return res.status(400).json({ error: 'Use um logotipo PNG ou JPEG.' });
   if (letterheadDataUrl && !/^data:image\/(png|jpeg);base64,/i.test(letterheadDataUrl)) return res.status(400).json({ error: 'Use um papel timbrado em PNG ou JPEG.' });
   const safeHeaderMm = Math.min(Math.max(Number(letterheadHeaderMm) || 35, 20), 70);
   const safeFooterMm = Math.min(Math.max(Number(letterheadFooterMm) || 25, 15), 50);
-  db.prepare(`INSERT INTO clinic_settings (clinic_id, legal_name, trade_name, cnpj, phone, instagram, address, city, state, postal_code, logo_data_url, letterhead_data_url, letterhead_header_mm, letterhead_footer_mm, owners_json, professionals_json)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(clinic_id) DO UPDATE SET legal_name=excluded.legal_name, trade_name=excluded.trade_name, cnpj=excluded.cnpj, phone=excluded.phone, instagram=excluded.instagram, address=excluded.address, city=excluded.city, state=excluded.state, postal_code=excluded.postal_code, logo_data_url=excluded.logo_data_url, letterhead_data_url=excluded.letterhead_data_url, letterhead_header_mm=excluded.letterhead_header_mm, letterhead_footer_mm=excluded.letterhead_footer_mm, owners_json=excluded.owners_json, professionals_json=excluded.professionals_json, updated_at=CURRENT_TIMESTAMP`)
-    .run(req.session.clinicId, legalName || '', tradeName, cnpj || '', phone || '', instagram || '', address || '', city || '', state || '', postalCode || '', logoDataUrl || '', letterheadDataUrl || '', safeHeaderMm, safeFooterMm, JSON.stringify(owners), JSON.stringify(professionals));
+  db.prepare(`INSERT INTO clinic_settings (clinic_id, legal_name, trade_name, cnpj, cnes, phone, instagram, address, city, state, postal_code, logo_data_url, letterhead_data_url, letterhead_header_mm, letterhead_footer_mm, owners_json, professionals_json)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(clinic_id) DO UPDATE SET legal_name=excluded.legal_name, trade_name=excluded.trade_name, cnpj=excluded.cnpj, cnes=excluded.cnes, phone=excluded.phone, instagram=excluded.instagram, address=excluded.address, city=excluded.city, state=excluded.state, postal_code=excluded.postal_code, logo_data_url=excluded.logo_data_url, letterhead_data_url=excluded.letterhead_data_url, letterhead_header_mm=excluded.letterhead_header_mm, letterhead_footer_mm=excluded.letterhead_footer_mm, owners_json=excluded.owners_json, professionals_json=excluded.professionals_json, updated_at=CURRENT_TIMESTAMP`)
+    .run(req.session.clinicId, legalName || '', tradeName, cnpj || '', cnes || '', phone || '', instagram || '', address || '', city || '', state || '', postalCode || '', logoDataUrl || '', letterheadDataUrl || '', safeHeaderMm, safeFooterMm, JSON.stringify(owners), JSON.stringify(professionals));
   res.json({ saved: true });
 });
 
@@ -229,7 +233,7 @@ app.delete('/api/invoices/:id', auth, requireRole('admin', 'faturamento'), (req,
 });
 
 app.get('/api/insurers', auth, (req, res) => {
-  const insurers = db.prepare('SELECT id, name, ans_code AS ansCode, contact_email AS contactEmail, contact_phone AS contactPhone, delivery_format AS deliveryFormat, accepted_procedures AS acceptedProcedures, procedure_rules AS procedureRules FROM insurers WHERE clinic_id = ? ORDER BY name').all(req.session.clinicId);
+  const insurers = db.prepare('SELECT id, name, ans_code AS ansCode, contact_email AS contactEmail, contact_phone AS contactPhone, provider_code AS providerCode, delivery_format AS deliveryFormat, accepted_procedures AS acceptedProcedures, procedure_rules AS procedureRules FROM insurers WHERE clinic_id = ? ORDER BY name').all(req.session.clinicId);
   res.json(insurers.map(insurer => ({ ...insurer, acceptedProcedures: JSON.parse(insurer.acceptedProcedures || '[]'), procedureRules: JSON.parse(insurer.procedureRules || '[]') })));
 });
 
@@ -246,15 +250,16 @@ function unknownProcedureCodes(rules) {
 }
 
 app.post('/api/insurers', auth, requireRole('admin'), (req, res) => {
-  const { id, name, ansCode, contactEmail, contactPhone, deliveryFormat = 'both', acceptedProcedures = [], procedureRules = [] } = req.body;
+  const { id, name, ansCode, contactEmail, contactPhone, providerCode, deliveryFormat = 'both', acceptedProcedures = [], procedureRules = [] } = req.body;
   if (!id || !name) return res.status(400).json({ error: 'Nome e identificador são obrigatórios.' });
+  if (providerCode && String(providerCode).length > 14) return res.status(400).json({ error: 'O código do prestador pode ter no máximo 14 caracteres.' });
   if (!['pdf', 'xml', 'both'].includes(deliveryFormat)) return res.status(400).json({ error: 'Forma de envio inválida.' });
   try {
     const rules = normalizeProcedureRules(procedureRules);
     if (rules.some(rule => rule.validFrom && rule.validTo && rule.validFrom > rule.validTo)) return res.status(400).json({ error: 'A data final da vigência não pode ser anterior à data inicial.' });
     const unknownCodes = unknownProcedureCodes(rules);
     if (unknownCodes.length) return res.status(400).json({ error: `Código TUSS não encontrado na versão oficial: ${unknownCodes.join(', ')}.` });
-    db.prepare('INSERT INTO insurers (id, clinic_id, name, ans_code, contact_email, contact_phone, delivery_format, accepted_procedures, procedure_rules) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, req.session.clinicId, name, ansCode || null, contactEmail || null, contactPhone || null, deliveryFormat, JSON.stringify(rules.length ? [...new Set(rules.map(rule => rule.code))] : acceptedProcedures), JSON.stringify(rules));
+    db.prepare('INSERT INTO insurers (id, clinic_id, name, ans_code, contact_email, contact_phone, provider_code, delivery_format, accepted_procedures, procedure_rules) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, req.session.clinicId, name, ansCode || null, contactEmail || null, contactPhone || null, providerCode || null, deliveryFormat, JSON.stringify(rules.length ? [...new Set(rules.map(rule => rule.code))] : acceptedProcedures), JSON.stringify(rules));
     res.status(201).json({ id });
   } catch (error) {
     res.status(409).json({ error: error.message });
@@ -262,8 +267,9 @@ app.post('/api/insurers', auth, requireRole('admin'), (req, res) => {
 });
 
 app.put('/api/insurers/:id', auth, requireRole('admin'), (req, res) => {
-  const { name, ansCode, contactEmail, contactPhone, deliveryFormat = 'both', acceptedProcedures = [], procedureRules = [] } = req.body;
+  const { name, ansCode, contactEmail, contactPhone, providerCode, deliveryFormat = 'both', acceptedProcedures = [], procedureRules = [] } = req.body;
   if (!name) return res.status(400).json({ error: 'Nome é obrigatório.' });
+  if (providerCode && String(providerCode).length > 14) return res.status(400).json({ error: 'O código do prestador pode ter no máximo 14 caracteres.' });
   if (!['pdf', 'xml', 'both'].includes(deliveryFormat)) return res.status(400).json({ error: 'Forma de envio inválida.' });
   try {
     const rules = normalizeProcedureRules(procedureRules);
@@ -271,7 +277,7 @@ app.put('/api/insurers/:id', auth, requireRole('admin'), (req, res) => {
     const unknownCodes = unknownProcedureCodes(rules);
     if (unknownCodes.length) return res.status(400).json({ error: `Código TUSS não encontrado na versão oficial: ${unknownCodes.join(', ')}.` });
     const codes = rules.length ? [...new Set(rules.map(rule => rule.code))] : acceptedProcedures;
-    const result = db.prepare('UPDATE insurers SET name = ?, ans_code = ?, contact_email = ?, contact_phone = ?, delivery_format = ?, accepted_procedures = ?, procedure_rules = ? WHERE id = ? AND clinic_id = ?').run(name, ansCode || null, contactEmail || null, contactPhone || null, deliveryFormat, JSON.stringify(codes), JSON.stringify(rules), req.params.id, req.session.clinicId);
+    const result = db.prepare('UPDATE insurers SET name = ?, ans_code = ?, contact_email = ?, contact_phone = ?, provider_code = ?, delivery_format = ?, accepted_procedures = ?, procedure_rules = ? WHERE id = ? AND clinic_id = ?').run(name, ansCode || null, contactEmail || null, contactPhone || null, providerCode || null, deliveryFormat, JSON.stringify(codes), JSON.stringify(rules), req.params.id, req.session.clinicId);
     if (!result.changes) return res.status(404).json({ error: 'Convênio não encontrado.' });
     res.json({ id: req.params.id });
   } catch (error) {
@@ -285,6 +291,51 @@ app.delete('/api/insurers/:id', auth, requireRole('admin'), (req, res) => {
   res.status(204).end();
 });
 
+app.get('/api/authorizations', auth, (req, res) => {
+  const rows = db.prepare(`SELECT authorizations.id, authorizations.patient_id AS patientId, patients.name AS patient,
+      authorizations.insurer_id AS insurerId, insurers.name AS insurer, authorizations.authorization_number AS authorizationNumber,
+      authorizations.valid_from AS validFrom, authorizations.valid_to AS validTo,
+      authorizations.authorized_quantity AS authorizedQuantity, authorizations.used_quantity AS usedQuantity,
+      authorizations.notes, authorizations.created_at AS createdAt
+    FROM authorizations JOIN patients ON patients.id = authorizations.patient_id
+    JOIN insurers ON insurers.id = authorizations.insurer_id
+    WHERE authorizations.clinic_id = ? ORDER BY authorizations.valid_to, patients.name`).all(req.session.clinicId);
+  res.json(rows);
+});
+
+app.post('/api/authorizations', auth, requireRole('admin', 'faturamento', 'recepcao'), (req, res) => {
+  const { patientId, insurerId, authorizationNumber, validFrom, validTo, authorizedQuantity, usedQuantity = 0, notes } = req.body;
+  const quantity = Math.floor(Number(authorizedQuantity));
+  const used = Math.floor(Number(usedQuantity));
+  if (!patientId || !insurerId || !authorizationNumber || !/^\d{4}-\d{2}-\d{2}$/.test(validFrom || '') || !/^\d{4}-\d{2}-\d{2}$/.test(validTo || '')) return res.status(400).json({ error: 'Preencha paciente, convênio, número e período de validade.' });
+  if (validFrom > validTo) return res.status(400).json({ error: 'A data final não pode ser anterior à data inicial.' });
+  if (!Number.isInteger(quantity) || quantity < 1 || !Number.isInteger(used) || used < 0) return res.status(400).json({ error: 'Informe quantidades válidas.' });
+  const patient = db.prepare('SELECT insurer FROM patients WHERE id = ? AND clinic_id = ?').get(patientId, req.session.clinicId);
+  const insurer = db.prepare('SELECT name FROM insurers WHERE id = ? AND clinic_id = ?').get(insurerId, req.session.clinicId);
+  if (!patient || !insurer) return res.status(404).json({ error: 'Paciente ou convênio não encontrado.' });
+  if (patient.insurer !== insurer.name) return res.status(400).json({ error: 'O convênio selecionado é diferente do cadastro do paciente.' });
+  const id = `AUT-${Date.now()}`;
+  try {
+    db.prepare('INSERT INTO authorizations (id, clinic_id, patient_id, insurer_id, authorization_number, valid_from, valid_to, authorized_quantity, used_quantity, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, req.session.clinicId, patientId, insurerId, String(authorizationNumber).trim(), validFrom, validTo, quantity, used, notes || null);
+    res.status(201).json({ id });
+  } catch (error) { res.status(409).json({ error: error.message.includes('UNIQUE') ? 'Essa autorização já está cadastrada para o convênio.' : error.message }); }
+});
+
+app.put('/api/authorizations/:id', auth, requireRole('admin', 'faturamento', 'recepcao'), (req, res) => {
+  const quantity = Math.floor(Number(req.body.authorizedQuantity));
+  const used = Math.floor(Number(req.body.usedQuantity));
+  if (!Number.isInteger(quantity) || quantity < 1 || !Number.isInteger(used) || used < 0) return res.status(400).json({ error: 'Informe quantidades válidas.' });
+  const result = db.prepare('UPDATE authorizations SET used_quantity = ?, authorized_quantity = ?, valid_to = ?, notes = ? WHERE id = ? AND clinic_id = ?').run(used, quantity, req.body.validTo, req.body.notes || null, req.params.id, req.session.clinicId);
+  if (!result.changes) return res.status(404).json({ error: 'Autorização não encontrada.' });
+  res.json({ id: req.params.id });
+});
+
+app.delete('/api/authorizations/:id', auth, requireRole('admin', 'faturamento'), (req, res) => {
+  const result = db.prepare('DELETE FROM authorizations WHERE id = ? AND clinic_id = ?').run(req.params.id, req.session.clinicId);
+  if (!result.changes) return res.status(404).json({ error: 'Autorização não encontrada.' });
+  res.status(204).end();
+});
+
 function batchDetails(batch) {
   const guides = db.prepare(`SELECT guides.id, guides.patient, guides.procedure, guides.insurer, guides.competence,
       guides.value_cents AS valueCents, guides.status, billing_batch_guides.signed_pdf_received AS signedPdfReceived
@@ -295,13 +346,15 @@ function batchDetails(batch) {
   const requiresPdf = batch.deliveryFormat === 'pdf' || batch.deliveryFormat === 'both';
   const requiresXml = batch.deliveryFormat === 'xml' || batch.deliveryFormat === 'both';
   const missingSignedPdfs = requiresPdf ? guides.filter(guide => !guide.signedPdfReceived).length : 0;
-  const xmlPending = requiresXml && !batch.xmlGenerated;
+  const xmlPending = requiresXml && (!batch.xmlGenerated || !batch.xmlValid);
   return {
     ...batch,
     guideCount: guides.length,
     totalValueCents: guides.reduce((sum, guide) => sum + Number(guide.valueCents || 0), 0),
     missingSignedPdfs,
     xmlPending,
+    xmlValid: Boolean(batch.xmlValid),
+    xmlValidationErrors: Array.isArray(batch.xmlValidationErrors) ? batch.xmlValidationErrors : JSON.parse(batch.xmlValidationErrors || '[]'),
     readyForSending: guides.length > 0 && missingSignedPdfs === 0 && !xmlPending,
     guides: guides.map(guide => ({ ...guide, signedPdfReceived: Boolean(guide.signedPdfReceived) }))
   };
@@ -311,6 +364,8 @@ app.get('/api/batches', auth, (req, res) => {
   const batches = db.prepare(`SELECT billing_batches.id, billing_batches.insurer_id AS insurerId, insurers.name AS insurer,
       billing_batches.competence, billing_batches.delivery_format AS deliveryFormat, billing_batches.status,
       billing_batches.protocol, billing_batches.sent_at AS sentAt, billing_batches.xml_generated AS xmlGenerated,
+      billing_batches.xml_valid AS xmlValid, billing_batches.xml_validation_errors AS xmlValidationErrors,
+      billing_batches.tiss_version AS tissVersion,
       billing_batches.created_at AS createdAt
     FROM billing_batches
     JOIN insurers ON insurers.id = billing_batches.insurer_id
@@ -361,26 +416,34 @@ function escapeXml(value) {
   return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 }
 
-app.get('/api/batches/:id/xml', auth, requireRole('admin', 'faturamento'), (req, res) => {
+app.get('/api/batches/:id/xml', auth, requireRole('admin', 'faturamento'), async (req, res) => {
   const batch = db.prepare(`SELECT billing_batches.*, insurers.name AS insurer, insurers.ans_code AS ansCode
     FROM billing_batches JOIN insurers ON insurers.id = billing_batches.insurer_id
     WHERE billing_batches.id = ? AND billing_batches.clinic_id = ?`).get(req.params.id, req.session.clinicId);
   if (!batch) return res.status(404).json({ error: 'Lote não encontrado.' });
   if (batch.delivery_format === 'pdf') return res.status(400).json({ error: 'Este convênio exige somente PDF assinado.' });
   const guides = db.prepare(`SELECT guides.* FROM billing_batch_guides JOIN guides ON guides.id = billing_batch_guides.guide_id WHERE billing_batch_guides.batch_id = ? ORDER BY guides.id`).all(batch.id);
-  const guideXml = guides.map(guide => `<guia><numeroGuiaPrestador>${escapeXml(guide.id)}</numeroGuiaPrestador><beneficiario>${escapeXml(guide.patient)}</beneficiario><numeroCarteira>${escapeXml(guide.card_number)}</numeroCarteira><codigoTUSS>${escapeXml(guide.service_code)}</codigoTUSS><quantidade>${escapeXml(guide.quantity)}</quantidade><valorTotal>${(Number(guide.value_cents || 0) / 100).toFixed(2)}</valorTotal></guia>`).join('');
-  const xml = `<?xml version="1.0" encoding="UTF-8"?><mensagemTISS versao="4.01.00"><loteGuias><numeroLote>${escapeXml(batch.id)}</numeroLote><registroANS>${escapeXml(batch.ansCode)}</registroANS><competencia>${escapeXml(batch.competence)}</competencia><guias>${guideXml}</guias></loteGuias></mensagemTISS>`;
-  db.prepare('UPDATE billing_batches SET xml_generated = 1 WHERE id = ? AND clinic_id = ?').run(batch.id, req.session.clinicId);
-  res.setHeader('Content-Type', 'application/xml; charset=utf-8');
+  const guideXml = guides.map(guide => `<ans:guia><ans:numeroGuiaPrestador>${escapeXml(guide.id)}</ans:numeroGuiaPrestador><ans:beneficiario>${escapeXml(guide.patient)}</ans:beneficiario><ans:numeroCarteira>${escapeXml(guide.card_number)}</ans:numeroCarteira><ans:codigoTUSS>${escapeXml(guide.service_code)}</ans:codigoTUSS><ans:quantidade>${escapeXml(guide.quantity)}</ans:quantidade><ans:valorTotal>${(Number(guide.value_cents || 0) / 100).toFixed(2)}</ans:valorTotal></ans:guia>`).join('');
+  const now = new Date();
+  const date = now.toISOString().slice(0, 10);
+  const time = now.toTimeString().slice(0, 8);
+  const values = ['ENVIO_LOTE_GUIAS', batch.id.replace(/\D/g, '').slice(-12) || '1', date, time, batch.ansCode || '', TISS_VERSION, batch.id, ...guides.flatMap(guide => [guide.id, guide.patient, guide.card_number, guide.service_code, guide.quantity, (Number(guide.value_cents || 0) / 100).toFixed(2)])];
+  const hash = calculateTissHash(values);
+  const xml = `<?xml version="1.0" encoding="ISO-8859-1"?><ans:mensagemTISS xmlns:ans="http://www.ans.gov.br/padroes/tiss/schemas"><ans:cabecalho><ans:identificacaoTransacao><ans:tipoTransacao>ENVIO_LOTE_GUIAS</ans:tipoTransacao><ans:sequencialTransacao>${escapeXml(values[1])}</ans:sequencialTransacao><ans:dataRegistroTransacao>${date}</ans:dataRegistroTransacao><ans:horaRegistroTransacao>${time}</ans:horaRegistroTransacao></ans:identificacaoTransacao><ans:origem><ans:identificacaoPrestador><ans:CNPJ>${escapeXml(guides[0]?.provider_cnpj || '')}</ans:CNPJ></ans:identificacaoPrestador></ans:origem><ans:destino><ans:registroANS>${escapeXml(batch.ansCode)}</ans:registroANS></ans:destino><ans:Padrao>${TISS_VERSION}</ans:Padrao></ans:cabecalho><ans:prestadorParaOperadora><ans:loteGuias><ans:numeroLote>${escapeXml(batch.id)}</ans:numeroLote><ans:guiasTISS>${guideXml}</ans:guiasTISS></ans:loteGuias></ans:prestadorParaOperadora><ans:epilogo><ans:hash>${hash}</ans:hash></ans:epilogo></ans:mensagemTISS>`;
+  const validation = await validateTissXml(xml);
+  db.prepare('UPDATE billing_batches SET xml_generated = 1, xml_valid = ?, xml_validation_errors = ?, tiss_version = ? WHERE id = ? AND clinic_id = ?').run(validation.valid ? 1 : 0, JSON.stringify(validation.errors), TISS_VERSION, batch.id, req.session.clinicId);
+  res.setHeader('X-TISS-Version', TISS_VERSION);
+  res.setHeader('X-TISS-Valid', validation.valid ? 'true' : 'false');
+  res.setHeader('Content-Type', 'application/xml; charset=ISO-8859-1');
   res.setHeader('Content-Disposition', `attachment; filename="lote-${batch.id}.xml"`);
-  res.send(xml);
+  res.send(Buffer.from(xml, 'latin1'));
 });
 
 app.patch('/api/batches/:id', auth, requireRole('admin', 'faturamento'), (req, res) => {
   const allowedStatuses = ['draft', 'ready', 'sent', 'processing', 'approved', 'error'];
   const status = allowedStatuses.includes(req.body.status) ? req.body.status : 'draft';
   const protocol = String(req.body.protocol || '').trim();
-  const batch = db.prepare(`SELECT id, delivery_format AS deliveryFormat, xml_generated AS xmlGenerated FROM billing_batches WHERE id = ? AND clinic_id = ?`).get(req.params.id, req.session.clinicId);
+  const batch = db.prepare(`SELECT id, delivery_format AS deliveryFormat, xml_generated AS xmlGenerated, xml_valid AS xmlValid, xml_validation_errors AS xmlValidationErrors FROM billing_batches WHERE id = ? AND clinic_id = ?`).get(req.params.id, req.session.clinicId);
   if (!batch) return res.status(404).json({ error: 'Lote não encontrado.' });
   const readiness = batchDetails({ ...batch, xmlGenerated: Boolean(batch.xmlGenerated) });
   if (['ready', 'sent', 'processing', 'approved'].includes(status) && !readiness.readyForSending) return res.status(409).json({ error: 'Conclua os PDFs assinados e/ou gere o XML antes de liberar o lote.' });

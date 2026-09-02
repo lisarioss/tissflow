@@ -56,7 +56,7 @@ const insurerLogos = {
   'Promédica': { logo: 'PROMÉDICA', logoPath: 'assets/planos/promedica.png' }
 };
 const defaultInsurers = [
-  { id: 'INS-001', name: 'Unimed', ansCode: '004701', contactEmail: '', contactPhone: '', deliveryFormat: 'both', acceptedProcedures: ['10101012', '50000470', '50000000', '40901122'] },
+  { id: 'INS-001', name: 'Unimed', ansCode: '004701', contactEmail: '', contactPhone: '', providerCode: '', deliveryFormat: 'both', acceptedProcedures: ['10101012', '50000470', '50000000', '40901122'] },
   { id: 'INS-002', name: 'Bradesco Saúde', ansCode: '005711', contactEmail: '', contactPhone: '', deliveryFormat: 'pdf', acceptedProcedures: ['10101012', '50000470', '40901122'] },
   { id: 'INS-003', name: 'SulAmérica', ansCode: '006246', contactEmail: '', contactPhone: '', deliveryFormat: 'xml', acceptedProcedures: ['10101012', '50000470'] },
   { id: 'INS-004', name: 'Amil', ansCode: '326305', contactEmail: '', contactPhone: '', deliveryFormat: 'both', acceptedProcedures: ['10101012'] },
@@ -66,10 +66,12 @@ let insurers = JSON.parse(localStorage.getItem(clinicStorageKey('insurers')) || 
 function saveInsurers() { localStorage.setItem(clinicStorageKey('insurers'), JSON.stringify(insurers)); }
 let batches = JSON.parse(localStorage.getItem(clinicStorageKey('batches')) || 'null') || [];
 function saveBatches() { localStorage.setItem(clinicStorageKey('batches'), JSON.stringify(batches)); }
+let authorizations = JSON.parse(localStorage.getItem(clinicStorageKey('authorizations')) || 'null') || [];
+function saveAuthorizations() { localStorage.setItem(clinicStorageKey('authorizations'), JSON.stringify(authorizations)); }
 let feedbacks = JSON.parse(localStorage.getItem(clinicStorageKey('feedbacks')) || 'null') || [];
 function saveFeedbacks() { localStorage.setItem(clinicStorageKey('feedbacks'), JSON.stringify(feedbacks)); }
-let clinicSettings = JSON.parse(localStorage.getItem(clinicStorageKey('settings')) || 'null') || { tradeName: clinicProfiles[activeClinicId]?.name || '', legalName: '', cnpj: '', phone: '', instagram: '', address: '', city: '', state: '', postalCode: '', logoDataUrl: '', letterheadDataUrl: '', letterheadHeaderMm: 35, letterheadFooterMm: 25, owners: [], professionals: [] };
-const views = { overview: 'Visão geral', agenda: 'Agenda', guides: 'Guias TISS', batches: 'Lotes de faturamento', financeiro: 'Financeiro', users: 'Usuários', patients: 'Pacientes', convenios: 'Convênios', feedback: 'Feedbacks', reports: 'Relatórios', settings: 'Configurações' };
+let clinicSettings = JSON.parse(localStorage.getItem(clinicStorageKey('settings')) || 'null') || { tradeName: clinicProfiles[activeClinicId]?.name || '', legalName: '', cnpj: '', cnes: '', phone: '', instagram: '', address: '', city: '', state: '', postalCode: '', logoDataUrl: '', letterheadDataUrl: '', letterheadHeaderMm: 35, letterheadFooterMm: 25, owners: [], professionals: [] };
+const views = { overview: 'Visão geral', agenda: 'Agenda', guides: 'Guias TISS', authorizations: 'Controle de autorizações', batches: 'Lotes de faturamento', financeiro: 'Financeiro', users: 'Usuários', patients: 'Pacientes', convenios: 'Convênios', feedback: 'Feedbacks', reports: 'Relatórios', settings: 'Configurações' };
 const appView = document.querySelector('#app-view');
 const breadcrumb = document.querySelector('#breadcrumb');
 const toast = document.querySelector('#toast');
@@ -113,9 +115,9 @@ function syncContractRules() {
 }
 new MutationObserver(enhanceInsurerForm).observe(appView, { childList: true, subtree: true });
 const rolePermissions = {
-  admin: ['overview', 'agenda', 'guides', 'batches', 'financeiro', 'users', 'patients', 'convenios', 'feedback', 'reports', 'settings'],
-  faturamento: ['overview', 'guides', 'batches', 'financeiro', 'reports', 'users'],
-  recepcao: ['overview', 'agenda', 'patients', 'feedback', 'users'],
+  admin: ['overview', 'agenda', 'guides', 'authorizations', 'batches', 'financeiro', 'users', 'patients', 'convenios', 'feedback', 'reports', 'settings'],
+  faturamento: ['overview', 'guides', 'authorizations', 'batches', 'financeiro', 'reports', 'users'],
+  recepcao: ['overview', 'agenda', 'authorizations', 'patients', 'feedback', 'users'],
   medico: ['overview', 'agenda', 'patients', 'feedback']
 };
 function userCan(view) { return (rolePermissions[activeUser?.role || 'admin'] || []).includes(view); }
@@ -229,7 +231,7 @@ function normalizeBatch(batch) { return { ...batch, totalValue: Number(batch.tot
 async function loadApiData() {
   if (!activeSession?.token) return;
   try {
-    const [apiGuides, apiInvoices, apiPatients, apiGlosas, apiInsurers, apiFeedbacks, apiSettings, apiBatches] = await Promise.all([apiRequest('/guides'), apiRequest('/invoices'), apiRequest('/patients'), apiRequest('/glosas'), apiRequest('/insurers'), apiRequest('/feedbacks'), apiRequest('/settings'), apiRequest('/batches')]);
+    const [apiGuides, apiInvoices, apiPatients, apiGlosas, apiInsurers, apiFeedbacks, apiSettings, apiBatches, apiAuthorizations] = await Promise.all([apiRequest('/guides'), apiRequest('/invoices'), apiRequest('/patients'), apiRequest('/glosas'), apiRequest('/insurers'), apiRequest('/feedbacks'), apiRequest('/settings'), apiRequest('/batches'), apiRequest('/authorizations')]);
     guides = apiGuides.map(normalizeGuide);
     invoices = apiInvoices.map(normalizeInvoice);
     if (apiPatients.length) patients = apiPatients;
@@ -238,6 +240,7 @@ async function loadApiData() {
     feedbacks = apiFeedbacks;
     clinicSettings = apiSettings;
     batches = apiBatches.map(normalizeBatch);
+    authorizations = apiAuthorizations;
     render();
   } catch (error) {
     showToast(`Modo local: ${error.message}`);
@@ -351,7 +354,7 @@ function batchRequirementHtml(batch) {
   const requiresXml = batch.deliveryFormat === 'xml' || batch.deliveryFormat === 'both';
   return `<div class="batch-requirements">
     <span class="requirement ${!requiresPdf || batch.missingSignedPdfs === 0 ? 'done' : 'pending'}">${requiresPdf ? `${batch.missingSignedPdfs || 0} PDF(s) pendente(s)` : 'PDF não exigido'}</span>
-    <span class="requirement ${!requiresXml || !batch.xmlPending ? 'done' : 'pending'}">${requiresXml ? (batch.xmlPending ? 'XML pendente' : 'XML gerado') : 'XML não exigido'}</span>
+    <span class="requirement ${!requiresXml || !batch.xmlPending ? 'done' : 'pending'}">${requiresXml ? (!batch.xmlGenerated ? 'XML pendente' : batch.xmlValid ? `XML TISS ${batch.tissVersion || '4.03.00'} válido` : `XML inválido · ${batch.xmlValidationErrors?.length || 0} erro(s)`) : 'XML não exigido'}</span>
   </div>`;
 }
 function batchCard(batch) {
@@ -361,6 +364,7 @@ function batchCard(batch) {
     <div class="batch-card-heading"><div><span class="eyebrow">${batch.id} · ${batch.competence}</span><h2>${batch.insurer}</h2><small>${deliveryFormatLabels[batch.deliveryFormat] || deliveryFormatLabels.both}</small></div><span class="status ${batch.status}">${batchStatusLabels[batch.status] || batch.status}</span></div>
     <div class="batch-summary"><div><span>Guias</span><strong>${batch.guideCount ?? batch.guides.length}</strong></div><div><span>Valor total</span><strong>${formatMoney(batch.totalValue)}</strong></div><div><span>Protocolo</span><strong>${batch.protocol || 'Não informado'}</strong></div></div>
     ${batchRequirementHtml(batch)}
+    ${batch.xmlGenerated && !batch.xmlValid ? '<div class="batch-validation-alert"><strong>O schema oficial encontrou incompatibilidades.</strong><span>Revise os cadastros obrigatórios da clínica, do profissional e da guia antes do envio.</span></div>' : ''}
     <div class="batch-guide-list">${batch.guides.map(guide => `<div class="batch-guide-row"><div><strong>${guide.id} · ${guide.patient}</strong><small>${guide.procedure} · ${formatMoney(Number(guide.valueCents || 0) / 100)}</small></div>${requiresPdf ? `<label><input type="checkbox" data-action="toggle-signed-pdf" data-batch-id="${batch.id}" data-guide-id="${guide.id}" ${guide.signedPdfReceived ? 'checked' : ''} /> PDF assinado conferido</label>` : ''}</div>`).join('')}</div>
     <div class="batch-actions">${requiresXml ? `<button type="button" class="secondary-button" data-action="download-batch-xml" data-batch-id="${batch.id}">Gerar XML</button>` : ''}<select data-batch-status><option value="draft">Em preparação</option><option value="ready">Pronto para envio</option><option value="sent">Enviado</option><option value="processing">Em processamento</option><option value="approved">Aprovado</option><option value="error">Com erro</option></select><input data-batch-protocol placeholder="Protocolo da operadora" value="${batch.protocol || ''}" /><button type="button" class="primary-button" data-action="update-batch" data-batch-id="${batch.id}">Salvar acompanhamento</button>${batch.status === 'draft' ? `<button type="button" class="finance-delete" data-action="delete-batch" data-batch-id="${batch.id}">Excluir lote</button>` : ''}</div>
   </article>`;
@@ -372,6 +376,19 @@ function batchesView() {
     <div class="batch-stats"><div><span>Lotes</span><strong>${batches.length}</strong></div><div><span>Valor agrupado</span><strong>${formatMoney(totalValue)}</strong></div><div><span>Com pendências</span><strong>${pending}</strong></div></div>
     <form class="panel batch-form" id="batch-form"><div class="panel-header"><div><h2 class="panel-title">Criar lote</h2><p class="panel-subtitle">Cada lote reúne guias do mesmo convênio e da mesma competência.</p></div></div><div class="form-section"><div class="form-grid"><div class="field"><label for="batch-insurer">Convênio *</label><select id="batch-insurer" name="insurerId" required><option value="">Selecione</option>${insurers.map(insurer => `<option value="${insurer.id}">${insurer.name} · ${deliveryFormatLabels[insurer.deliveryFormat] || deliveryFormatLabels.both}</option>`).join('')}</select></div><div class="field"><label for="batch-competence">Competência *</label><input id="batch-competence" name="competence" type="month" required /></div></div><div><label class="batch-guide-label">Guias disponíveis *</label><div id="batch-guide-options" class="batch-guide-options">${batchGuideOptions()}</div></div></div><div class="form-footer"><button class="primary-button" type="submit">Criar lote</button></div></form>
     <div class="batch-list">${batches.length ? batches.map(batchCard).join('') : '<div class="empty-state"><div><div class="empty-icon">▤</div><h2>Nenhum lote criado</h2><p>Escolha um convênio, uma competência e as guias que serão faturadas juntas.</p></div></div>'}</div>`;
+}
+function authorizationState(item) {
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const end = new Date(`${item.validTo}T00:00:00`);
+  const days = Math.ceil((end - today) / 86400000);
+  if (days < 0) return { key: 'expired', label: 'Vencida', note: `Venceu há ${Math.abs(days)} dia(s)` };
+  if (days <= 30) return { key: 'expiring', label: 'Próxima do vencimento', note: days === 0 ? 'Vence hoje' : `Vence em ${days} dia(s)` };
+  return { key: 'active', label: 'Vigente', note: `Vence em ${days} dia(s)` };
+}
+function authorizationsView() {
+  const expiring = authorizations.filter(item => ['expired', 'expiring'].includes(authorizationState(item).key)).length;
+  const rows = authorizations.map(item => { const state = authorizationState(item); const balance = Math.max(0, Number(item.authorizedQuantity) - Number(item.usedQuantity)); return `<tr data-authorization-row="${item.id}" data-valid-to="${item.validTo}" data-authorized-quantity="${item.authorizedQuantity}"><td><strong>${item.patient}</strong><small>${item.insurer}</small></td><td><strong>${item.authorizationNumber}</strong></td><td>${new Date(`${item.validFrom}T12:00:00`).toLocaleDateString('pt-BR')}<small>até ${new Date(`${item.validTo}T12:00:00`).toLocaleDateString('pt-BR')}</small></td><td><span class="authorization-status ${state.key}">${state.label}</span><small>${state.note}</small></td><td><strong>${balance} restante(s)</strong><label class="authorization-used">Usadas <input type="number" min="0" value="${item.usedQuantity}" data-authorization-used /></label></td><td><button class="text-button" data-action="update-authorization" data-authorization-id="${item.id}">Atualizar saldo</button> <button class="finance-delete" data-action="delete-authorization" data-authorization-id="${item.id}">Excluir</button></td></tr>`; }).join('');
+  return `<div class="page-heading"><div><p class="eyebrow">Controle assistencial</p><h1>Autorizações de atendimento</h1><p class="heading-copy">Acompanhe a validade das guias autorizadas e o saldo de sessões de cada paciente.</p></div></div><div class="batch-stats"><div><span>Autorizações</span><strong>${authorizations.length}</strong></div><div><span>Vencidas ou próximas</span><strong>${expiring}</strong></div><div><span>Vigentes</span><strong>${authorizations.length - expiring}</strong></div></div><div class="panel"><div class="panel-header"><div><h2 class="panel-title">Controle de vencimentos</h2><p class="panel-subtitle">O alerta amarelo começa 30 dias antes do vencimento.</p></div></div><table><thead><tr><th>Paciente</th><th>Número da autorização</th><th>Validade</th><th>Situação</th><th>Saldo</th><th></th></tr></thead><tbody>${rows || '<tr><td colspan="6">Nenhuma autorização cadastrada.</td></tr>'}</tbody></table></div><form class="panel patient-form" id="authorization-form"><div class="panel-header"><div><h2 class="panel-title">Cadastrar autorização</h2><p class="panel-subtitle">Informe os dados recebidos do plano de saúde.</p></div></div><div class="form-section"><div class="form-grid"><div class="field"><label>Paciente *</label><select name="patientId" required><option value="">Selecione</option>${patients.map(patient => `<option value="${patient.id}">${patient.name} · ${patient.insurer}</option>`).join('')}</select></div><div class="field"><label>Convênio *</label><select name="insurerId" required><option value="">Selecione</option>${insurers.map(insurer => `<option value="${insurer.id}">${insurer.name}</option>`).join('')}</select></div><div class="field"><label>Número/senha da autorização *</label><input name="authorizationNumber" required /></div><div class="field"><label>Início da validade *</label><input name="validFrom" type="date" required /></div><div class="field"><label>Vencimento *</label><input name="validTo" type="date" required /></div><div class="field"><label>Quantidade autorizada *</label><input name="authorizedQuantity" type="number" min="1" value="1" required /></div><div class="field"><label>Quantidade já utilizada</label><input name="usedQuantity" type="number" min="0" value="0" /></div><div class="field"><label>Observações</label><input name="notes" placeholder="Ex.: autorização mensal" /></div></div></div><div class="form-footer"><button class="primary-button" type="submit">Salvar autorização</button></div></form>`;
 }
 function financeView() {
   const pendingCount = invoices.filter(invoice => invoice.status === 'pending').length;
@@ -426,7 +443,7 @@ function insurerRowsHtml(term) {
 function insurersView() {
   return `<div class="page-heading"><div><p class="eyebrow">Cadastro da clínica</p><h1>Convênios</h1><p class="heading-copy">Operadoras aceitas pela clínica — alimenta os seletores de guia, paciente e lote.</p></div></div>
   <div class="panel"><div class="panel-header"><div><h2 class="panel-title">Convênios cadastrados</h2><p class="panel-subtitle">${insurers.length} operadoras</p></div></div><div class="search-bar"><input type="search" id="insurer-search" placeholder="Buscar por nome, código ANS ou contato" /></div><table><thead><tr><th>Nome</th><th>Código ANS</th><th>Contato</th><th>Envio exigido</th><th>Procedimentos aceitos</th><th></th></tr></thead><tbody id="insurer-table-body">${insurerRowsHtml('')}</tbody></table></div>
-  <form class="panel patient-form" id="insurer-form"><div class="panel-header"><div><h2 class="panel-title">Cadastrar convênio</h2><p class="panel-subtitle">Defina também os documentos exigidos no fechamento do faturamento.</p></div></div><div class="form-section"><div class="form-grid"><div class="field"><label for="new-insurer-name">Nome *</label><input id="new-insurer-name" name="name" required /></div><div class="field"><label for="new-insurer-ans">Código ANS</label><input id="new-insurer-ans" name="ansCode" placeholder="Ex.: 004701" /></div><div class="field"><label for="new-insurer-email">E-mail de contato</label><input id="new-insurer-email" name="contactEmail" type="email" placeholder="faturamento@operadora.com.br" /></div><div class="field"><label for="new-insurer-phone">Telefone de contato</label><input id="new-insurer-phone" name="contactPhone" placeholder="(00) 0000-0000" /></div><div class="field"><label for="new-insurer-delivery">Forma de envio exigida *</label><select id="new-insurer-delivery" name="deliveryFormat" required><option value="pdf">PDF assinado</option><option value="xml">XML</option><option value="both" selected>PDF assinado + XML</option></select><small>O lote cobrará automaticamente os arquivos escolhidos.</small></div></div><div class="field"><label for="new-insurer-procedures">Códigos TUSS aceitos (separados por vírgula)</label><input id="new-insurer-procedures" name="acceptedProcedures" placeholder="Ex.: 10101012, 50000470" /></div></div><div class="form-footer"><button type="button" class="secondary-button" data-action="cancel-insurer-edit" hidden>Cancelar edição</button><button class="primary-button" type="submit">Salvar convênio</button></div></form>`;
+  <form class="panel patient-form" id="insurer-form"><div class="panel-header"><div><h2 class="panel-title">Cadastrar convênio</h2><p class="panel-subtitle">Defina também os documentos exigidos no fechamento do faturamento.</p></div></div><div class="form-section"><div class="form-grid"><div class="field"><label for="new-insurer-name">Nome *</label><input id="new-insurer-name" name="name" required /></div><div class="field"><label for="new-insurer-ans">Código ANS</label><input id="new-insurer-ans" name="ansCode" placeholder="Ex.: 004701" /></div><div class="field"><label for="new-insurer-provider-code">Código do prestador na operadora</label><input id="new-insurer-provider-code" name="providerCode" maxlength="14" placeholder="Código fornecido pelo convênio" /><small>Pode ser diferente em cada operadora.</small></div><div class="field"><label for="new-insurer-email">E-mail de contato</label><input id="new-insurer-email" name="contactEmail" type="email" placeholder="faturamento@operadora.com.br" /></div><div class="field"><label for="new-insurer-phone">Telefone de contato</label><input id="new-insurer-phone" name="contactPhone" placeholder="(00) 0000-0000" /></div><div class="field"><label for="new-insurer-delivery">Forma de envio exigida *</label><select id="new-insurer-delivery" name="deliveryFormat" required><option value="pdf">PDF assinado</option><option value="xml">XML</option><option value="both" selected>PDF assinado + XML</option></select><small>O lote cobrará automaticamente os arquivos escolhidos.</small></div></div><div class="field"><label for="new-insurer-procedures">Códigos TUSS aceitos (separados por vírgula)</label><input id="new-insurer-procedures" name="acceptedProcedures" placeholder="Ex.: 10101012, 50000470" /></div></div><div class="form-footer"><button type="button" class="secondary-button" data-action="cancel-insurer-edit" hidden>Cancelar edição</button><button class="primary-button" type="submit">Salvar convênio</button></div></form>`;
 }
 function editInsurer(insurerId) {
   const insurer = insurers.find(item => item.id === insurerId);
@@ -438,6 +455,7 @@ function editInsurer(insurerId) {
   form.querySelector('#new-insurer-ans').value = insurer.ansCode || '';
   form.querySelector('#new-insurer-email').value = insurer.contactEmail || '';
   form.querySelector('#new-insurer-phone').value = insurer.contactPhone || '';
+  form.querySelector('#new-insurer-provider-code').value = insurer.providerCode || '';
   form.querySelector('#new-insurer-delivery').value = insurer.deliveryFormat || 'both';
   form.querySelector('#new-insurer-procedures').value = (insurer.acceptedProcedures || []).join(', ');
   renderContractRules(insurer.procedureRules || []);
@@ -467,7 +485,19 @@ function reportsView() {
   <div class="stats-grid"><article class="stat-card"><div class="stat-top"><span>Total de guias</span><span class="stat-icon">▣</span></div><div class="stat-value">${guides.length}</div><div class="stat-note">Registros salvos</div></article><article class="stat-card"><div class="stat-top"><span>Guias aprovadas</span><span class="stat-icon">◉</span></div><div class="stat-value">${guideCounts.approved || 0}</div><div class="stat-note">Processadas com sucesso</div></article><article class="stat-card"><div class="stat-top"><span>Valor pendente</span><span class="stat-icon">◷</span></div><div class="stat-value">${formatMoney(pendingAmount)}</div><div class="stat-note warn">Aguardando pagamento</div></article><article class="stat-card"><div class="stat-top"><span>Valor em glosa</span><span class="stat-icon">✕</span></div><div class="stat-value">${formatMoney(openGlosaAmount)}</div><div class="stat-note ${openGlosas.length ? 'warn' : ''}">${openGlosas.length} glosa(s) em aberto ou recurso</div></article></div>
   <div class="content-grid"><div class="panel"><div class="panel-header"><div><h2 class="panel-title">Status das guias</h2><p class="panel-subtitle">Distribuição atual do faturamento TISS</p></div></div><div class="report-status-list"><div><span>Enviadas</span><strong>${guideCounts.sent || 0}</strong></div><div><span>Em análise</span><strong>${guideCounts.review || 0}</strong></div><div><span>Aprovadas</span><strong>${guideCounts.approved || 0}</strong></div><div><span>Com glosa</span><strong>${guideCounts.error || 0}</strong></div><div><span>Recurso enviado</span><strong>${guideCounts.recurso || 0}</strong></div></div></div><div class="panel"><div class="panel-header"><div><h2 class="panel-title">Próximos pagamentos</h2><p class="panel-subtitle">Notas pendentes em ordem de vencimento</p></div></div><div class="report-payment-list">${upcomingInvoices.length ? upcomingInvoices.slice(0, 5).map(invoice => `<div class="report-payment-row"><div><strong>${invoice.id}</strong><small>${invoice.guideId || 'Sem guia vinculada'}</small></div><strong>${formatMoney(invoice.amount)}</strong><time>${new Date(`${invoice.expectedDate}T12:00:00`).toLocaleDateString('pt-BR')}</time></div>`).join('') : '<p class="panel-subtitle">Nenhum pagamento pendente.</p>'}</div></div></div>`;
 }
-function peopleToText(people) { return (people || []).map(person => [person.name, person.title, person.council].filter(Boolean).join(' | ')).join('\n'); }
+function professionalRowHtml(professional = {}, index = 0) {
+  const legacyCouncil = String(professional.council || '').match(/^([A-Za-z]+)\s*(.*)$/);
+  const councilType = professional.councilType || legacyCouncil?.[1] || '';
+  const councilNumber = professional.councilNumber || legacyCouncil?.[2] || '';
+  return `<div class="owner-settings-row" data-professional-row><div class="professional-settings-grid">
+    <div class="field"><label>Nome *</label><input data-professional-field="name" value="${professional.name || ''}" required /></div>
+    <div class="field"><label>Especialidade</label><input data-professional-field="title" value="${professional.title || ''}" placeholder="Ex.: Psicóloga" /></div>
+    <div class="field"><label>Conselho *</label><select data-professional-field="councilType" required><option value="">Selecione</option>${['CRM','CRP','CREFITO','CREFONO','CRO','COREN','CRN','CRESS','OUT'].map(type => `<option value="${type}" ${councilType === type ? 'selected' : ''}>${type}</option>`).join('')}</select></div>
+    <div class="field"><label>Número do conselho *</label><input data-professional-field="councilNumber" value="${councilNumber}" required /></div>
+    <div class="field"><label>UF do conselho *</label><input data-professional-field="councilState" maxlength="2" value="${professional.councilState || clinicSettings.state || ''}" required /></div>
+    <div class="field"><label>CBO *</label><input data-professional-field="cbo" inputmode="numeric" maxlength="6" value="${professional.cbo || ''}" placeholder="6 dígitos" required /></div>
+  </div><div class="owner-settings-actions"><small>Dados usados no XML TISS.</small><button type="button" class="text-button" data-action="remove-professional" ${index === 0 ? 'hidden' : ''}>Remover</button></div></div>`;
+}
 function ownerRowHtml(owner = {}, index = 0) {
   return `<div class="owner-settings-row" data-owner-row>
     <div class="owner-settings-grid">
@@ -481,9 +511,18 @@ function ownerRowHtml(owner = {}, index = 0) {
     </div>
   </div>`;
 }
+function professionalsFromSettingsForm(form) {
+  return [...form.querySelectorAll('[data-professional-row]')].map(row => {
+    const value = field => row.querySelector(`[data-professional-field="${field}"]`)?.value.trim() || '';
+    const councilType = value('councilType').toUpperCase();
+    const councilNumber = value('councilNumber');
+    return { name: value('name'), title: value('title'), councilType, councilNumber, councilState: value('councilState').toUpperCase(), cbo: value('cbo'), council: `${councilType} ${councilNumber}`.trim() };
+  }).filter(professional => professional.name);
+}
 function settingsView() {
   const logo = clinicSettings.letterheadDataUrl ? '<p class="panel-subtitle">Papel timbrado A4 cadastrado.</p>' : clinicSettings.logoDataUrl ? `<img src="${clinicSettings.logoDataUrl}" alt="Logotipo atual" style="max-width:180px;max-height:90px;object-fit:contain" />` : '<p class="panel-subtitle">Nenhum timbrado cadastrado.</p>';
   const owners = clinicSettings.owners?.length ? clinicSettings.owners : [{}];
+  const professionals = clinicSettings.professionals?.length ? clinicSettings.professionals : [{}];
   return `<div class="page-heading"><div><p class="eyebrow">Identidade dos documentos</p><h1>Configurações da clínica</h1><p class="heading-copy">Estes dados serão usados na capa e na guia impressa.</p></div></div>
     <form class="panel patient-form" id="settings-form">
       <div class="panel-header"><div><h2 class="panel-title">Timbrado e responsáveis</h2><p class="panel-subtitle">Somente administradores podem alterar estas informações.</p></div>${logo}</div>
@@ -492,6 +531,7 @@ function settingsView() {
           <div class="field"><label>Nome da clínica *</label><input name="tradeName" value="${clinicSettings.tradeName || ''}" required /></div>
           <div class="field"><label>Razão social</label><input name="legalName" value="${clinicSettings.legalName || ''}" /></div>
           <div class="field"><label>CNPJ</label><input name="cnpj" value="${clinicSettings.cnpj || ''}" /></div>
+          <div class="field"><label>CNES *</label><input name="cnes" inputmode="numeric" maxlength="7" value="${clinicSettings.cnes || ''}" placeholder="7 dígitos" required /><small>Cadastro Nacional de Estabelecimentos de Saúde.</small></div>
           <div class="field"><label>Telefone</label><input name="phone" value="${clinicSettings.phone || ''}" /></div>
           <div class="field"><label>Instagram</label><input name="instagram" value="${clinicSettings.instagram || ''}" /></div>
           <div class="field"><label>CEP</label><input name="postalCode" value="${clinicSettings.postalCode || ''}" /></div>
@@ -504,7 +544,7 @@ function settingsView() {
           <div class="field"><label>Área reservada para o rodapé (mm)</label><input name="letterheadFooterMm" type="number" min="15" max="50" value="${clinicSettings.letterheadFooterMm || 25}" /><small>Impede que atendimentos e assinaturas cubram o rodapé.</small></div>
         </div>
         <div class="owners-settings"><div class="owners-settings-heading"><div><label>Responsáveis e sócios que assinam a capa</label><small>Ative somente quem deve aparecer automaticamente no PDF.</small></div><button type="button" class="secondary-button" data-action="add-owner">＋ Adicionar responsável</button></div><div id="owners-settings-list">${owners.map(ownerRowHtml).join('')}</div></div>
-        <div class="field"><label>Profissionais da clínica</label><textarea name="professionalsText" rows="5" placeholder="Uma por linha: Nome | Especialidade | Conselho/registro">${peopleToText(clinicSettings.professionals)}</textarea></div>
+        <div class="owners-settings"><div class="owners-settings-heading"><div><label>Profissionais da clínica</label><small>Conselho, UF e CBO são usados na guia eletrônica.</small></div><button type="button" class="secondary-button" data-action="add-professional">＋ Adicionar profissional</button></div><div id="professionals-settings-list">${professionals.map(professionalRowHtml).join('')}</div></div>
       </div>
       <div class="form-footer"><button class="primary-button" type="submit">Salvar configurações</button></div>
     </form>`;
@@ -512,7 +552,7 @@ function settingsView() {
 function saveGuides() { localStorage.setItem(clinicStorageKey('guides'), JSON.stringify(guides)); }
 function restoreDraft() { const draft = JSON.parse(localStorage.getItem(clinicStorageKey('draft')) || 'null'); if (!draft) return; Object.entries(draft).forEach(([key, value]) => { const field = document.querySelector(`#${key}`); if (field) field.value = value; }); }
 function saveDraft(form) { localStorage.setItem(clinicStorageKey('draft'), JSON.stringify(Object.fromEntries(new FormData(form)))); }
-function render(view = 'overview') { breadcrumb.textContent = views[view] || views.overview; const safeView = userCan(view) ? view : 'overview'; appView.innerHTML = safeView === 'overview' ? overview() : safeView === 'agenda' ? agendaView() : safeView === 'guides' ? guideList() : safeView === 'batches' ? batchesView() : safeView === 'financeiro' ? financeView() : safeView === 'reports' ? reportsView() : safeView === 'patients' ? patientsView() : safeView === 'users' ? usersView() : safeView === 'convenios' ? insurersView() : safeView === 'feedback' ? feedbackView() : safeView === 'settings' ? settingsView() : listing(views[safeView], `Gerencie ${views[safeView].toLowerCase()} em um só lugar.`, '↗'); document.querySelectorAll('.nav-item').forEach(item => { const visible = userCan(item.dataset.view); item.style.display = visible ? '' : 'none'; item.classList.toggle('active', item.dataset.view === safeView && visible); }); if (safeView === 'batches') batches.forEach(batch => { const card = document.querySelector(`[data-batch-id="${batch.id}"]`); const select = card?.querySelector('[data-batch-status]'); if (select) select.value = batch.status; }); }
+function render(view = 'overview') { breadcrumb.textContent = views[view] || views.overview; const safeView = userCan(view) ? view : 'overview'; appView.innerHTML = safeView === 'overview' ? overview() : safeView === 'agenda' ? agendaView() : safeView === 'guides' ? guideList() : safeView === 'authorizations' ? authorizationsView() : safeView === 'batches' ? batchesView() : safeView === 'financeiro' ? financeView() : safeView === 'reports' ? reportsView() : safeView === 'patients' ? patientsView() : safeView === 'users' ? usersView() : safeView === 'convenios' ? insurersView() : safeView === 'feedback' ? feedbackView() : safeView === 'settings' ? settingsView() : listing(views[safeView], `Gerencie ${views[safeView].toLowerCase()} em um só lugar.`, '↗'); document.querySelectorAll('.nav-item').forEach(item => { const visible = userCan(item.dataset.view); item.style.display = visible ? '' : 'none'; item.classList.toggle('active', item.dataset.view === safeView && visible); }); if (safeView === 'batches') batches.forEach(batch => { const card = document.querySelector(`[data-batch-id="${batch.id}"]`); const select = card?.querySelector('[data-batch-status]'); if (select) select.value = batch.status; }); }
 function applySession() { const clinic = clinicProfiles[activeClinicId]; if (!clinic || !activeUser) return; document.querySelector('.workspace-switcher strong').textContent = clinic.name; document.querySelector('.workspace-switcher small').textContent = clinic.unit; document.querySelector('.workspace-switcher .avatar').textContent = clinic.initials; document.querySelector('#breadcrumb-clinic').textContent = clinic.name; document.querySelector('.profile strong').textContent = activeUser.name; document.querySelector('.profile small').textContent = activeUser.roleLabel || roleLabels[activeUser.role] || activeUser.role; document.querySelector('.user-button span:nth-child(2)').textContent = activeUser.name; document.querySelector('.user-button .avatar').textContent = activeUser.name.split(' ').map(name => name[0]).join('').slice(0, 2); }
 function usersView() { const clinicUsersList = clinicUsers[activeClinicId] || []; return `<div class="page-heading"><div><p class="eyebrow">Acesso e segurança</p><h1>Usuários da clínica</h1><p class="heading-copy">Cada perfil acessa apenas o que precisa.</p></div><button class="primary-button" data-action="new-user">＋ Novo usuário</button></div><div class="panel"><div class="panel-header"><div><h2 class="panel-title">Equipe</h2><p class="panel-subtitle">${clinicUsersList.length} usuários cadastrados</p></div></div><table><thead><tr><th>Nome</th><th>E-mail</th><th>Perfil</th><th>Permissão</th></tr></thead><tbody>${clinicUsersList.map(user => `<tr><td><strong>${user.name}</strong></td><td>${user.email}</td><td>${user.roleLabel}</td><td>${user.role === 'admin' ? 'Total' : user.role === 'faturamento' ? 'Guias e relatórios' : user.role === 'recepcao' ? 'Agenda e pacientes' : 'Agenda e prontuários'}</td></tr>`).join('')}</tbody></table></div>`; }
 function showToast(message) { toast.textContent = message; toast.classList.add('show'); setTimeout(() => toast.classList.remove('show'), 2800); }
@@ -567,6 +607,8 @@ async function downloadGuidePdf(guideId) {
     const response = await fetch(`${apiBase}/guides/${encodeURIComponent(guideId)}/pdf`, { headers: apiHeaders() });
     if (!response.ok) { const payload = await response.json().catch(() => ({})); throw new Error(payload.error || 'Não foi possível gerar o PDF.'); }
     const blob = await response.blob();
+    const xmlIsValid = response.headers.get('X-TISS-Valid') === 'true';
+    const tissVersion = response.headers.get('X-TISS-Version') || '4.03.00';
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url; link.download = `capa-e-guia-${guideId}.pdf`; link.click();
@@ -592,7 +634,7 @@ async function downloadBatchXml(batchId) {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
     await refreshBatches();
     render('batches');
-    showToast('XML demonstrativo do lote gerado.');
+    showToast(xmlIsValid ? `XML TISS ${tissVersion} validado e gerado.` : `XML gerado, mas ainda possui erros no schema TISS ${tissVersion}.`);
   } catch (error) { showToast(error.message); }
 }
 
@@ -621,7 +663,15 @@ document.addEventListener('click', event => {
     return;
   }
   const removeButton = event.target.closest('[data-action="remove-owner"]');
-  if (removeButton) removeButton.closest('[data-owner-row]')?.remove();
+  if (removeButton) { removeButton.closest('[data-owner-row]')?.remove(); return; }
+  const addProfessionalButton = event.target.closest('[data-action="add-professional"]');
+  if (addProfessionalButton) {
+    const list = document.querySelector('#professionals-settings-list');
+    if (list) list.insertAdjacentHTML('beforeend', professionalRowHtml({}, list.children.length));
+    return;
+  }
+  const removeProfessionalButton = event.target.closest('[data-action="remove-professional"]');
+  if (removeProfessionalButton) removeProfessionalButton.closest('[data-professional-row]')?.remove();
 });
 
 document.addEventListener('change', event => {
@@ -635,11 +685,41 @@ document.addEventListener('change', event => {
 });
 
 document.addEventListener('submit', async event => {
+  if (event.target.id !== 'authorization-form') return;
+  event.preventDefault(); event.stopImmediatePropagation();
+  const payload = Object.fromEntries(new FormData(event.target));
+  payload.authorizedQuantity = Number(payload.authorizedQuantity);
+  payload.usedQuantity = Number(payload.usedQuantity || 0);
+  try {
+    if (activeSession?.token) { await apiRequest('/authorizations', { method: 'POST', body: JSON.stringify(payload) }); authorizations = await apiRequest('/authorizations'); }
+    else { const patient = patients.find(item => item.id === payload.patientId); const insurer = insurers.find(item => item.id === payload.insurerId); if (patient?.insurer !== insurer?.name) throw new Error('O convênio é diferente do cadastro do paciente.'); authorizations.push({ id: `AUT-${Date.now()}`, patient: patient.name, insurer: insurer.name, ...payload }); saveAuthorizations(); }
+    render('authorizations'); showToast('Autorização cadastrada e monitorada.');
+  } catch (error) { showToast(error.message); }
+}, true);
+
+document.addEventListener('click', async event => {
+  const updateButton = event.target.closest('[data-action="update-authorization"]');
+  if (updateButton) {
+    const row = updateButton.closest('[data-authorization-row]');
+    const item = authorizations.find(entry => entry.id === updateButton.dataset.authorizationId);
+    const payload = { usedQuantity: Number(row.querySelector('[data-authorization-used]').value), authorizedQuantity: Number(row.dataset.authorizedQuantity), validTo: row.dataset.validTo, notes: item?.notes || '' };
+    try { if (activeSession?.token) { await apiRequest(`/authorizations/${updateButton.dataset.authorizationId}`, { method: 'PUT', body: JSON.stringify(payload) }); authorizations = await apiRequest('/authorizations'); } else { Object.assign(item, payload); saveAuthorizations(); } render('authorizations'); showToast('Saldo da autorização atualizado.'); } catch (error) { showToast(error.message); }
+    return;
+  }
+  const button = event.target.closest('[data-action="delete-authorization"]');
+  if (!button) return;
+  try {
+    if (activeSession?.token) { await apiRequest(`/authorizations/${button.dataset.authorizationId}`, { method: 'DELETE' }); authorizations = await apiRequest('/authorizations'); }
+    else { authorizations = authorizations.filter(item => item.id !== button.dataset.authorizationId); saveAuthorizations(); }
+    render('authorizations'); showToast('Autorização excluída.');
+  } catch (error) { showToast(error.message); }
+});
+
+document.addEventListener('submit', async event => {
   if (event.target.id !== 'settings-form') return;
   event.preventDefault(); event.stopImmediatePropagation();
   const data = Object.fromEntries(new FormData(event.target));
-  const payload = { ...data, owners: ownersFromSettingsForm(event.target), professionals: parsePeople(data.professionalsText) };
-  delete payload.professionalsText;
+  const payload = { ...data, owners: ownersFromSettingsForm(event.target), professionals: professionalsFromSettingsForm(event.target) };
   try {
     if (activeSession?.token) { await apiRequest('/settings', { method: 'PUT', body: JSON.stringify(payload) }); clinicSettings = await apiRequest('/settings'); }
     else { clinicSettings = payload; localStorage.setItem(clinicStorageKey('settings'), JSON.stringify(payload)); }
@@ -801,7 +881,7 @@ document.addEventListener('submit', async event => {
   const insurerId = event.target.dataset.insurerId;
   try {
     if (insurerId) {
-      const payload = { name: data.name, ansCode: data.ansCode, contactEmail: data.contactEmail, contactPhone: data.contactPhone, deliveryFormat: data.deliveryFormat, acceptedProcedures, procedureRules };
+      const payload = { name: data.name, ansCode: data.ansCode, contactEmail: data.contactEmail, contactPhone: data.contactPhone, providerCode: data.providerCode, deliveryFormat: data.deliveryFormat, acceptedProcedures, procedureRules };
       if (activeSession?.token) {
         await apiRequest(`/insurers/${insurerId}`, { method: 'PUT', body: JSON.stringify(payload) });
         insurers = await apiRequest('/insurers');
@@ -811,7 +891,7 @@ document.addEventListener('submit', async event => {
       }
       showToast('Convênio atualizado.');
     } else {
-      const insurer = { id: nextSequentialId(insurers, 'INS-', 3), name: data.name, ansCode: data.ansCode, contactEmail: data.contactEmail, contactPhone: data.contactPhone, deliveryFormat: data.deliveryFormat, acceptedProcedures, procedureRules };
+      const insurer = { id: nextSequentialId(insurers, 'INS-', 3), name: data.name, ansCode: data.ansCode, contactEmail: data.contactEmail, contactPhone: data.contactPhone, providerCode: data.providerCode, deliveryFormat: data.deliveryFormat, acceptedProcedures, procedureRules };
       if (activeSession?.token) {
         await apiRequest('/insurers', { method: 'POST', body: JSON.stringify(insurer) });
         insurers = await apiRequest('/insurers');

@@ -93,6 +93,7 @@ db.exec(`
     ans_code TEXT,
     contact_email TEXT,
     contact_phone TEXT,
+    provider_code TEXT,
     delivery_format TEXT NOT NULL DEFAULT 'both' CHECK (delivery_format IN ('pdf', 'xml', 'both')),
     accepted_procedures TEXT NOT NULL DEFAULT '[]',
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -108,6 +109,9 @@ db.exec(`
     protocol TEXT,
     sent_at TEXT,
     xml_generated INTEGER NOT NULL DEFAULT 0,
+    xml_valid INTEGER NOT NULL DEFAULT 0,
+    xml_validation_errors TEXT NOT NULL DEFAULT '[]',
+    tiss_version TEXT NOT NULL DEFAULT '4.03.00',
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(clinic_id, insurer_id, competence)
   );
@@ -119,6 +123,21 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_billing_batches_clinic ON billing_batches(clinic_id, competence);
   CREATE INDEX IF NOT EXISTS idx_billing_batch_guides_guide ON billing_batch_guides(guide_id);
+  CREATE TABLE IF NOT EXISTS authorizations (
+    id TEXT PRIMARY KEY,
+    clinic_id TEXT NOT NULL REFERENCES clinics(id),
+    patient_id TEXT NOT NULL REFERENCES patients(id),
+    insurer_id TEXT NOT NULL REFERENCES insurers(id),
+    authorization_number TEXT NOT NULL,
+    valid_from TEXT NOT NULL,
+    valid_to TEXT NOT NULL,
+    authorized_quantity INTEGER NOT NULL DEFAULT 1,
+    used_quantity INTEGER NOT NULL DEFAULT 0,
+    notes TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(clinic_id, insurer_id, authorization_number)
+  );
+  CREATE INDEX IF NOT EXISTS idx_authorizations_expiry ON authorizations(clinic_id, valid_to);
   CREATE TABLE IF NOT EXISTS feedbacks (
     id TEXT PRIMARY KEY,
     clinic_id TEXT NOT NULL REFERENCES clinics(id),
@@ -136,6 +155,7 @@ db.exec(`
     legal_name TEXT NOT NULL DEFAULT '',
     trade_name TEXT NOT NULL DEFAULT '',
     cnpj TEXT NOT NULL DEFAULT '',
+    cnes TEXT NOT NULL DEFAULT '',
     phone TEXT NOT NULL DEFAULT '',
     instagram TEXT NOT NULL DEFAULT '',
     address TEXT NOT NULL DEFAULT '',
@@ -206,9 +226,15 @@ const settingsColumns = new Set(db.prepare('PRAGMA table_info(clinic_settings)')
 if (!settingsColumns.has('letterhead_data_url')) db.exec("ALTER TABLE clinic_settings ADD COLUMN letterhead_data_url TEXT NOT NULL DEFAULT ''");
 if (!settingsColumns.has('letterhead_header_mm')) db.exec('ALTER TABLE clinic_settings ADD COLUMN letterhead_header_mm INTEGER NOT NULL DEFAULT 35');
 if (!settingsColumns.has('letterhead_footer_mm')) db.exec('ALTER TABLE clinic_settings ADD COLUMN letterhead_footer_mm INTEGER NOT NULL DEFAULT 25');
+if (!settingsColumns.has('cnes')) db.exec("ALTER TABLE clinic_settings ADD COLUMN cnes TEXT NOT NULL DEFAULT ''");
 const insurerColumns = new Set(db.prepare('PRAGMA table_info(insurers)').all().map(column => column.name));
 if (!insurerColumns.has('procedure_rules')) db.exec("ALTER TABLE insurers ADD COLUMN procedure_rules TEXT NOT NULL DEFAULT '[]'");
 if (!insurerColumns.has('delivery_format')) db.exec("ALTER TABLE insurers ADD COLUMN delivery_format TEXT NOT NULL DEFAULT 'both' CHECK (delivery_format IN ('pdf', 'xml', 'both'))");
+if (!insurerColumns.has('provider_code')) db.exec('ALTER TABLE insurers ADD COLUMN provider_code TEXT');
+const batchColumns = new Set(db.prepare('PRAGMA table_info(billing_batches)').all().map(column => column.name));
+if (!batchColumns.has('xml_valid')) db.exec('ALTER TABLE billing_batches ADD COLUMN xml_valid INTEGER NOT NULL DEFAULT 0');
+if (!batchColumns.has('xml_validation_errors')) db.exec("ALTER TABLE billing_batches ADD COLUMN xml_validation_errors TEXT NOT NULL DEFAULT '[]'");
+if (!batchColumns.has('tiss_version')) db.exec("ALTER TABLE billing_batches ADD COLUMN tiss_version TEXT NOT NULL DEFAULT '4.03.00'");
 const clinicCount = db.prepare('SELECT COUNT(*) AS count FROM clinics').get().count;
 if (clinicCount === 0) {
   const insertClinic = db.prepare('INSERT INTO clinics (id, name, unit) VALUES (?, ?, ?)');

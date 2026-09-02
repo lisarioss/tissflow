@@ -150,6 +150,23 @@ db.exec(`
     photo TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
+  CREATE TABLE IF NOT EXISTS patient_documents (
+    id TEXT PRIMARY KEY,
+    clinic_id TEXT NOT NULL REFERENCES clinics(id),
+    patient_id TEXT NOT NULL REFERENCES patients(id),
+    guide_id TEXT REFERENCES guides(id),
+    authorization_id TEXT REFERENCES authorizations(id),
+    category TEXT NOT NULL,
+    description TEXT,
+    original_name TEXT NOT NULL,
+    storage_name TEXT NOT NULL,
+    mime_type TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    valid_until TEXT,
+    uploaded_by TEXT NOT NULL REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE INDEX IF NOT EXISTS idx_patient_documents_patient ON patient_documents(clinic_id, patient_id, created_at);
   CREATE TABLE IF NOT EXISTS clinic_settings (
     clinic_id TEXT PRIMARY KEY REFERENCES clinics(id),
     legal_name TEXT NOT NULL DEFAULT '',

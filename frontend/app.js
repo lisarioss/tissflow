@@ -69,6 +69,7 @@ function saveBatches() { localStorage.setItem(clinicStorageKey('batches'), JSON.
 let authorizations = JSON.parse(localStorage.getItem(clinicStorageKey('authorizations')) || 'null') || [];
 function saveAuthorizations() { localStorage.setItem(clinicStorageKey('authorizations'), JSON.stringify(authorizations)); }
 let feedbacks = JSON.parse(localStorage.getItem(clinicStorageKey('feedbacks')) || 'null') || [];
+let patientDocuments = [];
 function saveFeedbacks() { localStorage.setItem(clinicStorageKey('feedbacks'), JSON.stringify(feedbacks)); }
 let clinicSettings = JSON.parse(localStorage.getItem(clinicStorageKey('settings')) || 'null') || { tradeName: clinicProfiles[activeClinicId]?.name || '', legalName: '', cnpj: '', cnes: '', phone: '', instagram: '', address: '', city: '', state: '', postalCode: '', logoDataUrl: '', letterheadDataUrl: '', letterheadHeaderMm: 35, letterheadFooterMm: 25, owners: [], professionals: [] };
 const views = { overview: 'Visão geral', agenda: 'Agenda', guides: 'Guias TISS', authorizations: 'Controle de autorizações', batches: 'Lotes de faturamento', financeiro: 'Financeiro', users: 'Usuários', patients: 'Pacientes', convenios: 'Convênios', feedback: 'Feedbacks', reports: 'Relatórios', settings: 'Configurações' };
@@ -128,6 +129,27 @@ async function apiRequest(path, options = {}) {
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload.error || 'Não foi possível comunicar com a API.');
   return payload;
+}
+function fileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error('Não foi possível ler o arquivo.'));
+    reader.readAsDataURL(file);
+  });
+}
+async function downloadPatientDocument(documentId) {
+  if (!activeSession?.token) { showToast('Entre pela API para baixar documentos.'); return; }
+  const document = patientDocuments.find(item => item.id === documentId);
+  try {
+    const response = await fetch(`${apiBase}/patient-documents/${encodeURIComponent(documentId)}/download`, { headers: apiHeaders() });
+    if (!response.ok) { const payload = await response.json().catch(() => ({})); throw new Error(payload.error || 'Não foi possível baixar o documento.'); }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = window.document.createElement('a');
+    link.href = url; link.download = document?.originalName || 'documento'; link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (error) { showToast(error.message); }
 }
 let tussSearchTimer;
 let tussSearchSequence = 0;
@@ -231,7 +253,7 @@ function normalizeBatch(batch) { return { ...batch, totalValue: Number(batch.tot
 async function loadApiData() {
   if (!activeSession?.token) return;
   try {
-    const [apiGuides, apiInvoices, apiPatients, apiGlosas, apiInsurers, apiFeedbacks, apiSettings, apiBatches, apiAuthorizations] = await Promise.all([apiRequest('/guides'), apiRequest('/invoices'), apiRequest('/patients'), apiRequest('/glosas'), apiRequest('/insurers'), apiRequest('/feedbacks'), apiRequest('/settings'), apiRequest('/batches'), apiRequest('/authorizations')]);
+    const [apiGuides, apiInvoices, apiPatients, apiGlosas, apiInsurers, apiFeedbacks, apiSettings, apiBatches, apiAuthorizations, apiPatientDocuments] = await Promise.all([apiRequest('/guides'), apiRequest('/invoices'), apiRequest('/patients'), apiRequest('/glosas'), apiRequest('/insurers'), apiRequest('/feedbacks'), apiRequest('/settings'), apiRequest('/batches'), apiRequest('/authorizations'), userCan('patients') ? apiRequest('/patient-documents') : Promise.resolve([])]);
     guides = apiGuides.map(normalizeGuide);
     invoices = apiInvoices.map(normalizeInvoice);
     if (apiPatients.length) patients = apiPatients;
@@ -241,6 +263,7 @@ async function loadApiData() {
     clinicSettings = apiSettings;
     batches = apiBatches.map(normalizeBatch);
     authorizations = apiAuthorizations;
+    patientDocuments = apiPatientDocuments;
     render();
   } catch (error) {
     showToast(`Modo local: ${error.message}`);
@@ -445,12 +468,16 @@ function patientFolderView(patientId) {
   const patientGlosas = glosas.filter(item => guideIds.has(item.guideId));
   const patientInvoices = invoices.filter(item => guideIds.has(item.guideId));
   const patientBatches = batches.filter(batch => (batch.guides || []).some(guide => guide.patient === patient.name || guideIds.has(guide.id)));
+  const documents = patientDocuments.filter(item => item.patientId === patient.id);
   const validUntil = patient.planValidity ? new Date(`${patient.planValidity}T12:00:00`).toLocaleDateString('pt-BR') : 'Não informada';
   const empty = message => `<div class="patient-folder-empty">${message}</div>`;
   return `<div class="page-heading patient-folder-heading"><div><p class="eyebrow">Pasta do paciente · ${patient.id}</p><h1>${patient.name}</h1><p class="heading-copy">Histórico clínico, documentos e faturamento reunidos em um só lugar.</p></div><div class="folder-actions"><button class="secondary-button" data-view="patients">← Voltar</button><button class="secondary-button" data-action="edit-patient" data-patient-id="${patient.id}">Editar cadastro</button></div></div>
   <div class="patient-profile-card"><div class="patient-avatar">${patient.name.split(/\s+/).slice(0, 2).map(part => part[0]).join('').toUpperCase()}</div><div><span>Paciente</span><strong>${patient.name}</strong><small>Nascimento: ${new Date(`${patient.birthDate}T12:00:00`).toLocaleDateString('pt-BR')}</small></div><div><span>Convênio</span><strong>${patient.insurer}</strong><small>${patient.plan}</small></div><div><span>Carteira</span><strong>${patient.cardNumber}</strong><small>Válida até ${validUntil}</small></div></div>
-  <div class="patient-folder-stats"><div><span>Guias</span><strong>${patientGuides.length}</strong></div><div><span>Feedbacks</span><strong>${patientFeedbacks.length}</strong></div><div><span>Autorizações</span><strong>${patientAuthorizations.length}</strong></div><div><span>Atendimentos</span><strong>${patientAppointments.length + patientGuides.reduce((total, guide) => total + (guide.sessions?.length || 0), 0)}</strong></div><div><span>Pendências/glosas</span><strong>${patientGlosas.length}</strong></div></div>
+  <div class="patient-folder-stats"><div><span>Documentos</span><strong>${documents.length}</strong></div><div><span>Guias</span><strong>${patientGuides.length}</strong></div><div><span>Feedbacks</span><strong>${patientFeedbacks.length}</strong></div><div><span>Autorizações</span><strong>${patientAuthorizations.length}</strong></div><div><span>Atendimentos</span><strong>${patientAppointments.length + patientGuides.reduce((total, guide) => total + (guide.sessions?.length || 0), 0)}</strong></div><div><span>Pendências/glosas</span><strong>${patientGlosas.length}</strong></div></div>
   <div class="patient-folder-grid">
+    <section class="panel patient-folder-section patient-folder-wide"><div class="panel-header"><div><h2 class="panel-title">Documentos anexados</h2><p class="panel-subtitle">Pedidos, laudos, carteirinhas e arquivos usados no atendimento ou na auditoria.</p></div><span class="guide-type-tag">${documents.length} arquivo(s)</span></div>${documents.length ? `<div class="patient-document-list">${documents.map(item => { const expired = item.validUntil && item.validUntil < new Date().toISOString().slice(0, 10); return `<div class="patient-document-row"><span class="patient-file-icon">${item.mimeType === 'application/pdf' ? 'PDF' : 'IMG'}</span><div><strong>${item.originalName}</strong><small>${item.category}${item.description ? ` · ${item.description}` : ''} · ${(Number(item.sizeBytes) / 1024).toFixed(0)} KB</small><small>Enviado por ${item.uploadedBy}${item.validUntil ? ` · validade ${new Date(`${item.validUntil}T12:00:00`).toLocaleDateString('pt-BR')}` : ''}${item.guideId ? ` · guia ${item.guideId}` : ''}</small></div>${expired ? '<span class="document-validity expired">Vencido</span>' : item.validUntil ? '<span class="document-validity active">Vigente</span>' : '<span></span>'}<button class="text-button" data-action="download-patient-document" data-document-id="${item.id}">Baixar</button><button class="finance-delete" data-action="delete-patient-document" data-document-id="${item.id}" data-patient-id="${patient.id}">Excluir</button></div>`; }).join('')}</div>` : empty('Nenhum documento anexado.')}
+      <form class="patient-document-form" id="patient-document-form" data-patient-id="${patient.id}"><div class="form-grid"><div class="field"><label for="patient-document-category">Categoria *</label><select id="patient-document-category" name="category" required><option value="">Selecione</option><option>Pedido médico</option><option>Laudo</option><option>Carteirinha do convênio</option><option>Autorização</option><option>Relatório clínico</option><option>Documento pessoal</option><option>Outro</option></select></div><div class="field"><label for="patient-document-file">Arquivo *</label><input id="patient-document-file" name="file" type="file" accept="application/pdf,image/png,image/jpeg" required /><small>PDF, PNG ou JPEG de até 6 MB.</small></div><div class="field"><label for="patient-document-validity">Validade</label><input id="patient-document-validity" name="validUntil" type="date" /></div><div class="field"><label for="patient-document-guide">Vincular à guia</label><select id="patient-document-guide" name="guideId"><option value="">Sem guia</option>${patientGuides.map(guide => `<option value="${guide.id}">${guide.id} · ${guide.procedure}</option>`).join('')}</select></div><div class="field"><label for="patient-document-authorization">Vincular à autorização</label><select id="patient-document-authorization" name="authorizationId"><option value="">Sem autorização</option>${patientAuthorizations.map(item => `<option value="${item.id}">${item.authorizationNumber}</option>`).join('')}</select></div><div class="field"><label for="patient-document-description">Descrição</label><input id="patient-document-description" name="description" maxlength="180" placeholder="Observação opcional" /></div></div><div class="form-footer"><button type="submit" class="primary-button" ${activeSession?.token ? '' : 'disabled'}>Anexar documento</button></div>${activeSession?.token ? '' : '<small class="document-api-note">Entre pela API para armazenar documentos com segurança.</small>'}</form>
+    </section>
     <section class="panel patient-folder-section patient-folder-wide"><div class="panel-header"><div><h2 class="panel-title">Guias e PDFs</h2><p class="panel-subtitle">Guias geradas para o paciente e documentos disponíveis.</p></div></div>${patientGuides.length ? `<div class="patient-document-list">${patientGuides.map(guide => `<div class="patient-document-row"><span class="patient-file-icon">PDF</span><div><strong>${guide.id} · ${guide.procedure}</strong><small>${guide.insurer} · competência ${guide.competence || guide.date || 'não informada'} · ${guide.sessions?.length || 0} atendimento(s)</small></div>${statusTag(guide)}<button class="text-button" data-action="open-guide-folder" data-guide-id="${guide.id}">Abrir guia</button><button class="text-button" data-action="print-folder" data-guide-id="${guide.id}">Gerar PDF</button></div>`).join('')}</div>` : empty('Nenhuma guia foi gerada para este paciente.')}</section>
     <section class="panel patient-folder-section"><div class="panel-header"><div><h2 class="panel-title">Feedbacks</h2><p class="panel-subtitle">Evoluções e registros assistenciais.</p></div></div>${patientFeedbacks.length ? `<div class="patient-timeline">${patientFeedbacks.map(item => `<article><time>${new Date(`${item.attendanceDate}T12:00:00`).toLocaleDateString('pt-BR')}</time><div><strong>${item.professional}</strong><small>${item.attendanceType || 'Atendimento'} · ${item.guideId || 'Sem guia vinculada'}</small><p>${item.content}</p></div><button class="text-button" data-action="print-feedback" data-feedback-id="${item.id}">PDF</button></article>`).join('')}</div>` : empty('Nenhum feedback registrado para este paciente.')}</section>
     <section class="panel patient-folder-section"><div class="panel-header"><div><h2 class="panel-title">Autorizações</h2><p class="panel-subtitle">Vigência e saldo autorizado.</p></div></div>${patientAuthorizations.length ? `<div class="patient-simple-list">${patientAuthorizations.map(item => `<div><strong>${item.authorizationNumber}</strong><small>${item.insurer} · ${new Date(`${item.validFrom}T12:00:00`).toLocaleDateString('pt-BR')} a ${new Date(`${item.validTo}T12:00:00`).toLocaleDateString('pt-BR')}</small><span>${Math.max(0, Number(item.authorizedQuantity) - Number(item.usedQuantity))} restante(s)</span></div>`).join('')}</div>` : empty('Nenhuma autorização cadastrada.')}</section>
@@ -1016,6 +1043,23 @@ document.addEventListener('click', async event => {
     appView.innerHTML = patientFolderView(patientFolderButton.dataset.patientId);
     return;
   }
+  const downloadDocumentButton = event.target.closest('[data-action="download-patient-document"]');
+  if (downloadDocumentButton) {
+    await downloadPatientDocument(downloadDocumentButton.dataset.documentId);
+    return;
+  }
+  const deleteDocumentButton = event.target.closest('[data-action="delete-patient-document"]');
+  if (deleteDocumentButton) {
+    const document = patientDocuments.find(item => item.id === deleteDocumentButton.dataset.documentId);
+    if (!document || !window.confirm(`Excluir permanentemente o documento "${document.originalName}"?`)) return;
+    try {
+      await apiRequest(`/patient-documents/${document.id}`, { method: 'DELETE' });
+      patientDocuments = await apiRequest('/patient-documents');
+      appView.innerHTML = patientFolderView(deleteDocumentButton.dataset.patientId);
+      showToast('Documento excluído.');
+    } catch (error) { showToast(error.message); }
+    return;
+  }
   const auditButton = event.target.closest('[data-action="print-audit"]');
   if (auditButton) {
     await downloadGuideAuditPdf(auditButton.dataset.guideId);
@@ -1041,6 +1085,31 @@ document.addEventListener('click', async event => {
     render('feedback');
     showToast('Feedback excluído.');
   } catch (error) {
+    showToast(error.message);
+  }
+});
+
+document.addEventListener('submit', async event => {
+  if (event.target.id !== 'patient-document-form') return;
+  event.preventDefault();
+  const form = event.target;
+  const file = form.querySelector('[name="file"]')?.files?.[0];
+  if (!file) { showToast('Selecione um documento.'); return; }
+  if (!['application/pdf', 'image/png', 'image/jpeg'].includes(file.type)) { showToast('Envie um arquivo PDF, PNG ou JPEG.'); return; }
+  if (file.size > 6 * 1024 * 1024) { showToast('O documento deve possuir no máximo 6 MB.'); return; }
+  const data = Object.fromEntries(new FormData(form));
+  const submitButton = form.querySelector('button[type="submit"]');
+  submitButton.disabled = true;
+  submitButton.textContent = 'Enviando...';
+  try {
+    const payload = { id: `DOC-${Date.now()}`, patientId: form.dataset.patientId, guideId: data.guideId || null, authorizationId: data.authorizationId || null, category: data.category, description: data.description, validUntil: data.validUntil || null, originalName: file.name, mimeType: file.type, contentDataUrl: await fileAsDataUrl(file) };
+    await apiRequest('/patient-documents', { method: 'POST', body: JSON.stringify(payload) });
+    patientDocuments = await apiRequest('/patient-documents');
+    appView.innerHTML = patientFolderView(form.dataset.patientId);
+    showToast('Documento anexado à pasta do paciente.');
+  } catch (error) {
+    submitButton.disabled = false;
+    submitButton.textContent = 'Anexar documento';
     showToast(error.message);
   }
 });

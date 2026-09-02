@@ -3,6 +3,7 @@ const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const path = require('path');
+const fs = require('fs');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 const db = require('./db');
 const { generateGuidePackagePDF, generateGuideAuditPDF } = require('./pdfService');
@@ -246,6 +247,65 @@ app.delete('/api/invoices/:id', auth, requireRole('admin', 'faturamento'), (req,
 app.get('/api/insurers', auth, (req, res) => {
   const insurers = db.prepare('SELECT id, name, ans_code AS ansCode, contact_email AS contactEmail, contact_phone AS contactPhone, provider_code AS providerCode, delivery_format AS deliveryFormat, accepted_procedures AS acceptedProcedures, procedure_rules AS procedureRules FROM insurers WHERE clinic_id = ? ORDER BY name').all(req.session.clinicId);
   res.json(insurers.map(insurer => ({ ...insurer, acceptedProcedures: JSON.parse(insurer.acceptedProcedures || '[]'), procedureRules: JSON.parse(insurer.procedureRules || '[]') })));
+});
+
+const documentUploadRoot = path.join(__dirname, 'uploads');
+const allowedDocumentTypes = new Set(['application/pdf', 'image/png', 'image/jpeg']);
+const documentRow = `SELECT patient_documents.id, patient_documents.patient_id AS patientId, patient_documents.guide_id AS guideId, patient_documents.authorization_id AS authorizationId, patient_documents.category, patient_documents.description, patient_documents.original_name AS originalName, patient_documents.mime_type AS mimeType, patient_documents.size_bytes AS sizeBytes, patient_documents.valid_until AS validUntil, patient_documents.created_at AS createdAt, users.name AS uploadedBy
+  FROM patient_documents JOIN users ON users.id = patient_documents.uploaded_by AND users.clinic_id = patient_documents.clinic_id`;
+
+app.get('/api/patient-documents', auth, requireRole('admin', 'recepcao', 'medico'), (req, res) => {
+  const documents = db.prepare(`${documentRow} WHERE patient_documents.clinic_id = ? ORDER BY patient_documents.created_at DESC`).all(req.session.clinicId);
+  res.json(documents);
+});
+
+app.post('/api/patient-documents', auth, requireRole('admin', 'recepcao', 'medico'), (req, res) => {
+  const { id, patientId, guideId, authorizationId, category, description, validUntil, originalName, mimeType, contentDataUrl } = req.body;
+  if (!id || !patientId || !category || !originalName || !mimeType || !contentDataUrl) return res.status(400).json({ error: 'Paciente, categoria e arquivo são obrigatórios.' });
+  if (!allowedDocumentTypes.has(mimeType)) return res.status(400).json({ error: 'Envie um arquivo PDF, PNG ou JPEG.' });
+  const match = contentDataUrl.match(/^data:([^;]+);base64,([A-Za-z0-9+/=]+)$/);
+  if (!match || match[1] !== mimeType) return res.status(400).json({ error: 'O conteúdo do documento é inválido.' });
+  const file = Buffer.from(match[2], 'base64');
+  if (!file.length || file.length > 6 * 1024 * 1024) return res.status(400).json({ error: 'O documento deve possuir no máximo 6 MB.' });
+  const validSignature = mimeType === 'application/pdf' ? file.subarray(0, 5).toString() === '%PDF-' : mimeType === 'image/png' ? file.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) : file[0] === 0xff && file[1] === 0xd8 && file[2] === 0xff;
+  if (!validSignature) return res.status(400).json({ error: 'O conteúdo não corresponde ao tipo de arquivo informado.' });
+  const patient = db.prepare('SELECT id FROM patients WHERE id = ? AND clinic_id = ?').get(patientId, req.session.clinicId);
+  if (!patient) return res.status(404).json({ error: 'Paciente não encontrado.' });
+  if (guideId && !db.prepare('SELECT guides.id FROM guides JOIN patients ON patients.name = guides.patient AND patients.clinic_id = guides.clinic_id WHERE guides.id = ? AND patients.id = ? AND guides.clinic_id = ?').get(guideId, patientId, req.session.clinicId)) return res.status(400).json({ error: 'A guia vinculada não pertence ao paciente.' });
+  if (authorizationId && !db.prepare('SELECT id FROM authorizations WHERE id = ? AND patient_id = ? AND clinic_id = ?').get(authorizationId, patientId, req.session.clinicId)) return res.status(400).json({ error: 'Autorização vinculada não pertence ao paciente.' });
+  const extension = { 'application/pdf': '.pdf', 'image/png': '.png', 'image/jpeg': '.jpg' }[mimeType];
+  const clinicDirectory = path.join(documentUploadRoot, req.session.clinicId);
+  fs.mkdirSync(clinicDirectory, { recursive: true });
+  const storageName = `${Date.now()}-${id.replace(/[^a-zA-Z0-9_-]/g, '')}${extension}`;
+  const storagePath = path.join(clinicDirectory, storageName);
+  try {
+    fs.writeFileSync(storagePath, file, { flag: 'wx' });
+    db.prepare('INSERT INTO patient_documents (id, clinic_id, patient_id, guide_id, authorization_id, category, description, original_name, storage_name, mime_type, size_bytes, valid_until, uploaded_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, req.session.clinicId, patientId, guideId || null, authorizationId || null, category, description || null, originalName.slice(0, 180), storageName, mimeType, file.length, validUntil || null, req.session.userId);
+    res.status(201).json({ id });
+  } catch (error) {
+    if (fs.existsSync(storagePath)) fs.unlinkSync(storagePath);
+    res.status(409).json({ error: error.message });
+  }
+});
+
+app.get('/api/patient-documents/:id/download', auth, requireRole('admin', 'recepcao', 'medico'), (req, res) => {
+  const document = db.prepare('SELECT * FROM patient_documents WHERE id = ? AND clinic_id = ?').get(req.params.id, req.session.clinicId);
+  if (!document) return res.status(404).json({ error: 'Documento não encontrado.' });
+  const storagePath = path.join(documentUploadRoot, req.session.clinicId, document.storage_name);
+  if (!fs.existsSync(storagePath)) return res.status(404).json({ error: 'Arquivo não encontrado no armazenamento.' });
+  res.setHeader('Content-Type', document.mime_type);
+  res.setHeader('Content-Length', document.size_bytes);
+  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(document.original_name)}`);
+  res.sendFile(storagePath);
+});
+
+app.delete('/api/patient-documents/:id', auth, requireRole('admin', 'recepcao', 'medico'), (req, res) => {
+  const document = db.prepare('SELECT * FROM patient_documents WHERE id = ? AND clinic_id = ?').get(req.params.id, req.session.clinicId);
+  if (!document) return res.status(404).json({ error: 'Documento não encontrado.' });
+  db.prepare('DELETE FROM patient_documents WHERE id = ? AND clinic_id = ?').run(req.params.id, req.session.clinicId);
+  const storagePath = path.join(documentUploadRoot, req.session.clinicId, document.storage_name);
+  if (fs.existsSync(storagePath)) fs.unlinkSync(storagePath);
+  res.status(204).end();
 });
 
 function normalizeProcedureRules(rules) {

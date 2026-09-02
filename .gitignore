@@ -1,6 +1,7 @@
 backend/node_modules/
 backend/.env
 backend/tiss-flow.db
+backend/uploads/
 *.db-wal
 *.db-shm
 output/

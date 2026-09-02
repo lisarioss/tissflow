@@ -197,3 +197,6 @@
 .appointment-row.missed { border-left:3px solid var(--orange); background:#fffaf2; }
 .appointment-row.cancelled { opacity:.58; text-decoration:line-through; }
 @media (max-width:620px) { .agenda-date-picker { margin:18px 0 8px; } .appointment-row { align-items:flex-start; flex-wrap:wrap; } .appointment-info { min-width:150px; } }
+.appointment-authorization { margin-top:5px !important; font-weight:700; }
+.appointment-authorization.linked { color:var(--green); }
+.appointment-authorization.unlinked { color:var(--orange); }

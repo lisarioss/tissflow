@@ -178,6 +178,8 @@ db.exec(`
     attendance_type TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'scheduled' CHECK (status IN ('scheduled', 'confirmed', 'completed', 'missed', 'cancelled')),
     recurrence_id TEXT,
+    authorization_id TEXT REFERENCES authorizations(id),
+    authorization_counted INTEGER NOT NULL DEFAULT 0,
     created_by TEXT NOT NULL REFERENCES users(id),
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
@@ -267,6 +269,9 @@ const batchColumns = new Set(db.prepare('PRAGMA table_info(billing_batches)').al
 if (!batchColumns.has('xml_valid')) db.exec('ALTER TABLE billing_batches ADD COLUMN xml_valid INTEGER NOT NULL DEFAULT 0');
 if (!batchColumns.has('xml_validation_errors')) db.exec("ALTER TABLE billing_batches ADD COLUMN xml_validation_errors TEXT NOT NULL DEFAULT '[]'");
 if (!batchColumns.has('tiss_version')) db.exec("ALTER TABLE billing_batches ADD COLUMN tiss_version TEXT NOT NULL DEFAULT '4.03.00'");
+const appointmentColumns = new Set(db.prepare('PRAGMA table_info(appointments)').all().map(column => column.name));
+if (!appointmentColumns.has('authorization_id')) db.exec('ALTER TABLE appointments ADD COLUMN authorization_id TEXT REFERENCES authorizations(id)');
+if (!appointmentColumns.has('authorization_counted')) db.exec('ALTER TABLE appointments ADD COLUMN authorization_counted INTEGER NOT NULL DEFAULT 0');
 const clinicCount = db.prepare('SELECT COUNT(*) AS count FROM clinics').get().count;
 if (clinicCount === 0) {
   const insertClinic = db.prepare('INSERT INTO clinics (id, name, unit) VALUES (?, ?, ?)');

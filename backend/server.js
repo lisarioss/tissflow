@@ -309,8 +309,8 @@ app.delete('/api/patient-documents/:id', auth, requireRole('admin', 'recepcao', 
   res.status(204).end();
 });
 
-const appointmentSelect = `SELECT appointments.id, appointments.patient_id AS patientId, patients.name AS patient, appointments.professional, appointments.appointment_date AS date, appointments.start_time AS start, appointments.duration, appointments.attendance_type AS type, appointments.status, appointments.recurrence_id AS recurrenceId, appointments.created_at AS createdAt
-  FROM appointments JOIN patients ON patients.id = appointments.patient_id AND patients.clinic_id = appointments.clinic_id`;
+const appointmentSelect = `SELECT appointments.id, appointments.patient_id AS patientId, patients.name AS patient, appointments.professional, appointments.appointment_date AS date, appointments.start_time AS start, appointments.duration, appointments.attendance_type AS type, appointments.status, appointments.recurrence_id AS recurrenceId, appointments.authorization_id AS authorizationId, appointments.authorization_counted AS authorizationCounted, authorizations.authorization_number AS authorizationNumber, appointments.created_at AS createdAt
+  FROM appointments JOIN patients ON patients.id = appointments.patient_id AND patients.clinic_id = appointments.clinic_id LEFT JOIN authorizations ON authorizations.id = appointments.authorization_id AND authorizations.clinic_id = appointments.clinic_id`;
 
 app.get('/api/appointments', auth, requireRole('admin', 'recepcao', 'medico'), (req, res) => {
   res.json(db.prepare(`${appointmentSelect} WHERE appointments.clinic_id = ? ORDER BY appointments.appointment_date, appointments.start_time`).all(req.session.clinicId));
@@ -327,22 +327,40 @@ app.post('/api/appointments', auth, requireRole('admin', 'recepcao', 'medico'), 
   const conflict = candidates.find(candidate => hasAppointmentConflict(existing, candidate));
   if (conflict) return res.status(409).json({ error: `O profissional já possui atendimento conflitante em ${conflict.date}.` });
   const recurrenceId = weeks > 1 ? `REC-${Date.now()}` : null;
-  const insert = db.prepare('INSERT INTO appointments (id, clinic_id, patient_id, professional, appointment_date, start_time, duration, attendance_type, recurrence_id, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
-  db.transaction(() => candidates.forEach(item => insert.run(item.id, req.session.clinicId, item.patientId, item.professional, item.date, item.start, item.duration, item.type, recurrenceId, req.session.userId)))();
+  const findAuthorization = db.prepare(`SELECT id FROM authorizations WHERE clinic_id = ? AND patient_id = ? AND valid_from <= ? AND valid_to >= ? AND used_quantity < authorized_quantity ORDER BY valid_to LIMIT 1`);
+  const insert = db.prepare('INSERT INTO appointments (id, clinic_id, patient_id, professional, appointment_date, start_time, duration, attendance_type, recurrence_id, authorization_id, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+  db.transaction(() => candidates.forEach(item => { const authorization = findAuthorization.get(req.session.clinicId, item.patientId, item.date, item.date); insert.run(item.id, req.session.clinicId, item.patientId, item.professional, item.date, item.start, item.duration, item.type, recurrenceId, authorization?.id || null, req.session.userId); }))();
   res.status(201).json({ ids: candidates.map(item => item.id), recurrenceId });
 });
 
 app.patch('/api/appointments/:id/status', auth, requireRole('admin', 'recepcao', 'medico'), (req, res) => {
   const allowed = new Set(['scheduled', 'confirmed', 'completed', 'missed', 'cancelled']);
   if (!allowed.has(req.body.status)) return res.status(400).json({ error: 'Situação do atendimento inválida.' });
-  const result = db.prepare('UPDATE appointments SET status = ? WHERE id = ? AND clinic_id = ?').run(req.body.status, req.params.id, req.session.clinicId);
-  if (!result.changes) return res.status(404).json({ error: 'Atendimento não encontrado.' });
-  res.json({ id: req.params.id, status: req.body.status });
+  const appointment = db.prepare('SELECT * FROM appointments WHERE id = ? AND clinic_id = ?').get(req.params.id, req.session.clinicId);
+  if (!appointment) return res.status(404).json({ error: 'Atendimento não encontrado.' });
+  try {
+    db.transaction(() => {
+      if (req.body.status === 'completed' && !appointment.authorization_counted && appointment.authorization_id) {
+        const updated = db.prepare('UPDATE authorizations SET used_quantity = used_quantity + 1 WHERE id = ? AND clinic_id = ? AND used_quantity < authorized_quantity').run(appointment.authorization_id, req.session.clinicId);
+        if (!updated.changes) throw new Error('A autorização vinculada não possui saldo disponível.');
+        db.prepare('UPDATE appointments SET authorization_counted = 1 WHERE id = ?').run(appointment.id);
+      } else if (appointment.status === 'completed' && appointment.authorization_counted && req.body.status !== 'completed' && appointment.authorization_id) {
+        db.prepare('UPDATE authorizations SET used_quantity = MAX(0, used_quantity - 1) WHERE id = ? AND clinic_id = ?').run(appointment.authorization_id, req.session.clinicId);
+        db.prepare('UPDATE appointments SET authorization_counted = 0 WHERE id = ?').run(appointment.id);
+      }
+      db.prepare('UPDATE appointments SET status = ? WHERE id = ? AND clinic_id = ?').run(req.body.status, appointment.id, req.session.clinicId);
+    })();
+    res.json({ id: req.params.id, status: req.body.status });
+  } catch (error) { res.status(409).json({ error: error.message }); }
 });
 
 app.delete('/api/appointments/:id', auth, requireRole('admin', 'recepcao'), (req, res) => {
-  const result = db.prepare('DELETE FROM appointments WHERE id = ? AND clinic_id = ?').run(req.params.id, req.session.clinicId);
-  if (!result.changes) return res.status(404).json({ error: 'Atendimento não encontrado.' });
+  const appointment = db.prepare('SELECT * FROM appointments WHERE id = ? AND clinic_id = ?').get(req.params.id, req.session.clinicId);
+  if (!appointment) return res.status(404).json({ error: 'Atendimento não encontrado.' });
+  db.transaction(() => {
+    if (appointment.authorization_counted && appointment.authorization_id) db.prepare('UPDATE authorizations SET used_quantity = MAX(0, used_quantity - 1) WHERE id = ? AND clinic_id = ?').run(appointment.authorization_id, req.session.clinicId);
+    db.prepare('DELETE FROM appointments WHERE id = ? AND clinic_id = ?').run(req.params.id, req.session.clinicId);
+  })();
   res.status(204).end();
 });
 

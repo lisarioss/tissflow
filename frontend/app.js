@@ -115,7 +115,7 @@ function syncContractRules() {
   const rules = [...document.querySelectorAll('.contract-rule-row')].map(row => ({ code: row.dataset.code || '', unitValue: Number(row.querySelector('.contract-value')?.value || 0), requiresAuthorization: Boolean(row.querySelector('.contract-requires-authorization')?.checked), maxSessions: Number(row.querySelector('.contract-max-sessions')?.value || 0), validFrom: row.querySelector('.contract-valid-from')?.value || '', validTo: row.querySelector('.contract-valid-to')?.value || '' })).filter(rule => rule.code);
   hidden.value = procedureRulesToText(rules);
 }
-new MutationObserver(enhanceInsurerForm).observe(appView, { childList: true, subtree: true });
+new MutationObserver(() => { enhanceInsurerForm(); enhanceAgendaFeedbackActions(); }).observe(appView, { childList: true, subtree: true });
 const rolePermissions = {
   admin: ['overview', 'agenda', 'guides', 'authorizations', 'batches', 'financeiro', 'users', 'patients', 'convenios', 'feedback', 'reports', 'settings'],
   faturamento: ['overview', 'guides', 'authorizations', 'batches', 'financeiro', 'reports', 'users'],
@@ -433,6 +433,25 @@ function saveInvoices() { localStorage.setItem(clinicStorageKey('invoices'), JSO
 function hasScheduleConflict(data) { return hasScheduleConflictWith(appointments, data); }
 function saveAppointments() { localStorage.setItem(clinicStorageKey('appointments'), JSON.stringify(appointments)); }
 const appointmentStatusLabels = { scheduled: 'Agendado', confirmed: 'Confirmado', completed: 'Presença', missed: 'Falta', cancelled: 'Cancelado' };
+function enhanceAgendaFeedbackActions() {
+  document.querySelectorAll('.appointment-status').forEach(select => {
+    const row = select.closest('.appointment-row');
+    const appointment = appointments.find(item => item.id === select.dataset.appointmentId);
+    const info = row?.querySelector('.appointment-info');
+    if (info && !info.querySelector('.appointment-authorization')) {
+      const authorization = document.createElement('small');
+      authorization.className = `appointment-authorization ${appointment?.authorizationId ? 'linked' : 'unlinked'}`;
+      authorization.textContent = appointment?.authorizationId ? `Autorização ${appointment.authorizationNumber}${appointment.authorizationCounted ? ' · sessão descontada' : ''}` : 'Sem autorização vinculada';
+      info.append(authorization);
+    }
+    const existing = row?.querySelector('[data-action="feedback-from-appointment"]');
+    if (select.value !== 'completed') { existing?.remove(); return; }
+    if (existing) return;
+    const button = document.createElement('button');
+    button.type = 'button'; button.className = 'text-button'; button.dataset.action = 'feedback-from-appointment'; button.dataset.appointmentId = select.dataset.appointmentId; button.textContent = 'Registrar feedback';
+    row?.insertBefore(button, row.lastElementChild);
+  });
+}
 function agendaView() {
   const dayAppointments = appointments.filter(appointment => appointment.date === selectedAgendaDate).sort((first, second) => timeToMinutes(first.start) - timeToMinutes(second.start));
   const dateLabel = new Date(`${selectedAgendaDate}T12:00:00`).toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
@@ -1154,14 +1173,31 @@ document.addEventListener('change', async event => {
   if (!appointment) return;
   const previous = appointment.status || 'scheduled';
   try {
-    if (activeSession?.token) await apiRequest(`/appointments/${appointment.id}/status`, { method: 'PATCH', body: JSON.stringify({ status: event.target.value }) });
-    appointment.status = event.target.value;
-    if (!activeSession?.token) saveAppointments();
+    if (activeSession?.token) {
+      await apiRequest(`/appointments/${appointment.id}/status`, { method: 'PATCH', body: JSON.stringify({ status: event.target.value }) });
+      [appointments, authorizations] = await Promise.all([apiRequest('/appointments'), apiRequest('/authorizations')]);
+    } else { appointment.status = event.target.value; saveAppointments(); }
     render('agenda'); showToast(`Atendimento marcado como ${appointmentStatusLabels[appointment.status].toLowerCase()}.`);
   } catch (error) { appointment.status = previous; render('agenda'); showToast(error.message); }
 });
 
 document.addEventListener('click', async event => {
+  const feedbackButton = event.target.closest('[data-action="feedback-from-appointment"]');
+  if (feedbackButton) {
+    const appointment = appointments.find(item => item.id === feedbackButton.dataset.appointmentId);
+    if (!appointment) return;
+    breadcrumb.textContent = 'Feedback do atendimento';
+    appView.innerHTML = feedbackView();
+    document.querySelectorAll('.nav-item').forEach(item => item.classList.toggle('active', item.dataset.view === 'feedback'));
+    document.querySelector('#feedback-patient').value = appointment.patient;
+    document.querySelector('#feedback-professional').value = appointment.professional;
+    document.querySelector('#feedback-date').value = appointment.date;
+    document.querySelector('#feedback-type').value = ['Consulta', 'Exame'].includes(appointment.type) ? appointment.type : 'Terapia';
+    refreshFeedbackGuideOptions();
+    document.querySelector('#feedback-content').focus();
+    showToast('Dados do atendimento preenchidos. Complete apenas a evolução.');
+    return;
+  }
   const button = event.target.closest('[data-action="delete-appointment"]');
   if (!button) return;
   const appointment = appointments.find(item => item.id === button.dataset.appointmentId);

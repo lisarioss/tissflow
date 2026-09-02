@@ -129,6 +129,38 @@
 .patient-form { margin-top:24px; overflow:hidden; }
 .patient-form .panel-header { border-bottom:1px solid var(--line); }
 .patient-form .form-section { padding:20px 21px 0; margin:0; border:0; }
+.patient-profile-card { display:grid; grid-template-columns:auto 1.2fr 1fr 1fr; align-items:center; gap:20px; padding:20px; margin-bottom:16px; border:1px solid var(--line); border-radius:9px; background:#fff; box-shadow:var(--shadow); }
+.patient-profile-card > div:not(.patient-avatar) { min-width:0; }
+.patient-profile-card span, .patient-profile-card small { display:block; color:var(--muted); font-size:9px; }
+.patient-profile-card strong { display:block; margin:5px 0 3px; font-size:12px; overflow-wrap:anywhere; }
+.patient-avatar { display:grid; width:48px; height:48px; place-items:center; border-radius:50%; background:var(--mint); color:var(--green-dark); font-weight:800; }
+.patient-folder-stats { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:10px; margin-bottom:18px; }
+.patient-folder-stats > div { padding:13px 15px; border:1px solid var(--line); border-radius:7px; background:#f7faf8; }
+.patient-folder-stats span { display:block; color:var(--muted); font-size:9px; margin-bottom:5px; }
+.patient-folder-stats strong { font-size:18px; }
+.patient-folder-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px; align-items:start; }
+.patient-folder-wide { grid-column:1 / -1; }
+.patient-folder-section { overflow:hidden; }
+.patient-document-list, .patient-timeline, .patient-simple-list { padding:0 21px 12px; }
+.patient-document-row { display:grid; grid-template-columns:auto minmax(220px,1fr) auto auto auto; align-items:center; gap:12px; padding:13px 0; border-bottom:1px solid #eef1ef; }
+.patient-document-row:last-child, .patient-simple-list > div:last-child { border-bottom:0; }
+.patient-document-row strong, .patient-document-row small, .patient-simple-list strong, .patient-simple-list small { display:block; }
+.patient-document-row small, .patient-simple-list small { color:var(--muted); font-size:9px; margin-top:3px; }
+.patient-file-icon { display:grid; width:35px; height:35px; place-items:center; border-radius:6px; background:#fde9e5; color:var(--red); font:800 8px 'DM Mono',monospace; }
+.patient-timeline article { display:grid; grid-template-columns:74px 1fr auto; gap:12px; padding:13px 0; border-bottom:1px solid #eef1ef; }
+.patient-timeline time { color:var(--green-dark); font:700 9px 'DM Mono',monospace; }
+.patient-timeline strong, .patient-timeline small { display:block; }
+.patient-timeline small { color:var(--muted); font-size:9px; margin-top:3px; }
+.patient-timeline p { margin:7px 0 0; color:#47564f; font-size:10px; line-height:1.55; }
+.patient-simple-list > div { position:relative; padding:12px 0; border-bottom:1px solid #eef1ef; }
+.patient-simple-list span { position:absolute; top:12px; right:0; color:var(--green); font-size:9px; font-weight:700; }
+.patient-folder-empty { margin:0 21px 20px; padding:18px; border:1px dashed var(--line); border-radius:7px; color:var(--muted); font-size:10px; text-align:center; }
+.patient-finance-groups { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; padding:0 21px 16px; }
+.patient-finance-groups div { padding:12px; border-radius:6px; background:#f7faf8; text-align:center; }
+.patient-finance-groups span { display:block; color:var(--muted); font-size:9px; margin-bottom:5px; }
+.patient-finance-groups strong { font-size:17px; }
+@media (max-width:900px) { .patient-profile-card { grid-template-columns:auto 1fr 1fr; } .patient-profile-card > div:last-child { grid-column:2 / -1; } .patient-folder-stats { grid-template-columns:repeat(3,1fr); } }
+@media (max-width:700px) { .patient-profile-card { grid-template-columns:auto 1fr; } .patient-profile-card > div { grid-column:2; } .patient-folder-grid { grid-template-columns:1fr; } .patient-folder-wide { grid-column:auto; } .patient-folder-stats { grid-template-columns:repeat(2,1fr); } .patient-document-row { grid-template-columns:auto 1fr; } .patient-document-row .status, .patient-document-row button { grid-column:2; justify-self:start; } }
 .owners-settings { margin:20px 0; }
 .owners-settings-heading { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:12px; }
 .owners-settings-heading label { display:block; color:#63736b; font-size:10px; font-weight:700; margin-bottom:4px; }

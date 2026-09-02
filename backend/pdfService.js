@@ -121,4 +121,44 @@ function generateGuidePackagePDF(clinic, guide, res) {
   pdfDoc.end();
 }
 
-module.exports = { generateGuidePackagePDF };
+function generateGuideAuditPDF(clinic, guide, feedbacks, res) {
+  const rule = { hLineColor: () => '#cbd8d2', vLineColor: () => '#cbd8d2', hLineWidth: () => 0.7, vLineWidth: () => 0.7 };
+  const dateRange = feedbacks.map(item => item.attendanceDate).filter(Boolean).sort();
+  const feedbackBlocks = feedbacks.map((item, index) => ({
+    unbreakable: true,
+    margin: [0, 0, 0, 12],
+    stack: [
+      { table: { widths: [72, '*', 95], body: [[
+        { text: ptDate(item.attendanceDate), bold: true, color: '#173d30', margin: [5, 5, 5, 5] },
+        { text: item.professional, bold: true, margin: [5, 5, 5, 5] },
+        { text: item.attendanceType || 'Atendimento', alignment: 'center', margin: [5, 5, 5, 5] }
+      ]] }, layout: rule },
+      { table: { widths: ['*'], body: [[{ text: item.content, lineHeight: 1.25, margin: [8, 8, 8, 8] }]] }, layout: rule },
+      ...(item.photo && /^data:image\/(png|jpeg);base64,/i.test(item.photo) ? [{ image: item.photo, fit: [220, 130], alignment: 'center', margin: [0, 8, 0, 0] }] : []),
+      { text: `Registro ${index + 1} de ${feedbacks.length} · ID ${item.id}`, fontSize: 7, color: '#718078', alignment: 'right', margin: [0, 4, 0, 0] }
+    ]
+  }));
+  const definition = {
+    pageSize: 'A4', pageMargins: [42, 48, 42, 48], defaultStyle: { font: 'Helvetica', fontSize: 9, color: '#17241f' },
+    footer: (current, total) => ({ text: `Guia ${guide.id} · Página ${current} de ${total}`, alignment: 'center', fontSize: 7, color: '#718078', margin: [0, 16, 0, 0] }),
+    content: [
+      { columns: [clinic.logoDataUrl ? { image: clinic.logoDataUrl, fit: [110, 48], width: 125 } : { text: clinic.tradeName, bold: true, color: '#173d30', width: 180 }, { stack: [{ text: 'RELATÓRIO DE AUDITORIA ASSISTENCIAL', bold: true, fontSize: 15, color: '#173d30', alignment: 'right' }, { text: `Feedbacks vinculados à guia ${guide.id}`, fontSize: 8, color: '#607168', alignment: 'right', margin: [0, 4, 0, 0] }] }], margin: [0, 0, 0, 18] },
+      { table: { widths: ['*', '*'], body: [
+        [field('PACIENTE', guide.patient), field('CONVÊNIO', guide.insurer)],
+        [field('COMPETÊNCIA', competenceLabel(guide.competence)), field('AUTORIZAÇÃO', guide.authorization_number)],
+        [field('PROCEDIMENTO / TUSS', `${guide.service_code || ''} - ${guide.procedure}`, '*'), field('PERÍODO DOS REGISTROS', dateRange.length ? `${ptDate(dateRange[0])} a ${ptDate(dateRange.at(-1))}` : '')]
+      ] }, layout: rule, margin: [0, 0, 0, 16] },
+      { text: `${feedbacks.length} feedback(s) assistencial(is)`, bold: true, fontSize: 11, color: '#173d30', margin: [0, 0, 0, 10] },
+      ...feedbackBlocks,
+      { text: `Documento gerado em ${new Date().toLocaleString('pt-BR')} com registros vinculados à guia e às respectivas datas de atendimento.`, fontSize: 7, color: '#718078', margin: [0, 8, 0, 0] }
+    ],
+    info: { title: `Auditoria da guia ${guide.id}`, author: clinic.tradeName }
+  };
+  const pdfDoc = printer.createPdfKitDocument(definition);
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="auditoria-guia-${guide.id}.pdf"`);
+  pdfDoc.pipe(res);
+  pdfDoc.end();
+}
+
+module.exports = { generateGuidePackagePDF, generateGuideAuditPDF };

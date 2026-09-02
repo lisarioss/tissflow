@@ -5,7 +5,8 @@ const bcrypt = require('bcryptjs');
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 const db = require('./db');
-const { generateGuidePackagePDF } = require('./pdfService');
+const { generateGuidePackagePDF, generateGuideAuditPDF } = require('./pdfService');
+const { feedbackDateBelongsToGuide } = require('./feedbackService');
 const { TISS_VERSION, calculateTissHash, validateTissXml } = require('./tissValidationService');
 
 const app = express();
@@ -135,6 +136,16 @@ app.get('/api/guides/:id/pdf', auth, (req, res) => {
   const clinic = db.prepare('SELECT id, name, unit FROM clinics WHERE id = ?').get(req.session.clinicId);
   const row = db.prepare('SELECT * FROM clinic_settings WHERE clinic_id = ?').get(req.session.clinicId);
   generateGuidePackagePDF(mapClinicSettings(row, clinic), guide, res);
+});
+
+app.get('/api/guides/:id/audit-pdf', auth, requireRole('admin', 'faturamento', 'medico'), (req, res) => {
+  const guide = db.prepare('SELECT * FROM guides WHERE id = ? AND clinic_id = ?').get(req.params.id, req.session.clinicId);
+  if (!guide) return res.status(404).json({ error: 'Guia não encontrada.' });
+  const feedbacks = db.prepare('SELECT id, guide_id AS guideId, patient, professional, attendance_date AS attendanceDate, attendance_type AS attendanceType, content, photo, created_at AS createdAt FROM feedbacks WHERE clinic_id = ? AND guide_id = ? ORDER BY attendance_date, created_at').all(req.session.clinicId, guide.id);
+  if (!feedbacks.length) return res.status(404).json({ error: 'Esta guia ainda não possui feedbacks vinculados.' });
+  const clinic = db.prepare('SELECT id, name, unit FROM clinics WHERE id = ?').get(req.session.clinicId);
+  const row = db.prepare('SELECT * FROM clinic_settings WHERE clinic_id = ?').get(req.session.clinicId);
+  generateGuideAuditPDF(mapClinicSettings(row, clinic), guide, feedbacks, res);
 });
 
 app.get('/api/patients', auth, (req, res) => {
@@ -461,7 +472,9 @@ app.delete('/api/batches/:id', auth, requireRole('admin', 'faturamento'), (req, 
 });
 
 app.get('/api/feedbacks', auth, (req, res) => {
-  const feedbacks = db.prepare('SELECT id, guide_id AS guideId, patient, professional, attendance_date AS attendanceDate, attendance_type AS attendanceType, content, photo, created_at AS createdAt FROM feedbacks WHERE clinic_id = ? ORDER BY created_at DESC').all(req.session.clinicId);
+  const feedbacks = db.prepare(`SELECT feedbacks.id, feedbacks.guide_id AS guideId, feedbacks.patient, feedbacks.professional, feedbacks.attendance_date AS attendanceDate, feedbacks.attendance_type AS attendanceType, feedbacks.content, feedbacks.photo, feedbacks.created_at AS createdAt, guides.competence AS guideCompetence, guides.procedure AS guideProcedure
+    FROM feedbacks LEFT JOIN guides ON guides.id = feedbacks.guide_id AND guides.clinic_id = feedbacks.clinic_id
+    WHERE feedbacks.clinic_id = ? ORDER BY feedbacks.created_at DESC`).all(req.session.clinicId);
   res.json(feedbacks);
 });
 
@@ -469,6 +482,12 @@ app.post('/api/feedbacks', auth, requireRole('admin', 'recepcao', 'medico'), (re
   const { id, guideId, patient, professional, attendanceDate, attendanceType, content, photo } = req.body;
   if (!id || !patient || !professional || !attendanceDate || !content) {
     return res.status(400).json({ error: 'Paciente, profissional, data do atendimento e o texto do feedback são obrigatórios.' });
+  }
+  if (guideId) {
+    const guide = db.prepare('SELECT id, patient, competence, sessions_json FROM guides WHERE id = ? AND clinic_id = ?').get(guideId, req.session.clinicId);
+    if (!guide) return res.status(400).json({ error: 'A guia selecionada não existe nesta clínica.' });
+    if (guide.patient !== patient) return res.status(400).json({ error: 'A guia selecionada pertence a outro paciente.' });
+    if (!feedbackDateBelongsToGuide(guide, attendanceDate)) return res.status(400).json({ error: 'A data do feedback não corresponde a um atendimento desta guia.' });
   }
   try {
     db.prepare('INSERT INTO feedbacks (id, clinic_id, guide_id, patient, professional, attendance_date, attendance_type, content, photo) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, req.session.clinicId, guideId || null, patient, professional, attendanceDate, attendanceType || null, content, photo || null);

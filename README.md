@@ -14,7 +14,8 @@ Protótipo de portfólio para operação de faturamento clínico. Demonstra o ci
 - **Lotes de faturamento**: agrupa guias por convênio e competência, confere os PDFs assinados, gera o XML exigido, registra o protocolo e bloqueia o envio enquanto houver pendências.
 - **Controle de autorizações**: registra a guia/senha autorizada por paciente, período de validade, quantidade liberada e utilizada; destaca autorizações vigentes, próximas do vencimento ou vencidas e permite atualizar o saldo de sessões.
 - **Validação TISS oficial**: confere o XML com os schemas de Comunicação 04.03.00 publicados pela ANS, calcula o hash MD5 em ISO-8859-1 e mantém inválido qualquer lote que não passe no XSD.
-- **Feedback de atendimento**: profissionais registram evolução/observações por atendimento, com foto opcional e vínculo à guia faturada quando o paciente é de convênio; geração de PDF do feedback.
+- **Feedback de atendimento**: profissionais registram evolução/observações por atendimento, com foto opcional e vínculo validado pelo paciente e pela data da guia faturada; geração do PDF individual e de um relatório consolidado por guia para auditoria.
+- **Pasta do paciente**: reúne cadastro, guias e PDFs, feedbacks, autorizações, agenda, lotes, notas e glosas relacionados ao mesmo paciente, com acesso direto aos documentos.
 - **Autenticação real** via JWT + bcrypt, com dados persistidos em SQLite e isolados por `clinic_id` em todas as consultas.
 - **RBAC nas rotas de escrita**: cada papel (admin, faturamento, recepção, médico) só cria/edita/exclui os recursos que a navegação já expõe para ele — reforçado no servidor, não só escondendo botões na UI.
 - **Financeiro**: cadastro, baixa e exclusão de notas fiscais vinculadas a guias aprovadas.

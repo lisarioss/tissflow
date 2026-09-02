@@ -71,9 +71,10 @@ let authorizations = JSON.parse(localStorage.getItem(clinicStorageKey('authoriza
 function saveAuthorizations() { localStorage.setItem(clinicStorageKey('authorizations'), JSON.stringify(authorizations)); }
 let feedbacks = JSON.parse(localStorage.getItem(clinicStorageKey('feedbacks')) || 'null') || [];
 let patientDocuments = [];
+let auditLogs = [];
 function saveFeedbacks() { localStorage.setItem(clinicStorageKey('feedbacks'), JSON.stringify(feedbacks)); }
 let clinicSettings = JSON.parse(localStorage.getItem(clinicStorageKey('settings')) || 'null') || { tradeName: clinicProfiles[activeClinicId]?.name || '', legalName: '', cnpj: '', cnes: '', phone: '', instagram: '', address: '', city: '', state: '', postalCode: '', logoDataUrl: '', letterheadDataUrl: '', letterheadHeaderMm: 35, letterheadFooterMm: 25, owners: [], professionals: [] };
-const views = { overview: 'Visão geral', agenda: 'Agenda', guides: 'Guias TISS', authorizations: 'Controle de autorizações', batches: 'Lotes de faturamento', financeiro: 'Financeiro', users: 'Usuários', patients: 'Pacientes', convenios: 'Convênios', feedback: 'Feedbacks', reports: 'Relatórios', settings: 'Configurações' };
+const views = { overview: 'Visão geral', agenda: 'Agenda', guides: 'Guias TISS', authorizations: 'Controle de autorizações', batches: 'Lotes de faturamento', financeiro: 'Financeiro', users: 'Usuários', patients: 'Pacientes', convenios: 'Convênios', feedback: 'Feedbacks', reports: 'Relatórios', audit: 'Trilha de auditoria', settings: 'Configurações' };
 const appView = document.querySelector('#app-view');
 const breadcrumb = document.querySelector('#breadcrumb');
 const toast = document.querySelector('#toast');
@@ -117,7 +118,7 @@ function syncContractRules() {
 }
 new MutationObserver(() => { enhanceInsurerForm(); enhanceAgendaFeedbackActions(); }).observe(appView, { childList: true, subtree: true });
 const rolePermissions = {
-  admin: ['overview', 'agenda', 'guides', 'authorizations', 'batches', 'financeiro', 'users', 'patients', 'convenios', 'feedback', 'reports', 'settings'],
+  admin: ['overview', 'agenda', 'guides', 'authorizations', 'batches', 'financeiro', 'users', 'patients', 'convenios', 'feedback', 'reports', 'audit', 'settings'],
   faturamento: ['overview', 'guides', 'authorizations', 'batches', 'financeiro', 'reports', 'users'],
   recepcao: ['overview', 'agenda', 'authorizations', 'patients', 'feedback', 'users'],
   medico: ['overview', 'agenda', 'patients', 'feedback']
@@ -266,6 +267,7 @@ async function loadApiData() {
     authorizations = apiAuthorizations;
     patientDocuments = apiPatientDocuments;
     if (userCan('agenda')) appointments = apiAppointments;
+    if (userCan('audit')) auditLogs = await apiRequest('/audit-logs');
     render();
   } catch (error) {
     showToast(`Modo local: ${error.message}`);
@@ -571,6 +573,36 @@ function refreshFeedbackGuideOptions() {
 function feedbackView() {
   return `<div class="page-heading"><div><p class="eyebrow">Acompanhamento clínico</p><h1>Feedbacks de atendimento</h1><p class="heading-copy">Registros dos profissionais vinculados à guia e à data faturada para facilitar auditorias.</p></div></div><div class="panel"><div class="panel-header"><div><h2 class="panel-title">Feedbacks registrados</h2><p class="panel-subtitle">${feedbacks.length} registros</p></div></div><div class="search-bar"><input type="search" id="feedback-search" placeholder="Buscar por paciente, profissional, guia ou tipo" /></div><table><thead><tr><th>Paciente</th><th>Profissional</th><th>Tipo</th><th>Guia</th><th>Foto</th><th></th></tr></thead><tbody id="feedback-table-body">${feedbackRowsHtml('')}</tbody></table></div><form class="panel patient-form" id="feedback-form"><div class="panel-header"><div><h2 class="panel-title">Novo feedback</h2><p class="panel-subtitle">Informe primeiro o paciente e a data. O sistema mostrará somente as guias compatíveis com aquele atendimento.</p></div></div><div class="form-section"><div class="form-grid"><div class="field"><label for="feedback-patient">Paciente *</label><select id="feedback-patient" name="patient" required><option value="">Selecione o paciente</option>${patients.map(patient => `<option>${patient.name}</option>`).join('')}</select></div><div class="field"><label for="feedback-professional">Profissional *</label><select id="feedback-professional" name="professional" required><option value="">Selecione o profissional</option>${professionalOptions()}</select></div><div class="field"><label for="feedback-date">Data do atendimento *</label><input id="feedback-date" name="attendanceDate" type="date" required /></div><div class="field"><label for="feedback-type">Tipo de atendimento</label><select id="feedback-type" name="attendanceType"><option value="">Selecione</option><option>Consulta</option><option>Exame</option><option>Terapia</option></select></div><div class="field"><label for="feedback-guide">Guia vinculada (convênio)</label><select id="feedback-guide" name="guideId">${feedbackGuideOptions()}</select><small>A guia só aparece quando paciente e data correspondem ao faturamento.</small></div><div class="field"><label for="feedback-photo">Foto do atendimento (opcional)</label><input id="feedback-photo" name="photoFile" type="file" accept="image/*" /><input type="hidden" id="feedback-photo-data" name="photo" /></div></div><div class="field"><label for="feedback-content">Feedback *</label><textarea id="feedback-content" name="content" rows="4" required placeholder="Descreva a evolução, observações clínicas ou orientações passadas ao paciente"></textarea></div></div><div class="form-footer"><button class="primary-button" type="submit">Salvar feedback</button></div></form>`;
 }
+const auditActionLabels = { create: 'Criação', update: 'Alteração', delete: 'Exclusão', download: 'Download' };
+const auditEntityLabels = { guides: 'Guia', patients: 'Paciente', feedbacks: 'Feedback', appointments: 'Agenda', authorizations: 'Autorização', 'patient-documents': 'Documento', batches: 'Lote', invoices: 'Nota fiscal', glosas: 'Glosa', insurers: 'Convênio', settings: 'Configurações', users: 'Usuário' };
+function auditRowsHtml() {
+  const action = document.querySelector('#audit-action')?.value || '';
+  const user = document.querySelector('#audit-user')?.value || '';
+  const dateFrom = document.querySelector('#audit-from')?.value || '';
+  const dateTo = document.querySelector('#audit-to')?.value || '';
+  const filtered = auditLogs.filter(item => (!action || item.action === action) && (!user || item.userId === user) && (!dateFrom || item.createdAt.slice(0, 10) >= dateFrom) && (!dateTo || item.createdAt.slice(0, 10) <= dateTo));
+  if (!filtered.length) return '<tr><td colspan="6">Nenhum evento encontrado para os filtros selecionados.</td></tr>';
+  return filtered.map(item => `<tr><td><strong>${new Date(`${item.createdAt.replace(' ', 'T')}Z`).toLocaleDateString('pt-BR')}</strong><small>${new Date(`${item.createdAt.replace(' ', 'T')}Z`).toLocaleTimeString('pt-BR')}</small></td><td><strong>${item.userName}</strong><small>${item.userId}</small></td><td><span class="audit-action ${item.action}">${auditActionLabels[item.action] || item.action}</span></td><td><strong>${auditEntityLabels[item.entityType] || item.entityType}</strong><small>${item.entityId || 'Registro não identificado'}</small></td><td>${item.details?.changedFields?.length ? item.details.changedFields.join(', ') : item.details?.document || '—'}</td><td><small>${item.ipAddress || '—'}</small></td></tr>`).join('');
+}
+function auditView() {
+  const users = [...new Map(auditLogs.map(item => [item.userId, item.userName])).entries()];
+  return `<div class="page-heading"><div><p class="eyebrow">Segurança e rastreabilidade</p><h1>Trilha de auditoria</h1><p class="heading-copy">Histórico imutável das alterações e downloads realizados na clínica.</p></div><span class="status approved">Somente administradores</span></div><div class="audit-stats"><div><span>Eventos registrados</span><strong>${auditLogs.length}</strong></div><div><span>Alterações</span><strong>${auditLogs.filter(item => item.action === 'update').length}</strong></div><div><span>Downloads</span><strong>${auditLogs.filter(item => item.action === 'download').length}</strong></div><div><span>Exclusões</span><strong>${auditLogs.filter(item => item.action === 'delete').length}</strong></div></div><div class="panel"><div class="panel-header"><div><h2 class="panel-title">Histórico da operação</h2><p class="panel-subtitle">Os conteúdos clínicos e arquivos não são copiados para o log.</p></div></div><div class="audit-filters"><select id="audit-action"><option value="">Todas as ações</option>${Object.entries(auditActionLabels).map(([value, label]) => `<option value="${value}">${label}</option>`).join('')}</select><select id="audit-user"><option value="">Todos os usuários</option>${users.map(([id, name]) => `<option value="${id}">${name}</option>`).join('')}</select><label>De <input id="audit-from" type="date" /></label><label>Até <input id="audit-to" type="date" /></label></div><div class="audit-table"><table><thead><tr><th>Data e hora</th><th>Usuário</th><th>Ação</th><th>Registro</th><th>Campos/documento</th><th>Origem</th></tr></thead><tbody id="audit-table-body">${auditRowsHtml()}</tbody></table></div></div>`;
+}
+document.addEventListener('click', async event => {
+  const auditButton = event.target.closest('[data-view="audit"]');
+  if (!auditButton) return;
+  event.preventDefault(); event.stopImmediatePropagation();
+  if (!userCan('audit')) { render('overview'); return; }
+  try { if (activeSession?.token) auditLogs = await apiRequest('/audit-logs'); } catch (error) { showToast(error.message); }
+  breadcrumb.textContent = views.audit;
+  appView.innerHTML = auditView();
+  document.querySelectorAll('.nav-item').forEach(item => item.classList.toggle('active', item.dataset.view === 'audit'));
+}, true);
+document.addEventListener('change', event => {
+  if (!event.target.matches('#audit-action, #audit-user, #audit-from, #audit-to')) return;
+  const body = document.querySelector('#audit-table-body');
+  if (body) body.innerHTML = auditRowsHtml();
+});
 function reportsView() {
   const guideCounts = guides.reduce((summary, guide) => ({ ...summary, [guide.status]: (summary[guide.status] || 0) + 1 }), {});
   const pendingAmount = invoices.filter(invoice => invoice.status === 'pending').reduce((sum, invoice) => sum + Number(invoice.amount || 0), 0);

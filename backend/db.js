@@ -184,6 +184,19 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
   CREATE INDEX IF NOT EXISTS idx_appointments_schedule ON appointments(clinic_id, appointment_date, professional);
+  CREATE TABLE IF NOT EXISTS audit_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    clinic_id TEXT NOT NULL REFERENCES clinics(id),
+    user_id TEXT NOT NULL REFERENCES users(id),
+    action TEXT NOT NULL,
+    entity_type TEXT NOT NULL,
+    entity_id TEXT,
+    route TEXT NOT NULL,
+    details_json TEXT NOT NULL DEFAULT '{}',
+    ip_address TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE INDEX IF NOT EXISTS idx_audit_logs_clinic_date ON audit_logs(clinic_id, created_at DESC);
   CREATE TABLE IF NOT EXISTS clinic_settings (
     clinic_id TEXT PRIMARY KEY REFERENCES clinics(id),
     legal_name TEXT NOT NULL DEFAULT '',

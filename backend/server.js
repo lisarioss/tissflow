@@ -57,6 +57,25 @@ function parseJsonArray(value) {
   try { const parsed = JSON.parse(value || '[]'); return Array.isArray(parsed) ? parsed : []; } catch { return []; }
 }
 
+function recordAudit(req, action, entityType, entityId = null, details = {}) {
+  if (!req.session) return;
+  db.prepare('INSERT INTO audit_logs (clinic_id, user_id, action, entity_type, entity_id, route, details_json, ip_address) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(req.session.clinicId, req.session.userId, action, entityType, entityId, req.originalUrl.split('?')[0], JSON.stringify(details), req.ip || null);
+}
+
+app.use('/api', (req, res, next) => {
+  const action = { POST: 'create', PUT: 'update', PATCH: 'update', DELETE: 'delete' }[req.method];
+  if (action) res.on('finish', () => {
+    if (!req.session || res.statusCode >= 400) return;
+    const parts = req.originalUrl.split('?')[0].split('/').filter(Boolean);
+    if (parts[0] === 'api') parts.shift();
+    const entityType = parts[0] || 'api';
+    const entityId = parts[1] && !['status', 'recurso', 'resolve'].includes(parts[1]) ? parts[1] : req.body?.id || null;
+    const safeFields = Object.keys(req.body || {}).filter(key => !/password|photo|content|dataurl|justification/i.test(key));
+    try { recordAudit(req, action, entityType, entityId, { changedFields: safeFields, statusCode: res.statusCode }); } catch (error) { console.error('Falha ao registrar auditoria:', error.message); }
+  });
+  next();
+});
+
 function guideCompetence(guide) {
   return guide.competence || parseJsonArray(guide.sessions_json)[0]?.date?.slice(0, 7) || '';
 }
@@ -137,6 +156,7 @@ app.get('/api/guides/:id/pdf', auth, (req, res) => {
   if (!guide) return res.status(404).json({ error: 'Guia não encontrada.' });
   const clinic = db.prepare('SELECT id, name, unit FROM clinics WHERE id = ?').get(req.session.clinicId);
   const row = db.prepare('SELECT * FROM clinic_settings WHERE clinic_id = ?').get(req.session.clinicId);
+  recordAudit(req, 'download', 'guides', guide.id, { document: 'cover-and-guide-pdf' });
   generateGuidePackagePDF(mapClinicSettings(row, clinic), guide, res);
 });
 
@@ -147,6 +167,7 @@ app.get('/api/guides/:id/audit-pdf', auth, requireRole('admin', 'faturamento', '
   if (!feedbacks.length) return res.status(404).json({ error: 'Esta guia ainda não possui feedbacks vinculados.' });
   const clinic = db.prepare('SELECT id, name, unit FROM clinics WHERE id = ?').get(req.session.clinicId);
   const row = db.prepare('SELECT * FROM clinic_settings WHERE clinic_id = ?').get(req.session.clinicId);
+  recordAudit(req, 'download', 'guides', guide.id, { document: 'audit-pdf', feedbackCount: feedbacks.length });
   generateGuideAuditPDF(mapClinicSettings(row, clinic), guide, feedbacks, res);
 });
 
@@ -297,7 +318,20 @@ app.get('/api/patient-documents/:id/download', auth, requireRole('admin', 'recep
   res.setHeader('Content-Type', document.mime_type);
   res.setHeader('Content-Length', document.size_bytes);
   res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(document.original_name)}`);
+  recordAudit(req, 'download', 'patient-documents', document.id, { patientId: document.patient_id, category: document.category });
   res.sendFile(storagePath);
+});
+
+app.get('/api/audit-logs', auth, requireRole('admin'), (req, res) => {
+  const limit = Math.min(Math.max(Number(req.query.limit) || 300, 1), 1000);
+  const conditions = ['audit_logs.clinic_id = ?'];
+  const params = [req.session.clinicId];
+  if (req.query.action) { conditions.push('audit_logs.action = ?'); params.push(req.query.action); }
+  if (req.query.userId) { conditions.push('audit_logs.user_id = ?'); params.push(req.query.userId); }
+  if (req.query.dateFrom) { conditions.push('date(audit_logs.created_at) >= date(?)'); params.push(req.query.dateFrom); }
+  if (req.query.dateTo) { conditions.push('date(audit_logs.created_at) <= date(?)'); params.push(req.query.dateTo); }
+  const rows = db.prepare(`SELECT audit_logs.id, audit_logs.user_id AS userId, users.name AS userName, audit_logs.action, audit_logs.entity_type AS entityType, audit_logs.entity_id AS entityId, audit_logs.route, audit_logs.details_json AS detailsJson, audit_logs.ip_address AS ipAddress, audit_logs.created_at AS createdAt FROM audit_logs JOIN users ON users.id = audit_logs.user_id AND users.clinic_id = audit_logs.clinic_id WHERE ${conditions.join(' AND ')} ORDER BY audit_logs.created_at DESC LIMIT ?`).all(...params, limit).map(row => ({ ...row, details: JSON.parse(row.detailsJson || '{}') }));
+  res.json(rows);
 });
 
 app.delete('/api/patient-documents/:id', auth, requireRole('admin', 'recepcao', 'medico'), (req, res) => {

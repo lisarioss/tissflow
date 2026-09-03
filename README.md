@@ -18,6 +18,7 @@ Protótipo de portfólio para operação de faturamento clínico. Demonstra o ci
 - **Pasta do paciente**: reúne cadastro, guias e PDFs, feedbacks, autorizações, agenda, lotes, notas e glosas relacionados ao mesmo paciente, com acesso direto aos documentos.
 - **Documentos do paciente**: armazena PDFs e imagens em diretórios separados por clínica, com categoria, validade, vínculo opcional à guia/autorização e controle de download e exclusão.
 - **Responsável legal e consentimento**: registra vínculo, contato e situação do consentimento do paciente; o nome do responsável é reaproveitado automaticamente na capa para assinatura.
+- **Termo de consentimento em PDF**: gera pela pasta do paciente um modelo administrativo no timbrado da clínica, preenchido com paciente e responsável, para impressão, assinatura e posterior armazenamento do arquivo assinado.
 - **Trilha de auditoria**: registra automaticamente criações, alterações, exclusões e downloads, identificando usuário, data, registro e origem sem duplicar conteúdo clínico sensível no log.
 - **Autenticação real** via JWT + bcrypt, com dados persistidos em SQLite e isolados por `clinic_id` em todas as consultas.
 - **RBAC no servidor**: cada papel (admin, faturamento, recepção, médico) só consulta ou altera os recursos necessários ao seu trabalho; dados financeiros, feedbacks, documentos e agenda possuem leitura protegida pela API, não apenas menus ocultos.

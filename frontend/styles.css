@@ -133,6 +133,7 @@
 .patient-profile-card > div:not(.patient-avatar) { min-width:0; }
 .patient-profile-card span, .patient-profile-card small { display:block; color:var(--muted); font-size:9px; }
 .patient-profile-card strong { display:block; margin:5px 0 3px; font-size:12px; overflow-wrap:anywhere; }
+.patient-consent-button { display:block; margin-top:7px; padding:0; }
 .patient-avatar { display:grid; width:48px; height:48px; place-items:center; border-radius:50%; background:var(--mint); color:var(--green-dark); font-weight:800; }
 .patient-folder-stats { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:10px; margin-bottom:18px; }
 .patient-folder-stats > div { padding:13px 15px; border:1px solid var(--line); border-radius:7px; background:#f7faf8; }

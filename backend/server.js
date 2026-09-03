@@ -6,7 +6,7 @@ const path = require('path');
 const fs = require('fs');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 const db = require('./db');
-const { generateGuidePackagePDF, generateGuideAuditPDF } = require('./pdfService');
+const { generateGuidePackagePDF, generateGuideAuditPDF, generatePatientConsentPDF } = require('./pdfService');
 const { feedbackDateBelongsToGuide } = require('./feedbackService');
 const { hasAppointmentConflict, weeklyDates } = require('./appointmentService');
 const { TISS_VERSION, calculateTissHash, validateTissXml } = require('./tissValidationService');
@@ -434,6 +434,15 @@ app.delete('/api/invoices/:id', auth, requireRole('admin', 'faturamento'), (req,
 app.get('/api/insurers', auth, (req, res) => {
   const insurers = db.prepare('SELECT id, name, ans_code AS ansCode, contact_email AS contactEmail, contact_phone AS contactPhone, provider_code AS providerCode, delivery_format AS deliveryFormat, accepted_procedures AS acceptedProcedures, procedure_rules AS procedureRules FROM insurers WHERE clinic_id = ? ORDER BY name').all(req.session.clinicId);
   res.json(insurers.map(insurer => ({ ...insurer, acceptedProcedures: JSON.parse(insurer.acceptedProcedures || '[]'), procedureRules: JSON.parse(insurer.procedureRules || '[]') })));
+});
+
+app.get('/api/patients/:id/consent-pdf', auth, requireRole('admin', 'recepcao', 'medico'), (req, res) => {
+  const patient = db.prepare('SELECT id, name, birth_date AS birthDate, guardian_name AS guardianName, guardian_relationship AS guardianRelationship, consent_status AS consentStatus, consent_date AS consentDate FROM patients WHERE id = ? AND clinic_id = ?').get(req.params.id, req.session.clinicId);
+  if (!patient) return res.status(404).json({ error: 'Paciente não encontrado.' });
+  const clinic = db.prepare('SELECT id, name, unit FROM clinics WHERE id = ?').get(req.session.clinicId);
+  const settings = db.prepare('SELECT * FROM clinic_settings WHERE clinic_id = ?').get(req.session.clinicId);
+  recordAudit(req, 'download', 'patients', patient.id, { document: 'consent-pdf' });
+  generatePatientConsentPDF(mapClinicSettings(settings, clinic), patient, res);
 });
 
 const documentUploadRoot = path.join(__dirname, 'uploads');

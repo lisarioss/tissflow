@@ -166,6 +166,21 @@ async function downloadPatientDocument(documentId) {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   } catch (error) { showToast(error.message); }
 }
+async function downloadPatientConsentPdf(patientId) {
+  if (!activeSession?.token) { showToast('Entre pela API para gerar o termo de consentimento.'); return; }
+  const patient = patients.find(item => item.id === patientId);
+  try {
+    const response = await fetch(`${apiBase}/patients/${encodeURIComponent(patientId)}/consent-pdf`, { headers: apiHeaders() });
+    if (!response.ok) { const payload = await response.json().catch(() => ({})); throw new Error(payload.error || 'Não foi possível gerar o termo.'); }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = window.document.createElement('a');
+    link.href = url;
+    link.download = `termo-consentimento-${patient?.name || patientId}.pdf`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (error) { showToast(error.message); }
+}
 let tussSearchTimer;
 let tussSearchSequence = 0;
 let contractSearchTimer;
@@ -586,7 +601,7 @@ function patientFolderView(patientId) {
   const validUntil = patient.planValidity ? new Date(`${patient.planValidity}T12:00:00`).toLocaleDateString('pt-BR') : 'Não informada';
   const empty = message => `<div class="patient-folder-empty">${message}</div>`;
   return `<div class="page-heading patient-folder-heading"><div><p class="eyebrow">Pasta do paciente · ${patient.id}</p><h1>${patient.name}</h1><p class="heading-copy">Histórico clínico, documentos e faturamento reunidos em um só lugar.</p></div><div class="folder-actions"><button class="secondary-button" data-view="patients">← Voltar</button><button class="secondary-button" data-action="edit-patient" data-patient-id="${patient.id}">Editar cadastro</button></div></div>
-  <div class="patient-profile-card"><div class="patient-avatar">${patient.name.split(/\s+/).slice(0, 2).map(part => part[0]).join('').toUpperCase()}</div><div><span>Paciente</span><strong>${patient.name}</strong><small>Nascimento: ${new Date(`${patient.birthDate}T12:00:00`).toLocaleDateString('pt-BR')}</small></div><div><span>Convênio</span><strong>${patient.insurer}</strong><small>${patient.plan}</small></div><div><span>Carteira</span><strong>${patient.cardNumber}</strong><small>Válida até ${validUntil}</small></div><div><span>Responsável legal</span><strong>${patient.guardianName || 'Não informado'}</strong><small>${[patient.guardianRelationship, patient.guardianPhone].filter(Boolean).join(' · ') || 'Sem contato cadastrado'}</small></div><div><span>Consentimento</span><strong>${({ granted: 'Concedido', revoked: 'Revogado', pending: 'Pendente' })[patient.consentStatus || 'pending']}</strong><small>${patient.consentDate ? `Registrado em ${new Date(`${patient.consentDate}T12:00:00`).toLocaleDateString('pt-BR')}` : 'Sem data registrada'}</small></div></div>
+  <div class="patient-profile-card"><div class="patient-avatar">${patient.name.split(/\s+/).slice(0, 2).map(part => part[0]).join('').toUpperCase()}</div><div><span>Paciente</span><strong>${patient.name}</strong><small>Nascimento: ${new Date(`${patient.birthDate}T12:00:00`).toLocaleDateString('pt-BR')}</small></div><div><span>Convênio</span><strong>${patient.insurer}</strong><small>${patient.plan}</small></div><div><span>Carteira</span><strong>${patient.cardNumber}</strong><small>Válida até ${validUntil}</small></div><div><span>Responsável legal</span><strong>${patient.guardianName || 'Não informado'}</strong><small>${[patient.guardianRelationship, patient.guardianPhone].filter(Boolean).join(' · ') || 'Sem contato cadastrado'}</small></div><div><span>Consentimento</span><strong>${({ granted: 'Concedido', revoked: 'Revogado', pending: 'Pendente' })[patient.consentStatus || 'pending']}</strong><small>${patient.consentDate ? `Registrado em ${new Date(`${patient.consentDate}T12:00:00`).toLocaleDateString('pt-BR')}` : 'Sem data registrada'}</small><button class="text-button patient-consent-button" data-action="print-patient-consent" data-patient-id="${patient.id}" ${activeSession?.token ? '' : 'disabled'}>Gerar termo em PDF</button></div></div>
   <div class="patient-folder-stats"><div><span>Documentos</span><strong>${documents.length}</strong></div><div><span>Guias</span><strong>${patientGuides.length}</strong></div><div><span>Feedbacks</span><strong>${patientFeedbacks.length}</strong></div><div><span>Autorizações</span><strong>${patientAuthorizations.length}</strong></div><div><span>Atendimentos</span><strong>${patientAppointments.length + patientGuides.reduce((total, guide) => total + (guide.sessions?.length || 0), 0)}</strong></div><div><span>Pendências/glosas</span><strong>${patientGlosas.length}</strong></div></div>
   <div class="patient-folder-grid">
     <section class="panel patient-folder-section patient-folder-wide"><div class="panel-header"><div><h2 class="panel-title">Documentos anexados</h2><p class="panel-subtitle">Pedidos, laudos, carteirinhas e arquivos usados no atendimento ou na auditoria.</p></div><span class="guide-type-tag">${documents.length} arquivo(s)</span></div>${documents.length ? `<div class="patient-document-list">${documents.map(item => { const expired = item.validUntil && item.validUntil < new Date().toISOString().slice(0, 10); return `<div class="patient-document-row"><span class="patient-file-icon">${item.mimeType === 'application/pdf' ? 'PDF' : 'IMG'}</span><div><strong>${item.originalName}</strong><small>${item.category}${item.description ? ` · ${item.description}` : ''} · ${(Number(item.sizeBytes) / 1024).toFixed(0)} KB</small><small>Enviado por ${item.uploadedBy}${item.validUntil ? ` · validade ${new Date(`${item.validUntil}T12:00:00`).toLocaleDateString('pt-BR')}` : ''}${item.guideId ? ` · guia ${item.guideId}` : ''}</small></div>${expired ? '<span class="document-validity expired">Vencido</span>' : item.validUntil ? '<span class="document-validity active">Vigente</span>' : '<span></span>'}<button class="text-button" data-action="download-patient-document" data-document-id="${item.id}">Baixar</button><button class="finance-delete" data-action="delete-patient-document" data-document-id="${item.id}" data-patient-id="${patient.id}">Excluir</button></div>`; }).join('')}</div>` : empty('Nenhum documento anexado.')}
@@ -1199,6 +1214,11 @@ document.addEventListener('click', async event => {
   const downloadDocumentButton = event.target.closest('[data-action="download-patient-document"]');
   if (downloadDocumentButton) {
     await downloadPatientDocument(downloadDocumentButton.dataset.documentId);
+    return;
+  }
+  const consentButton = event.target.closest('[data-action="print-patient-consent"]');
+  if (consentButton) {
+    await downloadPatientConsentPdf(consentButton.dataset.patientId);
     return;
   }
   const deleteDocumentButton = event.target.closest('[data-action="delete-patient-document"]');

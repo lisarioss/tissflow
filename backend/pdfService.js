@@ -161,4 +161,39 @@ function generateGuideAuditPDF(clinic, guide, feedbacks, res) {
   pdfDoc.end();
 }
 
-module.exports = { generateGuidePackagePDF, generateGuideAuditPDF };
+function generatePatientConsentPDF(clinic, patient, res) {
+  const hasLetterhead = Boolean(clinic.letterheadDataUrl);
+  const headerSpace = Math.max(20, Math.min(Number(clinic.letterheadHeaderMm) || 35, 70)) * (72 / 25.4);
+  const footerSpace = Math.max(15, Math.min(Number(clinic.letterheadFooterMm) || 25, 50)) * (72 / 25.4);
+  const clinicName = clinic.tradeName || clinic.legalName || clinic.name || 'Clínica';
+  const responsible = patient.guardianName || '____________________________________________';
+  const relationship = patient.guardianRelationship || '________________________';
+  const rule = { hLineColor: () => '#cbd8d2', vLineColor: () => '#cbd8d2', hLineWidth: () => 0.7, vLineWidth: () => 0.7 };
+  const definition = {
+    pageSize: 'A4',
+    pageMargins: [52, hasLetterhead ? headerSpace : 48, 52, hasLetterhead ? footerSpace : 48],
+    background: hasLetterhead ? { image: clinic.letterheadDataUrl, width: 595.28, height: 841.89, absolutePosition: { x: 0, y: 0 } } : null,
+    defaultStyle: { font: 'Helvetica', fontSize: 10, color: '#17241f', lineHeight: 1.35 },
+    content: [
+      ...(!hasLetterhead && clinic.logoDataUrl ? [{ image: clinic.logoDataUrl, fit: [130, 60], alignment: 'center', margin: [0, 0, 0, 16] }] : []),
+      { text: 'TERMO DE CIÊNCIA E CONSENTIMENTO', bold: true, fontSize: 15, color: '#173d30', alignment: 'center', margin: [0, 0, 0, 6] },
+      { text: 'Tratamento de dados pessoais e informações assistenciais', fontSize: 9, color: '#607168', alignment: 'center', margin: [0, 0, 0, 22] },
+      { table: { widths: ['*', '*'], body: [[field('PACIENTE', patient.name), field('DATA DE NASCIMENTO', ptDate(patient.birthDate))], [field('RESPONSÁVEL LEGAL', responsible), field('PARENTESCO / VÍNCULO', relationship)]] }, layout: rule, margin: [0, 0, 0, 20] },
+      { text: `Declaro que fui informado(a) de que ${clinicName} utilizará os dados pessoais e as informações assistenciais do paciente identificado acima para viabilizar o atendimento, manter o prontuário, realizar atividades administrativas e cumprir os processos de autorização, faturamento e auditoria junto ao convênio.`, alignment: 'justify', margin: [0, 0, 0, 12] },
+      { text: 'Estou ciente de que esses dados devem ser acessados somente por pessoas autorizadas e pelo tempo necessário ao atendimento das finalidades informadas e das obrigações aplicáveis à clínica.', alignment: 'justify', margin: [0, 0, 0, 12] },
+      { text: 'Poderei solicitar informações, correções e esclarecimentos sobre o uso dos dados pelos canais de contato da clínica. Eventual revogação do consentimento não elimina tratamentos realizados anteriormente nem obrigações legais ou regulatórias que precisem ser mantidas.', alignment: 'justify', margin: [0, 0, 0, 24] },
+      { text: 'Este documento é um modelo administrativo da clínica e deve ser revisado conforme suas práticas e orientação jurídica.', italics: true, fontSize: 8, color: '#607168', margin: [0, 0, 0, 30] },
+      { text: 'Local e data: ________________________________________, ______/______/____________', margin: [0, 0, 0, 44] },
+      { columns: [{ width: '*', stack: [{ text: '____________________________________________', alignment: 'center' }, { text: responsible, bold: true, alignment: 'center', margin: [0, 4, 0, 0] }, { text: `Responsável legal${patient.guardianRelationship ? ` · ${patient.guardianRelationship}` : ''}`, fontSize: 8, color: '#607168', alignment: 'center' }] }, { width: 24, text: '' }, { width: '*', stack: [{ text: '____________________________________________', alignment: 'center' }, { text: clinicName, bold: true, alignment: 'center', margin: [0, 4, 0, 0] }, { text: 'Responsável pela clínica', fontSize: 8, color: '#607168', alignment: 'center' }] }] },
+      { text: `Situação registrada no sistema: ${{ granted: 'consentimento concedido', revoked: 'consentimento revogado', pending: 'aguardando manifestação' }[patient.consentStatus] || 'aguardando manifestação'}${patient.consentDate ? ` em ${ptDate(patient.consentDate)}` : ''}.`, fontSize: 7, color: '#718078', alignment: 'center', margin: [0, 34, 0, 0] }
+    ],
+    info: { title: `Termo de consentimento - ${patient.name}`, author: clinicName }
+  };
+  const pdfDoc = printer.createPdfKitDocument(definition);
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="termo-consentimento-${patient.id}.pdf"`);
+  pdfDoc.pipe(res);
+  pdfDoc.end();
+}
+
+module.exports = { generateGuidePackagePDF, generateGuideAuditPDF, generatePatientConsentPDF };

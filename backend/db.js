@@ -22,6 +22,7 @@ db.exec(`
     email TEXT NOT NULL,
     password_hash TEXT NOT NULL,
     role TEXT NOT NULL CHECK (role IN ('admin', 'faturamento', 'recepcao', 'medico')),
+    active INTEGER NOT NULL DEFAULT 1,
     UNIQUE (clinic_id, email)
   );
   CREATE TABLE IF NOT EXISTS patients (
@@ -269,6 +270,8 @@ const guideMigrations = {
 Object.entries(guideMigrations).forEach(([column, statement]) => { if (!guideColumnNames.has(column)) db.exec(statement); });
 const patientColumns = new Set(db.prepare('PRAGMA table_info(patients)').all().map(column => column.name));
 if (!patientColumns.has('active')) db.exec('ALTER TABLE patients ADD COLUMN active INTEGER NOT NULL DEFAULT 1');
+const userColumns = new Set(db.prepare('PRAGMA table_info(users)').all().map(column => column.name));
+if (!userColumns.has('active')) db.exec('ALTER TABLE users ADD COLUMN active INTEGER NOT NULL DEFAULT 1');
 const settingsColumns = new Set(db.prepare('PRAGMA table_info(clinic_settings)').all().map(column => column.name));
 if (!settingsColumns.has('letterhead_data_url')) db.exec("ALTER TABLE clinic_settings ADD COLUMN letterhead_data_url TEXT NOT NULL DEFAULT ''");
 if (!settingsColumns.has('letterhead_header_mm')) db.exec('ALTER TABLE clinic_settings ADD COLUMN letterhead_header_mm INTEGER NOT NULL DEFAULT 35');

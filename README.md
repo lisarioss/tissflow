@@ -20,6 +20,7 @@ Protótipo de portfólio para operação de faturamento clínico. Demonstra o ci
 - **Trilha de auditoria**: registra automaticamente criações, alterações, exclusões e downloads, identificando usuário, data, registro e origem sem duplicar conteúdo clínico sensível no log.
 - **Autenticação real** via JWT + bcrypt, com dados persistidos em SQLite e isolados por `clinic_id` em todas as consultas.
 - **RBAC no servidor**: cada papel (admin, faturamento, recepção, médico) só consulta ou altera os recursos necessários ao seu trabalho; dados financeiros, feedbacks, documentos e agenda possuem leitura protegida pela API, não apenas menus ocultos.
+- **Gestão de usuários**: administradores cadastram a equipe, definem perfis, redefinem senhas e desativam acessos sem apagar o histórico; o sistema impede a remoção do último administrador ativo.
 - **Financeiro**: cadastro, baixa e exclusão de notas fiscais vinculadas a guias aprovadas.
 - **Agenda compartilhada**: horários persistidos no servidor, checagem de conflitos, recorrência semanal de até 24 semanas e controle de confirmação, presença, falta e cancelamento. A presença consome uma sessão da autorização válida e libera o feedback já pré-preenchido.
 - **Busca/filtro** nas listagens de guias, pacientes, convênios e feedbacks.
@@ -121,8 +122,3 @@ Escolha uma clínica na tela de login (contas demo listadas na própria tela). O
 - A guia SP/SADT em PDF é um modelo imprimível baseado na estrutura visual fornecida, mas ainda precisa ser conferida campo a campo com a versão vigente do formulário da ANS antes do uso comercial.
 - A tabela de compatibilidade CID-procedimento cobre só os quatro procedimentos usados no demo — não é uma base de conhecimento clínico real.
 - Sem suporte a envio real para operadoras (webservice/portal) — o "envio" é a geração e download do XML.
-
-## Próximos passos
-
-- Tela de Configurações real (hoje é placeholder).
-- Ficha do paciente reunindo guias e feedbacks daquele paciente em um só lugar.

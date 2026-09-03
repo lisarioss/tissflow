@@ -72,6 +72,7 @@ function saveAuthorizations() { localStorage.setItem(clinicStorageKey('authoriza
 let feedbacks = JSON.parse(localStorage.getItem(clinicStorageKey('feedbacks')) || 'null') || [];
 let patientDocuments = [];
 let auditLogs = [];
+let users = clinicUsers[activeClinicId] || [];
 function saveFeedbacks() { localStorage.setItem(clinicStorageKey('feedbacks'), JSON.stringify(feedbacks)); }
 let clinicSettings = JSON.parse(localStorage.getItem(clinicStorageKey('settings')) || 'null') || { tradeName: clinicProfiles[activeClinicId]?.name || '', legalName: '', cnpj: '', cnes: '', phone: '', instagram: '', address: '', city: '', state: '', postalCode: '', logoDataUrl: '', letterheadDataUrl: '', letterheadHeaderMm: 35, letterheadFooterMm: 25, owners: [], professionals: [] };
 const views = { overview: 'Visão geral', agenda: 'Agenda', guides: 'Guias TISS', authorizations: 'Controle de autorizações', batches: 'Lotes de faturamento', financeiro: 'Financeiro', users: 'Usuários', patients: 'Pacientes', convenios: 'Convênios', feedback: 'Feedbacks', reports: 'Relatórios', audit: 'Trilha de auditoria', settings: 'Configurações' };
@@ -119,8 +120,8 @@ function syncContractRules() {
 new MutationObserver(() => { enhanceInsurerForm(); enhanceAgendaFeedbackActions(); }).observe(appView, { childList: true, subtree: true });
 const rolePermissions = {
   admin: ['overview', 'agenda', 'guides', 'authorizations', 'batches', 'financeiro', 'users', 'patients', 'convenios', 'feedback', 'reports', 'audit', 'settings'],
-  faturamento: ['overview', 'guides', 'authorizations', 'batches', 'financeiro', 'reports', 'users'],
-  recepcao: ['overview', 'agenda', 'authorizations', 'patients', 'feedback', 'users'],
+  faturamento: ['overview', 'guides', 'authorizations', 'batches', 'financeiro', 'reports'],
+  recepcao: ['overview', 'agenda', 'authorizations', 'patients', 'feedback'],
   medico: ['overview', 'agenda', 'patients', 'feedback']
 };
 function userCan(view) { return (rolePermissions[activeUser?.role || 'admin'] || []).includes(view); }
@@ -283,6 +284,7 @@ async function loadApiData() {
     patientDocuments = apiPatientDocuments;
     if (userCan('agenda')) appointments = apiAppointments;
     if (userCan('audit')) auditLogs = await apiRequest('/audit-logs');
+    if (userCan('users')) users = await apiRequest('/users');
     render();
   } catch (error) {
     showToast(`Modo local: ${error.message}`);
@@ -699,7 +701,7 @@ function restoreDraft() { const draft = JSON.parse(localStorage.getItem(clinicSt
 function saveDraft(form) { localStorage.setItem(clinicStorageKey('draft'), JSON.stringify(Object.fromEntries(new FormData(form)))); }
 function render(view = 'overview') { breadcrumb.textContent = views[view] || views.overview; const safeView = userCan(view) ? view : 'overview'; appView.innerHTML = safeView === 'overview' ? overview() : safeView === 'agenda' ? agendaView() : safeView === 'guides' ? guideList() : safeView === 'authorizations' ? authorizationsView() : safeView === 'batches' ? batchesView() : safeView === 'financeiro' ? financeView() : safeView === 'reports' ? reportsView() : safeView === 'patients' ? patientsView() : safeView === 'users' ? usersView() : safeView === 'convenios' ? insurersView() : safeView === 'feedback' ? feedbackView() : safeView === 'settings' ? settingsView() : listing(views[safeView], `Gerencie ${views[safeView].toLowerCase()} em um só lugar.`, '↗'); document.querySelectorAll('.nav-item').forEach(item => { const visible = userCan(item.dataset.view); item.style.display = visible ? '' : 'none'; item.classList.toggle('active', item.dataset.view === safeView && visible); }); if (safeView === 'batches') batches.forEach(batch => { const card = document.querySelector(`[data-batch-id="${batch.id}"]`); const select = card?.querySelector('[data-batch-status]'); if (select) select.value = batch.status; }); }
 function applySession() { const clinic = clinicProfiles[activeClinicId]; if (!clinic || !activeUser) return; document.querySelector('.workspace-switcher strong').textContent = clinic.name; document.querySelector('.workspace-switcher small').textContent = clinic.unit; document.querySelector('.workspace-switcher .avatar').textContent = clinic.initials; document.querySelector('#breadcrumb-clinic').textContent = clinic.name; document.querySelector('.profile strong').textContent = activeUser.name; document.querySelector('.profile small').textContent = activeUser.roleLabel || roleLabels[activeUser.role] || activeUser.role; document.querySelector('.user-button span:nth-child(2)').textContent = activeUser.name; document.querySelector('.user-button .avatar').textContent = activeUser.name.split(' ').map(name => name[0]).join('').slice(0, 2); }
-function usersView() { const clinicUsersList = clinicUsers[activeClinicId] || []; return `<div class="page-heading"><div><p class="eyebrow">Acesso e segurança</p><h1>Usuários da clínica</h1><p class="heading-copy">Cada perfil acessa apenas o que precisa.</p></div><button class="primary-button" data-action="new-user">＋ Novo usuário</button></div><div class="panel"><div class="panel-header"><div><h2 class="panel-title">Equipe</h2><p class="panel-subtitle">${clinicUsersList.length} usuários cadastrados</p></div></div><table><thead><tr><th>Nome</th><th>E-mail</th><th>Perfil</th><th>Permissão</th></tr></thead><tbody>${clinicUsersList.map(user => `<tr><td><strong>${user.name}</strong></td><td>${user.email}</td><td>${user.roleLabel}</td><td>${user.role === 'admin' ? 'Total' : user.role === 'faturamento' ? 'Guias e relatórios' : user.role === 'recepcao' ? 'Agenda e pacientes' : 'Agenda e prontuários'}</td></tr>`).join('')}</tbody></table></div>`; }
+function usersView(editId = '') { const selected = users.find(user => user.id === editId); return `<div class="page-heading"><div><p class="eyebrow">Acesso e segurança</p><h1>Usuários da clínica</h1><p class="heading-copy">Cadastre a equipe e mantenha cada acesso no perfil correto.</p></div></div><div class="panel"><div class="panel-header"><div><h2 class="panel-title">Equipe</h2><p class="panel-subtitle">${users.filter(user => user.active !== false).length} acesso(s) ativo(s)</p></div></div><table><thead><tr><th>Nome</th><th>E-mail</th><th>Perfil</th><th>Situação</th><th></th></tr></thead><tbody>${users.map(user => `<tr><td><strong>${user.name}</strong></td><td>${user.email}</td><td>${roleLabels[user.role] || user.role}</td><td><span class="status ${user.active === false ? 'error' : 'approved'}">${user.active === false ? 'Inativo' : 'Ativo'}</span></td><td><button class="text-button" data-action="edit-user" data-user-id="${user.id}">Editar</button></td></tr>`).join('')}</tbody></table></div><form class="panel patient-form" id="user-form" data-user-id="${selected?.id || ''}"><div class="panel-header"><div><h2 class="panel-title">${selected ? 'Editar usuário' : 'Novo usuário'}</h2><p class="panel-subtitle">${selected ? 'Deixe a senha vazia para manter a atual.' : 'A senha inicial deve possuir pelo menos 8 caracteres.'}</p></div></div><div class="form-section"><div class="form-grid"><div class="field"><label>Nome *</label><input name="name" value="${selected?.name || ''}" required /></div><div class="field"><label>E-mail *</label><input name="email" type="email" value="${selected?.email || ''}" required /></div><div class="field"><label>Perfil *</label><select name="role" required>${Object.entries(roleLabels).map(([value,label]) => `<option value="${value}" ${selected?.role === value ? 'selected' : ''}>${label}</option>`).join('')}</select></div><div class="field"><label>${selected ? 'Nova senha' : 'Senha inicial *'}</label><input name="password" type="password" minlength="8" ${selected ? '' : 'required'} autocomplete="new-password" /></div>${selected ? `<label class="owner-active"><input name="active" type="checkbox" ${selected.active !== false ? 'checked' : ''} /> Usuário ativo</label>` : ''}</div></div><div class="form-footer"><button class="primary-button" type="submit">${selected ? 'Salvar alterações' : 'Cadastrar usuário'}</button>${selected ? '<button class="secondary-button" type="button" data-action="cancel-user-edit">Cancelar</button>' : ''}</div></form>`; }
 function showToast(message) { toast.textContent = message; toast.classList.add('show'); setTimeout(() => toast.classList.remove('show'), 2800); }
 function createTissXml(data, guideId) {
   const sessions = JSON.parse(data.sessions || '[]');
@@ -1707,4 +1709,25 @@ document.addEventListener('submit', event => {
   render('financeiro');
   showToast('Nota fiscal cadastrada com sucesso.');
 });
+document.addEventListener('click', event => {
+  const editButton = event.target.closest('[data-action="edit-user"]');
+  if (editButton) { appView.innerHTML = usersView(editButton.dataset.userId); document.querySelector('#user-form input[name="name"]')?.focus(); }
+  if (event.target.closest('[data-action="cancel-user-edit"]')) render('users');
+});
+
+document.addEventListener('submit', async event => {
+  if (event.target.id !== 'user-form') return;
+  event.preventDefault();
+  const form = event.target;
+  const data = Object.fromEntries(new FormData(form));
+  const id = form.dataset.userId;
+  const payload = { name: data.name, email: data.email, role: data.role, password: data.password, active: id ? data.active === 'on' : true };
+  try {
+    await apiRequest(id ? `/users/${encodeURIComponent(id)}` : '/users', { method: id ? 'PUT' : 'POST', body: JSON.stringify(payload) });
+    users = await apiRequest('/users');
+    render('users');
+    showToast(id ? 'Usuário atualizado.' : 'Usuário cadastrado.');
+  } catch (error) { showToast(error.message); }
+});
+
 if (activeSession) { document.querySelector('#login-screen').classList.add('hidden'); applySession(); render(); loadApiData(); } else { document.querySelector('.app-shell').classList.add('hidden'); }

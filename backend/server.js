@@ -27,6 +27,9 @@ function auth(req, res, next) {
   if (!token) return res.status(401).json({ error: 'Token não informado.' });
   try {
     req.session = jwt.verify(token, jwtSecret);
+    const user = db.prepare('SELECT role, active FROM users WHERE id = ? AND clinic_id = ?').get(req.session.userId, req.session.clinicId);
+    if (!user?.active) return res.status(401).json({ error: 'Usuário inativo ou não encontrado.' });
+    req.session.role = user.role;
     next();
   } catch {
     res.status(401).json({ error: 'Sessão inválida ou expirada.' });
@@ -90,7 +93,7 @@ function mapClinicSettings(row, clinic) {
 app.post('/api/auth/login', (req, res) => {
   const { clinicId, email, password } = req.body;
   const user = db.prepare('SELECT * FROM users WHERE clinic_id = ? AND lower(email) = lower(?)').get(clinicId, email);
-  if (!user || !bcrypt.compareSync(password || '', user.password_hash)) return res.status(401).json({ error: 'Credenciais inválidas.' });
+  if (!user || !user.active || !bcrypt.compareSync(password || '', user.password_hash)) return res.status(401).json({ error: 'Credenciais inválidas.' });
 
   const token = jwt.sign({ userId: user.id, clinicId: user.clinic_id, role: user.role }, jwtSecret, { expiresIn: '8h' });
   res.json({ token, user: { id: user.id, name: user.name, email: user.email, role: user.role }, clinicId: user.clinic_id });
@@ -100,6 +103,39 @@ app.get('/api/settings', auth, (req, res) => {
   const clinic = db.prepare('SELECT id, name, unit FROM clinics WHERE id = ?').get(req.session.clinicId);
   const settings = db.prepare('SELECT * FROM clinic_settings WHERE clinic_id = ?').get(req.session.clinicId);
   res.json(mapClinicSettings(settings, clinic));
+});
+
+app.get('/api/users', auth, requireRole('admin'), (req, res) => {
+  const users = db.prepare('SELECT id, name, email, role, active FROM users WHERE clinic_id = ? ORDER BY active DESC, name').all(req.session.clinicId);
+  res.json(users.map(user => ({ ...user, active: Boolean(user.active) })));
+});
+
+app.post('/api/users', auth, requireRole('admin'), (req, res) => {
+  const { name, email, password, role } = req.body;
+  const allowedRoles = ['admin', 'faturamento', 'recepcao', 'medico'];
+  if (!String(name || '').trim() || !/^\S+@\S+\.\S+$/.test(String(email || '')) || String(password || '').length < 8 || !allowedRoles.includes(role)) return res.status(400).json({ error: 'Informe nome, e-mail válido, perfil e uma senha de pelo menos 8 caracteres.' });
+  const id = `USR-${req.session.clinicId}-${Date.now()}`;
+  try {
+    db.prepare('INSERT INTO users (id, clinic_id, name, email, password_hash, role, active) VALUES (?, ?, ?, ?, ?, ?, 1)').run(id, req.session.clinicId, String(name).trim(), String(email).trim().toLowerCase(), bcrypt.hashSync(password, 10), role);
+    res.status(201).json({ id });
+  } catch (error) { res.status(409).json({ error: error.message.includes('UNIQUE') ? 'Já existe um usuário com esse e-mail na clínica.' : error.message }); }
+});
+
+app.put('/api/users/:id', auth, requireRole('admin'), (req, res) => {
+  const current = db.prepare('SELECT id, role, active FROM users WHERE id = ? AND clinic_id = ?').get(req.params.id, req.session.clinicId);
+  if (!current) return res.status(404).json({ error: 'Usuário não encontrado.' });
+  const { name, email, password, role, active = true } = req.body;
+  const allowedRoles = ['admin', 'faturamento', 'recepcao', 'medico'];
+  if (!String(name || '').trim() || !/^\S+@\S+\.\S+$/.test(String(email || '')) || !allowedRoles.includes(role) || (password && String(password).length < 8)) return res.status(400).json({ error: 'Revise nome, e-mail, perfil e a nova senha (mínimo de 8 caracteres).' });
+  if (current.id === req.session.userId && !active) return res.status(409).json({ error: 'Você não pode desativar o próprio acesso.' });
+  const removesAdmin = current.role === 'admin' && current.active && (role !== 'admin' || !active);
+  const activeAdmins = db.prepare("SELECT count(*) AS total FROM users WHERE clinic_id = ? AND role = 'admin' AND active = 1").get(req.session.clinicId).total;
+  if (removesAdmin && activeAdmins <= 1) return res.status(409).json({ error: 'A clínica precisa manter pelo menos um administrador ativo.' });
+  try {
+    if (password) db.prepare('UPDATE users SET name = ?, email = ?, role = ?, active = ?, password_hash = ? WHERE id = ? AND clinic_id = ?').run(String(name).trim(), String(email).trim().toLowerCase(), role, active ? 1 : 0, bcrypt.hashSync(password, 10), current.id, req.session.clinicId);
+    else db.prepare('UPDATE users SET name = ?, email = ?, role = ?, active = ? WHERE id = ? AND clinic_id = ?').run(String(name).trim(), String(email).trim().toLowerCase(), role, active ? 1 : 0, current.id, req.session.clinicId);
+    res.json({ id: current.id });
+  } catch (error) { res.status(409).json({ error: error.message.includes('UNIQUE') ? 'Já existe um usuário com esse e-mail na clínica.' : error.message }); }
 });
 
 app.get('/api/tuss', auth, (req, res) => {

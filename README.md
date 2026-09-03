@@ -25,6 +25,7 @@ Protótipo de portfólio para operação de faturamento clínico. Demonstra o ci
 - **Dashboard dinâmico**: apresenta indicadores calculados com as guias, notas, lotes, autorizações e agenda reais da clínica, respeitando os dados que cada perfil pode visualizar.
 - **Backup por clínica**: administradores exportam um arquivo JSON versionado com os registros e documentos da sua clínica, sem hashes de senha e com o download registrado na auditoria.
 - **Onboarding de clínicas**: cria um novo espaço isolado, suas configurações iniciais e o primeiro administrador diretamente pela tela de acesso.
+- **Proteção da API**: limita tentativas de autenticação e cadastro, restringe origens pelo ambiente, desativa cache de respostas sensíveis e aplica cabeçalhos contra incorporação e execução indevida.
 - **Financeiro**: cadastro, baixa e exclusão de notas fiscais vinculadas a guias aprovadas.
 - **Agenda compartilhada**: horários persistidos no servidor, checagem de conflitos, recorrência semanal de até 24 semanas e controle de confirmação, presença, falta e cancelamento. A presença consome uma sessão da autorização válida e libera o feedback já pré-preenchido.
 - **Busca/filtro** nas listagens de guias, pacientes, convênios e feedbacks.

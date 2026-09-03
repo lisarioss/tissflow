@@ -14,11 +14,24 @@ const { TISS_VERSION, calculateTissHash, validateTissXml } = require('./tissVali
 const app = express();
 const port = Number(process.env.PORT || 3000);
 const jwtSecret = process.env.JWT_SECRET;
+const allowedOrigins = new Set(String(process.env.CORS_ORIGINS || `http://localhost:${port},http://127.0.0.1:${port}`).split(',').map(value => value.trim()).filter(Boolean));
 
 if (!jwtSecret) throw new Error('JWT_SECRET não configurado no arquivo backend/.env.');
 
-app.use(cors());
+app.disable('x-powered-by');
+if (process.env.TRUST_PROXY === 'true') app.set('trust proxy', 1);
+app.use(cors({ origin(origin, callback) { if (!origin || allowedOrigins.has(origin)) return callback(null, true); callback(new Error('Origem não autorizada.')); } }));
 app.use(express.json({ limit: '8mb' })); // fotos de feedback em base64 podem passar do limite padrão de 100kb
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
+  if (req.path.startsWith('/api/')) res.setHeader('Cache-Control', 'no-store');
+  next();
+});
 app.use(express.static(path.join(__dirname, '..', 'frontend')));
 app.get('/login', (req, res) => res.redirect('/'));
 
@@ -55,6 +68,29 @@ app.get('/api/health', (req, res) => res.json({ status: 'ok', service: 'tiss-flo
 function parseJsonArray(value) {
   try { const parsed = JSON.parse(value || '[]'); return Array.isArray(parsed) ? parsed : []; } catch { return []; }
 }
+
+function rateLimit({ windowMs, max, message, resetOnSuccess = false }) {
+  const attempts = new Map();
+  const middleware = (req, res, next) => {
+    const now = Date.now();
+    const key = `${req.ip}:${req.path}`;
+    const current = attempts.get(key);
+    const entry = !current || current.resetAt <= now ? { count: 0, resetAt: now + windowMs } : current;
+    entry.count += 1;
+    attempts.set(key, entry);
+    if (resetOnSuccess) res.on('finish', () => { if (res.statusCode < 400) attempts.delete(key); });
+    res.setHeader('RateLimit-Limit', max);
+    res.setHeader('RateLimit-Remaining', Math.max(0, max - entry.count));
+    res.setHeader('RateLimit-Reset', Math.ceil(entry.resetAt / 1000));
+    if (entry.count > max) return res.status(429).json({ error: message });
+    next();
+  };
+  setInterval(() => { const now = Date.now(); for (const [key, entry] of attempts) if (entry.resetAt <= now) attempts.delete(key); }, windowMs).unref();
+  return middleware;
+}
+
+const loginRateLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 15, resetOnSuccess: true, message: 'Muitas tentativas de acesso. Aguarde 15 minutos e tente novamente.' });
+const registrationRateLimit = rateLimit({ windowMs: 60 * 60 * 1000, max: 5, message: 'Limite de cadastros atingido. Aguarde uma hora e tente novamente.' });
 
 function recordAudit(req, action, entityType, entityId = null, details = {}) {
   if (!req.session) return;
@@ -94,7 +130,7 @@ app.get('/api/clinics', (req, res) => {
   res.json(db.prepare('SELECT id, name, unit FROM clinics ORDER BY name').all());
 });
 
-app.post('/api/auth/register-clinic', (req, res) => {
+app.post('/api/auth/register-clinic', registrationRateLimit, (req, res) => {
   const { clinicName, unit, cnpj, cnes, adminName, email, password } = req.body;
   if (String(clinicName || '').trim().length < 3 || String(adminName || '').trim().length < 3 || !/^\S+@\S+\.\S+$/.test(String(email || '')) || String(password || '').length < 8) return res.status(400).json({ error: 'Informe clínica, responsável, e-mail válido e senha de pelo menos 8 caracteres.' });
   if (cnes && !/^\d{7}$/.test(String(cnes))) return res.status(400).json({ error: 'O CNES deve possuir 7 dígitos.' });
@@ -117,7 +153,7 @@ app.post('/api/auth/register-clinic', (req, res) => {
   } catch (error) { res.status(409).json({ error: error.message.includes('UNIQUE') ? 'Este e-mail já está cadastrado nesta clínica.' : error.message }); }
 });
 
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', loginRateLimit, (req, res) => {
   const { clinicId, email, password } = req.body;
   const user = db.prepare('SELECT * FROM users WHERE clinic_id = ? AND lower(email) = lower(?)').get(clinicId, email);
   if (!user || !user.active || !bcrypt.compareSync(password || '', user.password_hash)) return res.status(401).json({ error: 'Credenciais inválidas.' });
@@ -822,6 +858,12 @@ app.post('/api/glosas/:id/resolve', auth, requireRole('admin', 'faturamento'), (
   });
   updateAll();
   res.json({ id: req.params.id, status: outcome });
+});
+
+app.use((error, req, res, next) => {
+  if (error.message === 'Origem não autorizada.') return res.status(403).json({ error: error.message });
+  console.error(error);
+  res.status(500).json({ error: 'Erro interno do servidor.' });
 });
 
 app.listen(port, () => console.log(`TISS Flow API disponível em http://localhost:${port}`));

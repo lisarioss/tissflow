@@ -90,13 +90,41 @@ function mapClinicSettings(row, clinic) {
   };
 }
 
+app.get('/api/clinics', (req, res) => {
+  res.json(db.prepare('SELECT id, name, unit FROM clinics ORDER BY name').all());
+});
+
+app.post('/api/auth/register-clinic', (req, res) => {
+  const { clinicName, unit, cnpj, cnes, adminName, email, password } = req.body;
+  if (String(clinicName || '').trim().length < 3 || String(adminName || '').trim().length < 3 || !/^\S+@\S+\.\S+$/.test(String(email || '')) || String(password || '').length < 8) return res.status(400).json({ error: 'Informe clínica, responsável, e-mail válido e senha de pelo menos 8 caracteres.' });
+  if (cnes && !/^\d{7}$/.test(String(cnes))) return res.status(400).json({ error: 'O CNES deve possuir 7 dígitos.' });
+  const baseSlug = String(clinicName).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 32) || 'clinica';
+  let clinicId = baseSlug;
+  let suffix = 1;
+  while (db.prepare('SELECT 1 FROM clinics WHERE id = ?').get(clinicId)) clinicId = `${baseSlug}-${++suffix}`;
+  const userId = `USR-${clinicId}-${Date.now()}`;
+  try {
+    db.transaction(() => {
+      db.prepare('INSERT INTO clinics (id, name, unit) VALUES (?, ?, ?)').run(clinicId, String(clinicName).trim(), String(unit || 'Unidade principal').trim());
+      db.prepare('INSERT INTO users (id, clinic_id, name, email, password_hash, role, active) VALUES (?, ?, ?, ?, ?, ?, 1)').run(userId, clinicId, String(adminName).trim(), String(email).trim().toLowerCase(), bcrypt.hashSync(password, 10), 'admin');
+      db.prepare('INSERT INTO clinic_settings (clinic_id, legal_name, trade_name, cnpj, cnes) VALUES (?, ?, ?, ?, ?)').run(clinicId, String(clinicName).trim(), String(clinicName).trim(), String(cnpj || '').trim(), String(cnes || '').trim());
+      db.prepare('INSERT INTO audit_logs (clinic_id, user_id, action, entity_type, entity_id, route, details_json, ip_address) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(clinicId, userId, 'create', 'clinics', clinicId, '/api/auth/register-clinic', JSON.stringify({ fields: ['clinicName', 'unit', 'cnpj', 'cnes', 'adminName', 'email'] }), req.ip || '');
+    })();
+    const clinic = { id: clinicId, name: String(clinicName).trim(), unit: String(unit || 'Unidade principal').trim() };
+    const user = { id: userId, name: String(adminName).trim(), email: String(email).trim().toLowerCase(), role: 'admin' };
+    const token = jwt.sign({ userId, clinicId, role: 'admin' }, jwtSecret, { expiresIn: '8h' });
+    res.status(201).json({ token, user, clinicId, clinic });
+  } catch (error) { res.status(409).json({ error: error.message.includes('UNIQUE') ? 'Este e-mail já está cadastrado nesta clínica.' : error.message }); }
+});
+
 app.post('/api/auth/login', (req, res) => {
   const { clinicId, email, password } = req.body;
   const user = db.prepare('SELECT * FROM users WHERE clinic_id = ? AND lower(email) = lower(?)').get(clinicId, email);
   if (!user || !user.active || !bcrypt.compareSync(password || '', user.password_hash)) return res.status(401).json({ error: 'Credenciais inválidas.' });
 
   const token = jwt.sign({ userId: user.id, clinicId: user.clinic_id, role: user.role }, jwtSecret, { expiresIn: '8h' });
-  res.json({ token, user: { id: user.id, name: user.name, email: user.email, role: user.role }, clinicId: user.clinic_id });
+  const clinic = db.prepare('SELECT id, name, unit FROM clinics WHERE id = ?').get(user.clinic_id);
+  res.json({ token, user: { id: user.id, name: user.name, email: user.email, role: user.role }, clinicId: user.clinic_id, clinic });
 });
 
 app.get('/api/settings', auth, (req, res) => {

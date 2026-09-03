@@ -14,6 +14,7 @@ const clinicUsers = {
 };
 const activeSession = JSON.parse(localStorage.getItem('tiss-session') || 'null');
 const activeClinicId = activeSession?.clinicId || 'sabia';
+const activeClinic = activeSession?.clinic || clinicProfiles[activeClinicId] || { id: activeClinicId, name: 'Clínica', unit: 'Unidade principal' };
 const roleLabels = { admin: 'Administradora', faturamento: 'Faturamento', recepcao: 'Recepção', medico: 'Médica' };
 const activeUser = activeSession?.user || (activeSession ? (clinicUsers[activeClinicId] || []).find(user => user.id === activeSession.userId) : null);
 const clinicStorageKey = key => `tiss-${activeClinicId}-${key}`;
@@ -132,6 +133,16 @@ async function apiRequest(path, options = {}) {
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload.error || 'Não foi possível comunicar com a API.');
   return payload;
+}
+async function loadClinicOptions() {
+  const select = document.querySelector('#login-clinic');
+  if (!select) return;
+  try {
+    const clinics = await apiRequest('/clinics');
+    const selected = select.value;
+    select.replaceChildren(...clinics.map(clinic => { const option = document.createElement('option'); option.value = clinic.id; option.textContent = clinic.name; return option; }));
+    if (clinics.some(clinic => clinic.id === selected)) select.value = selected;
+  } catch { /* mantém as clínicas demonstrativas quando a API estiver indisponível */ }
 }
 function fileAsDataUrl(file) {
   return new Promise((resolve, reject) => {
@@ -751,7 +762,7 @@ function saveGuides() { localStorage.setItem(clinicStorageKey('guides'), JSON.st
 function restoreDraft() { const draft = JSON.parse(localStorage.getItem(clinicStorageKey('draft')) || 'null'); if (!draft) return; Object.entries(draft).forEach(([key, value]) => { const field = document.querySelector(`#${key}`); if (field) field.value = value; }); }
 function saveDraft(form) { localStorage.setItem(clinicStorageKey('draft'), JSON.stringify(Object.fromEntries(new FormData(form)))); }
 function render(view = 'overview') { breadcrumb.textContent = views[view] || views.overview; const safeView = userCan(view) ? view : 'overview'; appView.innerHTML = safeView === 'overview' ? overview() : safeView === 'alerts' ? alertsView() : safeView === 'agenda' ? agendaView() : safeView === 'guides' ? guideList() : safeView === 'authorizations' ? authorizationsView() : safeView === 'batches' ? batchesView() : safeView === 'financeiro' ? financeView() : safeView === 'reports' ? reportsView() : safeView === 'patients' ? patientsView() : safeView === 'users' ? usersView() : safeView === 'convenios' ? insurersView() : safeView === 'feedback' ? feedbackView() : safeView === 'settings' ? settingsView() : listing(views[safeView], `Gerencie ${views[safeView].toLowerCase()} em um só lugar.`, '↗'); document.querySelectorAll('.nav-item').forEach(item => { const visible = userCan(item.dataset.view); item.style.display = visible ? '' : 'none'; item.classList.toggle('active', item.dataset.view === safeView && visible); }); if (safeView === 'batches') batches.forEach(batch => { const card = document.querySelector(`[data-batch-id="${batch.id}"]`); const select = card?.querySelector('[data-batch-status]'); if (select) select.value = batch.status; }); updateNotificationBadge(); }
-function applySession() { const clinic = clinicProfiles[activeClinicId]; if (!clinic || !activeUser) return; document.querySelector('.workspace-switcher strong').textContent = clinic.name; document.querySelector('.workspace-switcher small').textContent = clinic.unit; document.querySelector('.workspace-switcher .avatar').textContent = clinic.initials; document.querySelector('#breadcrumb-clinic').textContent = clinic.name; document.querySelector('.profile strong').textContent = activeUser.name; document.querySelector('.profile small').textContent = activeUser.roleLabel || roleLabels[activeUser.role] || activeUser.role; document.querySelector('.user-button span:nth-child(2)').textContent = activeUser.name; document.querySelector('.user-button .avatar').textContent = activeUser.name.split(' ').map(name => name[0]).join('').slice(0, 2); }
+function applySession() { const clinic = activeClinic; if (!clinic || !activeUser) return; const initials = clinic.initials || clinic.name.split(' ').map(name => name[0]).join('').slice(0, 2).toUpperCase(); document.querySelector('.workspace-switcher strong').textContent = clinic.name; document.querySelector('.workspace-switcher small').textContent = clinic.unit; document.querySelector('.workspace-switcher .avatar').textContent = initials; document.querySelector('#breadcrumb-clinic').textContent = clinic.name; document.querySelector('.profile strong').textContent = activeUser.name; document.querySelector('.profile small').textContent = activeUser.roleLabel || roleLabels[activeUser.role] || activeUser.role; document.querySelector('.user-button span:nth-child(2)').textContent = activeUser.name; document.querySelector('.user-button .avatar').textContent = activeUser.name.split(' ').map(name => name[0]).join('').slice(0, 2); }
 function usersView(editId = '') { const selected = users.find(user => user.id === editId); return `<div class="page-heading"><div><p class="eyebrow">Acesso e segurança</p><h1>Usuários da clínica</h1><p class="heading-copy">Cadastre a equipe e mantenha cada acesso no perfil correto.</p></div></div><div class="panel"><div class="panel-header"><div><h2 class="panel-title">Equipe</h2><p class="panel-subtitle">${users.filter(user => user.active !== false).length} acesso(s) ativo(s)</p></div></div><table><thead><tr><th>Nome</th><th>E-mail</th><th>Perfil</th><th>Situação</th><th></th></tr></thead><tbody>${users.map(user => `<tr><td><strong>${user.name}</strong></td><td>${user.email}</td><td>${roleLabels[user.role] || user.role}</td><td><span class="status ${user.active === false ? 'error' : 'approved'}">${user.active === false ? 'Inativo' : 'Ativo'}</span></td><td><button class="text-button" data-action="edit-user" data-user-id="${user.id}">Editar</button></td></tr>`).join('')}</tbody></table></div><form class="panel patient-form" id="user-form" data-user-id="${selected?.id || ''}"><div class="panel-header"><div><h2 class="panel-title">${selected ? 'Editar usuário' : 'Novo usuário'}</h2><p class="panel-subtitle">${selected ? 'Deixe a senha vazia para manter a atual.' : 'A senha inicial deve possuir pelo menos 8 caracteres.'}</p></div></div><div class="form-section"><div class="form-grid"><div class="field"><label>Nome *</label><input name="name" value="${selected?.name || ''}" required /></div><div class="field"><label>E-mail *</label><input name="email" type="email" value="${selected?.email || ''}" required /></div><div class="field"><label>Perfil *</label><select name="role" required>${Object.entries(roleLabels).map(([value,label]) => `<option value="${value}" ${selected?.role === value ? 'selected' : ''}>${label}</option>`).join('')}</select></div><div class="field"><label>${selected ? 'Nova senha' : 'Senha inicial *'}</label><input name="password" type="password" minlength="8" ${selected ? '' : 'required'} autocomplete="new-password" /></div>${selected ? `<label class="owner-active"><input name="active" type="checkbox" ${selected.active !== false ? 'checked' : ''} /> Usuário ativo</label>` : ''}</div></div><div class="form-footer"><button class="primary-button" type="submit">${selected ? 'Salvar alterações' : 'Cadastrar usuário'}</button>${selected ? '<button class="secondary-button" type="button" data-action="cancel-user-edit">Cancelar</button>' : ''}</div></form>`; }
 function showToast(message) { toast.textContent = message; toast.classList.add('show'); setTimeout(() => toast.classList.remove('show'), 2800); }
 function createTissXml(data, guideId) {
@@ -868,6 +879,11 @@ function ownersFromSettingsForm(form) {
 }
 
 document.addEventListener('click', event => {
+  if (event.target.closest('[data-action="toggle-registration"]')) {
+    const form = document.querySelector('#clinic-registration-form');
+    form?.classList.toggle('hidden');
+    document.querySelector('#register-clinic-name')?.focus();
+  }
   const addButton = event.target.closest('[data-action="add-owner"]');
   if (addButton) {
     const list = document.querySelector('#owners-settings-list');
@@ -1787,6 +1803,18 @@ async function downloadClinicBackup() {
 }
 
 document.addEventListener('submit', async event => {
+  if (event.target.id === 'clinic-registration-form') {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    const data = Object.fromEntries(new FormData(event.target));
+    try {
+      const session = await apiRequest('/auth/register-clinic', { method: 'POST', body: JSON.stringify(data) });
+      session.user.roleLabel = roleLabels.admin;
+      localStorage.setItem('tiss-session', JSON.stringify({ ...session, userId: session.user.id }));
+      window.location.reload();
+    } catch (error) { showToast(error.message); }
+    return;
+  }
   if (event.target.id !== 'user-form') return;
   event.preventDefault();
   const form = event.target;
@@ -1801,4 +1829,4 @@ document.addEventListener('submit', async event => {
   } catch (error) { showToast(error.message); }
 });
 
-if (activeSession) { document.querySelector('#login-screen').classList.add('hidden'); applySession(); render(); loadApiData(); } else { document.querySelector('.app-shell').classList.add('hidden'); }
+if (activeSession) { document.querySelector('#login-screen').classList.add('hidden'); applySession(); render(); loadApiData(); } else { document.querySelector('.app-shell').classList.add('hidden'); loadClinicOptions(); }

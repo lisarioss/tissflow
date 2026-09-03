@@ -43,7 +43,7 @@ function coverContent(clinic, guide, sessions) {
     { text: ptDate(session.date), alignment: 'center', margin: [0, compact ? 1 : 7, 0, compact ? 1 : 7] },
     { text: session.start && session.end ? `${session.start} - ${session.end}` : hoursLabel(duration(session)), alignment: 'center', margin: [0, compact ? 1 : 7, 0, compact ? 1 : 7] },
     { stack: [{ text: professionalLines, fontSize: compact ? 5.7 : 7 }, { text: compact ? 'Ass.: ____________________' : '\nAss.: __________________________', fontSize: compact ? 5.7 : 6.5 }], margin: [4, compact ? 1 : 4, 3, compact ? 1 : 4] },
-    { text: compact ? 'Ass.: ____________________' : '\nAss.: __________________________', fontSize: compact ? 5.7 : 6.5, margin: [4, compact ? 1 : 4, 3, compact ? 1 : 4] }
+    { stack: [{ text: [guide.guardian_name, guide.guardian_relationship].filter(Boolean).join(' - '), fontSize: compact ? 5.7 : 7 }, { text: compact ? 'Ass.: ____________________' : '\nAss.: __________________________', fontSize: compact ? 5.7 : 6.5 }], margin: [4, compact ? 1 : 4, 3, compact ? 1 : 4] }
     ];
   });
   const infoCell = (label, value, options = {}) => ({

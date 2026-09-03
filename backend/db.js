@@ -270,6 +270,12 @@ const guideMigrations = {
 Object.entries(guideMigrations).forEach(([column, statement]) => { if (!guideColumnNames.has(column)) db.exec(statement); });
 const patientColumns = new Set(db.prepare('PRAGMA table_info(patients)').all().map(column => column.name));
 if (!patientColumns.has('active')) db.exec('ALTER TABLE patients ADD COLUMN active INTEGER NOT NULL DEFAULT 1');
+if (!patientColumns.has('guardian_name')) db.exec("ALTER TABLE patients ADD COLUMN guardian_name TEXT NOT NULL DEFAULT ''");
+if (!patientColumns.has('guardian_relationship')) db.exec("ALTER TABLE patients ADD COLUMN guardian_relationship TEXT NOT NULL DEFAULT ''");
+if (!patientColumns.has('guardian_phone')) db.exec("ALTER TABLE patients ADD COLUMN guardian_phone TEXT NOT NULL DEFAULT ''");
+if (!patientColumns.has('guardian_email')) db.exec("ALTER TABLE patients ADD COLUMN guardian_email TEXT NOT NULL DEFAULT ''");
+if (!patientColumns.has('consent_status')) db.exec("ALTER TABLE patients ADD COLUMN consent_status TEXT NOT NULL DEFAULT 'pending'");
+if (!patientColumns.has('consent_date')) db.exec("ALTER TABLE patients ADD COLUMN consent_date TEXT NOT NULL DEFAULT ''");
 const userColumns = new Set(db.prepare('PRAGMA table_info(users)').all().map(column => column.name));
 if (!userColumns.has('active')) db.exec('ALTER TABLE users ADD COLUMN active INTEGER NOT NULL DEFAULT 1');
 const settingsColumns = new Set(db.prepare('PRAGMA table_info(clinic_settings)').all().map(column => column.name));

@@ -313,6 +313,8 @@ app.get('/api/reports/:type.csv', auth, requireRole('admin', 'faturamento'), (re
 app.get('/api/guides/:id/pdf', auth, (req, res) => {
   const guide = db.prepare('SELECT * FROM guides WHERE id = ? AND clinic_id = ?').get(req.params.id, req.session.clinicId);
   if (!guide) return res.status(404).json({ error: 'Guia não encontrada.' });
+  const guardian = db.prepare('SELECT guardian_name, guardian_relationship FROM patients WHERE clinic_id = ? AND name = ?').get(req.session.clinicId, guide.patient);
+  Object.assign(guide, guardian || {});
   const clinic = db.prepare('SELECT id, name, unit FROM clinics WHERE id = ?').get(req.session.clinicId);
   const row = db.prepare('SELECT * FROM clinic_settings WHERE clinic_id = ?').get(req.session.clinicId);
   recordAudit(req, 'download', 'guides', guide.id, { document: 'cover-and-guide-pdf' });
@@ -322,6 +324,8 @@ app.get('/api/guides/:id/pdf', auth, (req, res) => {
 app.get('/api/guides/:id/audit-pdf', auth, requireRole('admin', 'faturamento', 'medico'), (req, res) => {
   const guide = db.prepare('SELECT * FROM guides WHERE id = ? AND clinic_id = ?').get(req.params.id, req.session.clinicId);
   if (!guide) return res.status(404).json({ error: 'Guia não encontrada.' });
+  const guardian = db.prepare('SELECT guardian_name, guardian_relationship FROM patients WHERE clinic_id = ? AND name = ?').get(req.session.clinicId, guide.patient);
+  Object.assign(guide, guardian || {});
   const feedbacks = db.prepare('SELECT id, guide_id AS guideId, patient, professional, attendance_date AS attendanceDate, attendance_type AS attendanceType, content, photo, created_at AS createdAt FROM feedbacks WHERE clinic_id = ? AND guide_id = ? ORDER BY attendance_date, created_at').all(req.session.clinicId, guide.id);
   if (!feedbacks.length) return res.status(404).json({ error: 'Esta guia ainda não possui feedbacks vinculados.' });
   const clinic = db.prepare('SELECT id, name, unit FROM clinics WHERE id = ?').get(req.session.clinicId);
@@ -331,15 +335,16 @@ app.get('/api/guides/:id/audit-pdf', auth, requireRole('admin', 'faturamento', '
 });
 
 app.get('/api/patients', auth, (req, res) => {
-  const patients = db.prepare('SELECT id, name, birth_date AS birthDate, insurer, ans_code AS ansCode, card_number AS cardNumber, plan, plan_validity AS planValidity, active FROM patients WHERE clinic_id = ? ORDER BY active DESC, name').all(req.session.clinicId);
+  const patients = db.prepare('SELECT id, name, birth_date AS birthDate, insurer, ans_code AS ansCode, card_number AS cardNumber, plan, plan_validity AS planValidity, guardian_name AS guardianName, guardian_relationship AS guardianRelationship, guardian_phone AS guardianPhone, guardian_email AS guardianEmail, consent_status AS consentStatus, consent_date AS consentDate, active FROM patients WHERE clinic_id = ? ORDER BY active DESC, name').all(req.session.clinicId);
   res.json(patients);
 });
 
 app.post('/api/patients', auth, requireRole('admin', 'recepcao', 'medico'), (req, res) => {
-  const { id, name, birthDate, insurer, ansCode, cardNumber, plan, planValidity } = req.body;
+  const { id, name, birthDate, insurer, ansCode, cardNumber, plan, planValidity, guardianName = '', guardianRelationship = '', guardianPhone = '', guardianEmail = '', consentStatus = 'pending', consentDate = '' } = req.body;
   if (!id || !name || !birthDate || !insurer || !cardNumber || !plan || !planValidity) return res.status(400).json({ error: 'Nome, nascimento, convênio, carteira, plano e validade são obrigatórios.' });
+  if (consentStatus === 'granted' && !/^\d{4}-\d{2}-\d{2}$/.test(consentDate)) return res.status(400).json({ error: 'Informe a data em que o consentimento foi concedido.' });
   try {
-    db.prepare('INSERT INTO patients (id, clinic_id, name, birth_date, insurer, ans_code, card_number, plan, plan_validity, active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)').run(id, req.session.clinicId, name, birthDate, insurer, ansCode || '', cardNumber, plan, planValidity);
+    db.prepare('INSERT INTO patients (id, clinic_id, name, birth_date, insurer, ans_code, card_number, plan, plan_validity, guardian_name, guardian_relationship, guardian_phone, guardian_email, consent_status, consent_date, active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)').run(id, req.session.clinicId, name, birthDate, insurer, ansCode || '', cardNumber, plan, planValidity, guardianName, guardianRelationship, guardianPhone, guardianEmail, ['pending', 'granted', 'revoked'].includes(consentStatus) ? consentStatus : 'pending', consentDate);
     res.status(201).json({ id });
   } catch (error) {
     res.status(409).json({ error: error.message });
@@ -347,9 +352,10 @@ app.post('/api/patients', auth, requireRole('admin', 'recepcao', 'medico'), (req
 });
 
 app.patch('/api/patients/:id', auth, requireRole('admin', 'recepcao', 'medico'), (req, res) => {
-  const { name, birthDate, insurer, ansCode, cardNumber, plan, planValidity, active = 1 } = req.body;
+  const { name, birthDate, insurer, ansCode, cardNumber, plan, planValidity, guardianName = '', guardianRelationship = '', guardianPhone = '', guardianEmail = '', consentStatus = 'pending', consentDate = '', active = 1 } = req.body;
   if (!name || !birthDate || !insurer || !cardNumber || !plan || !planValidity) return res.status(400).json({ error: 'Nome, nascimento, convênio, carteira, plano e validade são obrigatórios.' });
-  const result = db.prepare('UPDATE patients SET name = ?, birth_date = ?, insurer = ?, ans_code = ?, card_number = ?, plan = ?, plan_validity = ?, active = ? WHERE id = ? AND clinic_id = ?').run(name, birthDate, insurer, ansCode || '', cardNumber, plan, planValidity, active ? 1 : 0, req.params.id, req.session.clinicId);
+  if (consentStatus === 'granted' && !/^\d{4}-\d{2}-\d{2}$/.test(consentDate)) return res.status(400).json({ error: 'Informe a data em que o consentimento foi concedido.' });
+  const result = db.prepare('UPDATE patients SET name = ?, birth_date = ?, insurer = ?, ans_code = ?, card_number = ?, plan = ?, plan_validity = ?, guardian_name = ?, guardian_relationship = ?, guardian_phone = ?, guardian_email = ?, consent_status = ?, consent_date = ?, active = ? WHERE id = ? AND clinic_id = ?').run(name, birthDate, insurer, ansCode || '', cardNumber, plan, planValidity, guardianName, guardianRelationship, guardianPhone, guardianEmail, ['pending', 'granted', 'revoked'].includes(consentStatus) ? consentStatus : 'pending', consentDate, active ? 1 : 0, req.params.id, req.session.clinicId);
   if (!result.changes) return res.status(404).json({ error: 'Paciente não encontrado.' });
   res.json({ id: req.params.id });
 });

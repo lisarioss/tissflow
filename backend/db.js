@@ -168,6 +168,17 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
   CREATE INDEX IF NOT EXISTS idx_patient_documents_patient ON patient_documents(clinic_id, patient_id, created_at);
+  CREATE TABLE IF NOT EXISTS patient_consents (
+    id TEXT PRIMARY KEY,
+    clinic_id TEXT NOT NULL REFERENCES clinics(id),
+    patient_id TEXT NOT NULL REFERENCES patients(id),
+    status TEXT NOT NULL CHECK (status IN ('granted', 'revoked')),
+    event_date TEXT NOT NULL,
+    notes TEXT,
+    recorded_by TEXT NOT NULL REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE INDEX IF NOT EXISTS idx_patient_consents_patient ON patient_consents(clinic_id, patient_id, event_date DESC);
   CREATE TABLE IF NOT EXISTS appointments (
     id TEXT PRIMARY KEY,
     clinic_id TEXT NOT NULL REFERENCES clinics(id),

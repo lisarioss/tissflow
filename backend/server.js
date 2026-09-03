@@ -264,7 +264,7 @@ app.get('/api/backup', auth, requireRole('admin'), (req, res) => {
       users, patients: byClinic('patients'), guides: byClinic('guides'), insurers: byClinic('insurers'),
       invoices: byClinic('invoices'), glosas: byClinic('glosas'), authorizations: byClinic('authorizations'),
       billingBatches: byClinic('billing_batches'), billingBatchGuides: batchGuides, feedbacks: byClinic('feedbacks'),
-      patientDocuments: documents, appointments: byClinic('appointments'), auditLogs: byClinic('audit_logs')
+      patientDocuments: documents, patientConsents: byClinic('patient_consents'), appointments: byClinic('appointments'), auditLogs: byClinic('audit_logs')
     }
   };
   recordAudit(req, 'download', 'backup', clinicId, { document: 'clinic-backup', version: backup.version });
@@ -434,6 +434,27 @@ app.delete('/api/invoices/:id', auth, requireRole('admin', 'faturamento'), (req,
 app.get('/api/insurers', auth, (req, res) => {
   const insurers = db.prepare('SELECT id, name, ans_code AS ansCode, contact_email AS contactEmail, contact_phone AS contactPhone, provider_code AS providerCode, delivery_format AS deliveryFormat, accepted_procedures AS acceptedProcedures, procedure_rules AS procedureRules FROM insurers WHERE clinic_id = ? ORDER BY name').all(req.session.clinicId);
   res.json(insurers.map(insurer => ({ ...insurer, acceptedProcedures: JSON.parse(insurer.acceptedProcedures || '[]'), procedureRules: JSON.parse(insurer.procedureRules || '[]') })));
+});
+
+app.get('/api/patient-consents', auth, requireRole('admin', 'recepcao', 'medico'), (req, res) => {
+  const rows = db.prepare(`SELECT patient_consents.id, patient_consents.patient_id AS patientId, patient_consents.status, patient_consents.event_date AS eventDate, patient_consents.notes, patient_consents.created_at AS createdAt, users.name AS recordedBy
+    FROM patient_consents JOIN users ON users.id = patient_consents.recorded_by AND users.clinic_id = patient_consents.clinic_id
+    WHERE patient_consents.clinic_id = ? ORDER BY patient_consents.event_date DESC, patient_consents.created_at DESC`).all(req.session.clinicId);
+  res.json(rows);
+});
+
+app.post('/api/patients/:id/consents', auth, requireRole('admin', 'recepcao', 'medico'), (req, res) => {
+  const { status, eventDate, notes = '' } = req.body;
+  if (!['granted', 'revoked'].includes(status)) return res.status(400).json({ error: 'Informe se o consentimento foi concedido ou revogado.' });
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(eventDate || '')) return res.status(400).json({ error: 'Informe a data da manifestação.' });
+  const patient = db.prepare('SELECT id FROM patients WHERE id = ? AND clinic_id = ?').get(req.params.id, req.session.clinicId);
+  if (!patient) return res.status(404).json({ error: 'Paciente não encontrado.' });
+  const id = `CONS-${Date.now()}`;
+  db.transaction(() => {
+    db.prepare('INSERT INTO patient_consents (id, clinic_id, patient_id, status, event_date, notes, recorded_by) VALUES (?, ?, ?, ?, ?, ?, ?)').run(id, req.session.clinicId, patient.id, status, eventDate, String(notes).trim().slice(0, 500) || null, req.session.userId);
+    db.prepare('UPDATE patients SET consent_status = ?, consent_date = ? WHERE id = ? AND clinic_id = ?').run(status, eventDate, patient.id, req.session.clinicId);
+  })();
+  res.status(201).json({ id, status, eventDate });
 });
 
 app.get('/api/patients/:id/consent-pdf', auth, requireRole('admin', 'recepcao', 'medico'), (req, res) => {

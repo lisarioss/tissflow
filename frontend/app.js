@@ -72,6 +72,7 @@ let authorizations = JSON.parse(localStorage.getItem(clinicStorageKey('authoriza
 function saveAuthorizations() { localStorage.setItem(clinicStorageKey('authorizations'), JSON.stringify(authorizations)); }
 let feedbacks = JSON.parse(localStorage.getItem(clinicStorageKey('feedbacks')) || 'null') || [];
 let patientDocuments = [];
+let patientConsents = [];
 let auditLogs = [];
 let users = clinicUsers[activeClinicId] || [];
 let selectedReportCompetence = '';
@@ -286,7 +287,7 @@ async function loadApiData() {
     const permittedRequest = (allowed, path, fallback = []) => allowed ? apiRequest(path) : Promise.resolve(fallback);
     const canReadFinancial = userCan('financeiro');
     const canReadFeedbacks = userCan('feedback');
-    const [apiGuides, apiInvoices, apiPatients, apiGlosas, apiInsurers, apiFeedbacks, apiSettings, apiBatches, apiAuthorizations, apiPatientDocuments, apiAppointments] = await Promise.all([
+    const [apiGuides, apiInvoices, apiPatients, apiGlosas, apiInsurers, apiFeedbacks, apiSettings, apiBatches, apiAuthorizations, apiPatientDocuments, apiAppointments, apiPatientConsents] = await Promise.all([
       apiRequest('/guides'),
       permittedRequest(canReadFinancial, '/invoices'),
       apiRequest('/patients'),
@@ -297,7 +298,8 @@ async function loadApiData() {
       permittedRequest(userCan('batches'), '/batches'),
       apiRequest('/authorizations'),
       permittedRequest(userCan('patients'), '/patient-documents'),
-      permittedRequest(userCan('agenda'), '/appointments')
+      permittedRequest(userCan('agenda'), '/appointments'),
+      permittedRequest(userCan('patients'), '/patient-consents')
     ]);
     guides = apiGuides.map(normalizeGuide);
     invoices = apiInvoices.map(normalizeInvoice);
@@ -309,6 +311,7 @@ async function loadApiData() {
     batches = apiBatches.map(normalizeBatch);
     authorizations = apiAuthorizations;
     patientDocuments = apiPatientDocuments;
+    patientConsents = apiPatientConsents;
     if (userCan('agenda')) appointments = apiAppointments;
     if (userCan('audit')) auditLogs = await apiRequest('/audit-logs');
     if (userCan('users')) users = await apiRequest('/users');
@@ -598,6 +601,7 @@ function patientFolderView(patientId) {
   const patientInvoices = invoices.filter(item => guideIds.has(item.guideId));
   const patientBatches = batches.filter(batch => (batch.guides || []).some(guide => guide.patient === patient.name || guideIds.has(guide.id)));
   const documents = patientDocuments.filter(item => item.patientId === patient.id);
+  const consentHistory = patientConsents.filter(item => item.patientId === patient.id);
   const validUntil = patient.planValidity ? new Date(`${patient.planValidity}T12:00:00`).toLocaleDateString('pt-BR') : 'Não informada';
   const empty = message => `<div class="patient-folder-empty">${message}</div>`;
   return `<div class="page-heading patient-folder-heading"><div><p class="eyebrow">Pasta do paciente · ${patient.id}</p><h1>${patient.name}</h1><p class="heading-copy">Histórico clínico, documentos e faturamento reunidos em um só lugar.</p></div><div class="folder-actions"><button class="secondary-button" data-view="patients">← Voltar</button><button class="secondary-button" data-action="edit-patient" data-patient-id="${patient.id}">Editar cadastro</button></div></div>
@@ -606,6 +610,9 @@ function patientFolderView(patientId) {
   <div class="patient-folder-grid">
     <section class="panel patient-folder-section patient-folder-wide"><div class="panel-header"><div><h2 class="panel-title">Documentos anexados</h2><p class="panel-subtitle">Pedidos, laudos, carteirinhas e arquivos usados no atendimento ou na auditoria.</p></div><span class="guide-type-tag">${documents.length} arquivo(s)</span></div>${documents.length ? `<div class="patient-document-list">${documents.map(item => { const expired = item.validUntil && item.validUntil < new Date().toISOString().slice(0, 10); return `<div class="patient-document-row"><span class="patient-file-icon">${item.mimeType === 'application/pdf' ? 'PDF' : 'IMG'}</span><div><strong>${item.originalName}</strong><small>${item.category}${item.description ? ` · ${item.description}` : ''} · ${(Number(item.sizeBytes) / 1024).toFixed(0)} KB</small><small>Enviado por ${item.uploadedBy}${item.validUntil ? ` · validade ${new Date(`${item.validUntil}T12:00:00`).toLocaleDateString('pt-BR')}` : ''}${item.guideId ? ` · guia ${item.guideId}` : ''}</small></div>${expired ? '<span class="document-validity expired">Vencido</span>' : item.validUntil ? '<span class="document-validity active">Vigente</span>' : '<span></span>'}<button class="text-button" data-action="download-patient-document" data-document-id="${item.id}">Baixar</button><button class="finance-delete" data-action="delete-patient-document" data-document-id="${item.id}" data-patient-id="${patient.id}">Excluir</button></div>`; }).join('')}</div>` : empty('Nenhum documento anexado.')}
       <form class="patient-document-form" id="patient-document-form" data-patient-id="${patient.id}"><div class="form-grid"><div class="field"><label for="patient-document-category">Categoria *</label><select id="patient-document-category" name="category" required><option value="">Selecione</option><option>Pedido médico</option><option>Laudo</option><option>Carteirinha do convênio</option><option>Autorização</option><option>Relatório clínico</option><option>Documento pessoal</option><option>Outro</option></select></div><div class="field"><label for="patient-document-file">Arquivo *</label><input id="patient-document-file" name="file" type="file" accept="application/pdf,image/png,image/jpeg" required /><small>PDF, PNG ou JPEG de até 6 MB.</small></div><div class="field"><label for="patient-document-validity">Validade</label><input id="patient-document-validity" name="validUntil" type="date" /></div><div class="field"><label for="patient-document-guide">Vincular à guia</label><select id="patient-document-guide" name="guideId"><option value="">Sem guia</option>${patientGuides.map(guide => `<option value="${guide.id}">${guide.id} · ${guide.procedure}</option>`).join('')}</select></div><div class="field"><label for="patient-document-authorization">Vincular à autorização</label><select id="patient-document-authorization" name="authorizationId"><option value="">Sem autorização</option>${patientAuthorizations.map(item => `<option value="${item.id}">${item.authorizationNumber}</option>`).join('')}</select></div><div class="field"><label for="patient-document-description">Descrição</label><input id="patient-document-description" name="description" maxlength="180" placeholder="Observação opcional" /></div></div><div class="form-footer"><button type="submit" class="primary-button" ${activeSession?.token ? '' : 'disabled'}>Anexar documento</button></div>${activeSession?.token ? '' : '<small class="document-api-note">Entre pela API para armazenar documentos com segurança.</small>'}</form>
+    </section>
+    <section class="panel patient-folder-section patient-folder-wide"><div class="panel-header"><div><h2 class="panel-title">Histórico de consentimento</h2><p class="panel-subtitle">Manifestações preservadas para rastreabilidade do atendimento.</p></div><span class="guide-type-tag">${consentHistory.length} evento(s)</span></div>${consentHistory.length ? `<div class="patient-simple-list consent-history">${consentHistory.map(item => `<div><strong>${item.status === 'granted' ? 'Consentimento concedido' : 'Consentimento revogado'}</strong><small>${new Date(`${item.eventDate}T12:00:00`).toLocaleDateString('pt-BR')} · registrado por ${item.recordedBy}${item.notes ? ` · ${item.notes}` : ''}</small><span class="status ${item.status === 'granted' ? 'approved' : 'error'}">${item.status === 'granted' ? 'Concedido' : 'Revogado'}</span></div>`).join('')}</div>` : empty('Nenhuma manifestação foi registrada no histórico.')}
+      <form class="patient-consent-form" id="patient-consent-form" data-patient-id="${patient.id}"><div class="form-grid"><div class="field"><label for="consent-event-status">Manifestação *</label><select id="consent-event-status" name="status" required><option value="granted">Consentimento concedido</option><option value="revoked">Consentimento revogado</option></select></div><div class="field"><label for="consent-event-date">Data *</label><input id="consent-event-date" name="eventDate" type="date" value="${new Date().toISOString().slice(0, 10)}" required /></div><div class="field consent-notes-field"><label for="consent-event-notes">Observação</label><input id="consent-event-notes" name="notes" maxlength="500" placeholder="Ex.: termo assinado e anexado à pasta" /></div></div><div class="form-footer"><button class="primary-button" type="submit" ${activeSession?.token ? '' : 'disabled'}>Registrar manifestação</button></div></form>
     </section>
     <section class="panel patient-folder-section patient-folder-wide"><div class="panel-header"><div><h2 class="panel-title">Guias e PDFs</h2><p class="panel-subtitle">Guias geradas para o paciente e documentos disponíveis.</p></div></div>${patientGuides.length ? `<div class="patient-document-list">${patientGuides.map(guide => `<div class="patient-document-row"><span class="patient-file-icon">PDF</span><div><strong>${guide.id} · ${guide.procedure}</strong><small>${guide.insurer} · competência ${guide.competence || guide.date || 'não informada'} · ${guide.sessions?.length || 0} atendimento(s)</small></div>${statusTag(guide)}<button class="text-button" data-action="open-guide-folder" data-guide-id="${guide.id}">Abrir guia</button><button class="text-button" data-action="print-folder" data-guide-id="${guide.id}">Gerar PDF</button></div>`).join('')}</div>` : empty('Nenhuma guia foi gerada para este paciente.')}</section>
     <section class="panel patient-folder-section"><div class="panel-header"><div><h2 class="panel-title">Feedbacks</h2><p class="panel-subtitle">Evoluções e registros assistenciais.</p></div></div>${patientFeedbacks.length ? `<div class="patient-timeline">${patientFeedbacks.map(item => `<article><time>${new Date(`${item.attendanceDate}T12:00:00`).toLocaleDateString('pt-BR')}</time><div><strong>${item.professional}</strong><small>${item.attendanceType || 'Atendimento'} · ${item.guideId || 'Sem guia vinculada'}</small><p>${item.content}</p></div><button class="text-button" data-action="print-feedback" data-feedback-id="${item.id}">PDF</button></article>`).join('')}</div>` : empty('Nenhum feedback registrado para este paciente.')}</section>
@@ -1258,6 +1265,24 @@ document.addEventListener('click', async event => {
     render('feedback');
     showToast('Feedback excluído.');
   } catch (error) {
+    showToast(error.message);
+  }
+});
+
+document.addEventListener('submit', async event => {
+  if (event.target.id !== 'patient-consent-form') return;
+  event.preventDefault();
+  const form = event.target;
+  const data = Object.fromEntries(new FormData(form));
+  const submitButton = form.querySelector('button[type="submit"]');
+  submitButton.disabled = true;
+  try {
+    await apiRequest(`/patients/${encodeURIComponent(form.dataset.patientId)}/consents`, { method: 'POST', body: JSON.stringify(data) });
+    [patients, patientConsents] = await Promise.all([apiRequest('/patients'), apiRequest('/patient-consents')]);
+    appView.innerHTML = patientFolderView(form.dataset.patientId);
+    showToast(data.status === 'granted' ? 'Consentimento concedido e registrado no histórico.' : 'Revogação registrada no histórico.');
+  } catch (error) {
+    submitButton.disabled = false;
     showToast(error.message);
   }
 });

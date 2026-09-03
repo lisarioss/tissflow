@@ -134,6 +134,9 @@
 .patient-profile-card span, .patient-profile-card small { display:block; color:var(--muted); font-size:9px; }
 .patient-profile-card strong { display:block; margin:5px 0 3px; font-size:12px; overflow-wrap:anywhere; }
 .patient-consent-button { display:block; margin-top:7px; padding:0; }
+.patient-consent-form { padding:0 21px 21px; border-top:1px solid var(--line); margin-top:12px; padding-top:18px; }
+.patient-consent-form .form-grid { grid-template-columns:1fr 1fr 2fr; }
+.consent-history .status { margin-left:auto; }
 .patient-avatar { display:grid; width:48px; height:48px; place-items:center; border-radius:50%; background:var(--mint); color:var(--green-dark); font-weight:800; }
 .patient-folder-stats { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:10px; margin-bottom:18px; }
 .patient-folder-stats > div { padding:13px 15px; border:1px solid var(--line); border-radius:7px; background:#f7faf8; }
@@ -169,7 +172,7 @@
 .document-validity.expired { color:var(--red); background:var(--red-bg); }
 .document-api-note { display:block; color:var(--muted); font-size:9px; text-align:right; }
 @media (max-width:900px) { .patient-profile-card { grid-template-columns:auto 1fr 1fr; } .patient-profile-card > div:last-child { grid-column:2 / -1; } .patient-folder-stats { grid-template-columns:repeat(3,1fr); } }
-@media (max-width:700px) { .patient-profile-card { grid-template-columns:auto 1fr; } .patient-profile-card > div { grid-column:2; } .patient-folder-grid { grid-template-columns:1fr; } .patient-folder-wide { grid-column:auto; } .patient-folder-stats { grid-template-columns:repeat(2,1fr); } .patient-document-row { grid-template-columns:auto 1fr; } .patient-document-row .status, .patient-document-row button { grid-column:2; justify-self:start; } }
+@media (max-width:700px) { .patient-profile-card { grid-template-columns:auto 1fr; } .patient-profile-card > div { grid-column:2; } .patient-folder-grid { grid-template-columns:1fr; } .patient-folder-wide { grid-column:auto; } .patient-folder-stats { grid-template-columns:repeat(2,1fr); } .patient-document-row { grid-template-columns:auto 1fr; } .patient-document-row .status, .patient-document-row button { grid-column:2; justify-self:start; } .patient-consent-form .form-grid { grid-template-columns:1fr; } }
 .owners-settings { margin:20px 0; }
 .owners-settings-heading { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:12px; }
 .owners-settings-heading label { display:block; color:#63736b; font-size:10px; font-weight:700; margin-bottom:4px; }

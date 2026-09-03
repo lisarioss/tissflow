@@ -23,6 +23,7 @@ Protótipo de portfólio para operação de faturamento clínico. Demonstra o ci
 - **Gestão de usuários**: administradores cadastram a equipe, definem perfis, redefinem senhas e desativam acessos sem apagar o histórico; o sistema impede a remoção do último administrador ativo.
 - **Central de notificações**: reúne por perfil autorizações e documentos vencendo, saldos de sessões baixos, lotes incompletos, guias com glosa e atendimentos próximos.
 - **Dashboard dinâmico**: apresenta indicadores calculados com as guias, notas, lotes, autorizações e agenda reais da clínica, respeitando os dados que cada perfil pode visualizar.
+- **Backup por clínica**: administradores exportam um arquivo JSON versionado com os registros e documentos da sua clínica, sem hashes de senha e com o download registrado na auditoria.
 - **Financeiro**: cadastro, baixa e exclusão de notas fiscais vinculadas a guias aprovadas.
 - **Agenda compartilhada**: horários persistidos no servidor, checagem de conflitos, recorrência semanal de até 24 semanas e controle de confirmação, presença, falta e cancelamento. A presença consome uma sessão da autorização válida e libera o feedback já pré-preenchido.
 - **Busca/filtro** nas listagens de guias, pacientes, convênios e feedbacks.

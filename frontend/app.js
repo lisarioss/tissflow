@@ -721,7 +721,7 @@ function settingsView() {
   const logo = clinicSettings.letterheadDataUrl ? '<p class="panel-subtitle">Papel timbrado A4 cadastrado.</p>' : clinicSettings.logoDataUrl ? `<img src="${clinicSettings.logoDataUrl}" alt="Logotipo atual" style="max-width:180px;max-height:90px;object-fit:contain" />` : '<p class="panel-subtitle">Nenhum timbrado cadastrado.</p>';
   const owners = clinicSettings.owners?.length ? clinicSettings.owners : [{}];
   const professionals = clinicSettings.professionals?.length ? clinicSettings.professionals : [{}];
-  return `<div class="page-heading"><div><p class="eyebrow">Identidade dos documentos</p><h1>Configurações da clínica</h1><p class="heading-copy">Estes dados serão usados na capa e na guia impressa.</p></div></div>
+  return `<div class="page-heading"><div><p class="eyebrow">Identidade dos documentos</p><h1>Configurações da clínica</h1><p class="heading-copy">Estes dados serão usados na capa e na guia impressa.</p></div><button class="secondary-button" data-action="download-backup">Baixar backup da clínica</button></div>
     <form class="panel patient-form" id="settings-form">
       <div class="panel-header"><div><h2 class="panel-title">Timbrado e responsáveis</h2><p class="panel-subtitle">Somente administradores podem alterar estas informações.</p></div>${logo}</div>
       <div class="form-section">
@@ -1761,6 +1761,8 @@ document.addEventListener('submit', event => {
   showToast('Nota fiscal cadastrada com sucesso.');
 });
 document.addEventListener('click', event => {
+  const backupButton = event.target.closest('[data-action="download-backup"]');
+  if (backupButton) downloadClinicBackup();
   if (event.target.closest('[data-action="open-alerts"]')) render('alerts');
   const alertTarget = event.target.closest('[data-action="open-alert-target"]');
   if (alertTarget) render(alertTarget.dataset.targetView);
@@ -1768,6 +1770,21 @@ document.addEventListener('click', event => {
   if (editButton) { appView.innerHTML = usersView(editButton.dataset.userId); document.querySelector('#user-form input[name="name"]')?.focus(); }
   if (event.target.closest('[data-action="cancel-user-edit"]')) render('users');
 });
+
+async function downloadClinicBackup() {
+  if (!activeSession?.token) { showToast('Entre pela API para gerar o backup.'); return; }
+  try {
+    const response = await fetch(`${apiBase}/backup`, { headers: apiHeaders() });
+    if (!response.ok) { const payload = await response.json().catch(() => ({})); throw new Error(payload.error || 'Não foi possível gerar o backup.'); }
+    const blob = await response.blob();
+    const disposition = response.headers.get('Content-Disposition') || '';
+    const filename = disposition.match(/filename="([^"]+)"/)?.[1] || `backup-${activeClinicId}.json`;
+    const url = URL.createObjectURL(blob);
+    const link = window.document.createElement('a'); link.href = url; link.download = filename; link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    showToast('Backup gerado com sucesso. Guarde o arquivo em local seguro.');
+  } catch (error) { showToast(error.message); }
+}
 
 document.addEventListener('submit', async event => {
   if (event.target.id !== 'user-form') return;

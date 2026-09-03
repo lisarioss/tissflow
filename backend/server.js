@@ -183,6 +183,34 @@ app.put('/api/settings', auth, requireRole('admin'), (req, res) => {
   res.json({ saved: true });
 });
 
+app.get('/api/backup', auth, requireRole('admin'), (req, res) => {
+  const clinicId = req.session.clinicId;
+  const clinic = db.prepare('SELECT id, name, unit FROM clinics WHERE id = ?').get(clinicId);
+  const byClinic = table => db.prepare(`SELECT * FROM ${table} WHERE clinic_id = ?`).all(clinicId);
+  const users = db.prepare('SELECT id, clinic_id, name, email, role, active FROM users WHERE clinic_id = ?').all(clinicId);
+  const documents = byClinic('patient_documents').map(document => {
+    const storagePath = path.join(documentUploadRoot, clinicId, path.basename(document.storage_name));
+    return { ...document, content_base64: fs.existsSync(storagePath) ? fs.readFileSync(storagePath).toString('base64') : null };
+  });
+  const batchGuides = db.prepare(`SELECT billing_batch_guides.* FROM billing_batch_guides JOIN billing_batches ON billing_batches.id = billing_batch_guides.batch_id WHERE billing_batches.clinic_id = ?`).all(clinicId);
+  const backup = {
+    format: 'tiss-flow-backup', version: 1, exportedAt: new Date().toISOString(), clinic,
+    data: {
+      clinicSettings: db.prepare('SELECT * FROM clinic_settings WHERE clinic_id = ?').get(clinicId) || null,
+      users, patients: byClinic('patients'), guides: byClinic('guides'), insurers: byClinic('insurers'),
+      invoices: byClinic('invoices'), glosas: byClinic('glosas'), authorizations: byClinic('authorizations'),
+      billingBatches: byClinic('billing_batches'), billingBatchGuides: batchGuides, feedbacks: byClinic('feedbacks'),
+      patientDocuments: documents, appointments: byClinic('appointments'), auditLogs: byClinic('audit_logs')
+    }
+  };
+  recordAudit(req, 'download', 'backup', clinicId, { document: 'clinic-backup', version: backup.version });
+  const stamp = new Date().toISOString().slice(0, 10);
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="backup-${clinicId}-${stamp}.json"`);
+  res.send(JSON.stringify(backup));
+});
+
 app.get('/api/guides/:id/pdf', auth, (req, res) => {
   const guide = db.prepare('SELECT * FROM guides WHERE id = ? AND clinic_id = ?').get(req.params.id, req.session.clinicId);
   if (!guide) return res.status(404).json({ error: 'Guia não encontrada.' });

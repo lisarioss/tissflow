@@ -197,6 +197,11 @@
 .registration-heading strong { font-size:13px; }
 .registration-heading small { margin-top:4px; color:var(--muted); font-size:9px; }
 .registration-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+.report-competence { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:9px; font-weight:700; }
+.report-competence input { border:1px solid var(--line); border-radius:5px; padding:9px; background:#fff; font:10px Manrope,sans-serif; }
+.report-export-bar { display:flex; align-items:center; justify-content:flex-end; gap:9px; margin:-12px 0 18px; }
+.report-export-bar span { margin-right:auto; color:var(--muted); font-size:10px; }
+@media (max-width:700px) { .report-export-bar { align-items:stretch; flex-direction:column; } .report-competence { margin-top:16px; } }
 .agenda-date-picker { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:9px; font-weight:700; }
 .agenda-date-picker input, .appointment-status { border:1px solid #dfe7e1; border-radius:5px; padding:8px; background:#fff; color:var(--ink); font:10px Manrope,sans-serif; }
 .appointment-row.confirmed { border-left:3px solid var(--blue); }

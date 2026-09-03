@@ -239,6 +239,41 @@ app.get('/api/backup', auth, requireRole('admin'), (req, res) => {
   res.send(JSON.stringify(backup));
 });
 
+function csvCell(value) { return `"${String(value ?? '').replace(/"/g, '""')}"`; }
+function sendCsvReport(req, res, name, headers, rows) {
+  const csv = `\uFEFF${headers.map(csvCell).join(';')}\r\n${rows.map(row => row.map(csvCell).join(';')).join('\r\n')}`;
+  recordAudit(req, 'download', 'reports', name, { document: 'csv-report', competence: req.query.competence || 'all' });
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="relatorio-${name}-${req.query.competence || 'completo'}.csv"`);
+  res.send(csv);
+}
+
+app.get('/api/reports/:type.csv', auth, requireRole('admin', 'faturamento'), (req, res) => {
+  const competence = String(req.query.competence || '');
+  if (competence && !/^\d{4}-\d{2}$/.test(competence)) return res.status(400).json({ error: 'A competência deve usar AAAA-MM.' });
+  const clinicId = req.session.clinicId;
+  const suffix = competence ? ' AND competence = ?' : '';
+  const params = competence ? [clinicId, competence] : [clinicId];
+  if (req.params.type === 'guides') {
+    const rows = db.prepare(`SELECT id, patient, insurer, competence, service_code, procedure, quantity, value_cents, status, created_at FROM guides WHERE clinic_id = ?${suffix} ORDER BY created_at DESC`).all(...params);
+    return sendCsvReport(req, res, 'guias', ['Guia', 'Paciente', 'Convênio', 'Competência', 'Código TUSS', 'Procedimento', 'Quantidade', 'Valor', 'Status', 'Criada em'], rows.map(row => [row.id, row.patient, row.insurer, row.competence, row.service_code, row.procedure, row.quantity, (row.value_cents / 100).toFixed(2).replace('.', ','), row.status, row.created_at]));
+  }
+  if (req.params.type === 'invoices') {
+    const rows = db.prepare(`SELECT id, guide_id, provider, description, amount_cents, expected_date, status, created_at FROM invoices WHERE clinic_id = ?${competence ? " AND substr(expected_date, 1, 7) = ?" : ''} ORDER BY expected_date DESC`).all(...params);
+    return sendCsvReport(req, res, 'financeiro', ['Nota', 'Guia', 'Prestador', 'Descrição', 'Valor', 'Previsão', 'Status', 'Criada em'], rows.map(row => [row.id, row.guide_id, row.provider, row.description, (row.amount_cents / 100).toFixed(2).replace('.', ','), row.expected_date, row.status, row.created_at]));
+  }
+  if (req.params.type === 'glosas') {
+    const rows = db.prepare(`SELECT glosas.id, glosas.guide_id, guides.patient, guides.competence, glosas.code, glosas.reason, glosas.amount_cents, glosas.status, glosas.justification, glosas.created_at, glosas.resolved_at FROM glosas JOIN guides ON guides.id = glosas.guide_id AND guides.clinic_id = glosas.clinic_id WHERE glosas.clinic_id = ?${competence ? ' AND guides.competence = ?' : ''} ORDER BY glosas.created_at DESC`).all(...params);
+    return sendCsvReport(req, res, 'glosas', ['Glosa', 'Guia', 'Paciente', 'Competência', 'Código', 'Motivo', 'Valor', 'Status', 'Justificativa', 'Criada em', 'Resolvida em'], rows.map(row => [row.id, row.guide_id, row.patient, row.competence, row.code, row.reason, (row.amount_cents / 100).toFixed(2).replace('.', ','), row.status, row.justification, row.created_at, row.resolved_at]));
+  }
+  if (req.params.type === 'authorizations') {
+    const rows = db.prepare(`SELECT authorizations.id, patients.name AS patient, insurers.name AS insurer, authorizations.authorization_number, authorizations.valid_from, authorizations.valid_to, authorizations.authorized_quantity, authorizations.used_quantity, authorizations.notes, authorizations.created_at FROM authorizations JOIN patients ON patients.id = authorizations.patient_id AND patients.clinic_id = authorizations.clinic_id JOIN insurers ON insurers.id = authorizations.insurer_id AND insurers.clinic_id = authorizations.clinic_id WHERE authorizations.clinic_id = ?${competence ? " AND substr(authorizations.valid_from, 1, 7) <= ? AND substr(authorizations.valid_to, 1, 7) >= ?" : ''} ORDER BY authorizations.valid_to`).all(...(competence ? [clinicId, competence, competence] : [clinicId]));
+    return sendCsvReport(req, res, 'autorizacoes', ['ID', 'Paciente', 'Convênio', 'Número', 'Início', 'Vencimento', 'Autorizada', 'Utilizada', 'Observações', 'Criada em'], rows.map(row => [row.id, row.patient, row.insurer, row.authorization_number, row.valid_from, row.valid_to, row.authorized_quantity, row.used_quantity, row.notes, row.created_at]));
+  }
+  res.status(404).json({ error: 'Tipo de relatório não encontrado.' });
+});
+
 app.get('/api/guides/:id/pdf', auth, (req, res) => {
   const guide = db.prepare('SELECT * FROM guides WHERE id = ? AND clinic_id = ?').get(req.params.id, req.session.clinicId);
   if (!guide) return res.status(404).json({ error: 'Guia não encontrada.' });

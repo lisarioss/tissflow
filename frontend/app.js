@@ -74,6 +74,7 @@ let feedbacks = JSON.parse(localStorage.getItem(clinicStorageKey('feedbacks')) |
 let patientDocuments = [];
 let auditLogs = [];
 let users = clinicUsers[activeClinicId] || [];
+let selectedReportCompetence = '';
 function saveFeedbacks() { localStorage.setItem(clinicStorageKey('feedbacks'), JSON.stringify(feedbacks)); }
 let clinicSettings = JSON.parse(localStorage.getItem(clinicStorageKey('settings')) || 'null') || { tradeName: clinicProfiles[activeClinicId]?.name || '', legalName: '', cnpj: '', cnes: '', phone: '', instagram: '', address: '', city: '', state: '', postalCode: '', logoDataUrl: '', letterheadDataUrl: '', letterheadHeaderMm: 35, letterheadFooterMm: 25, owners: [], professionals: [] };
 const views = { overview: 'Visão geral', alerts: 'Notificações', agenda: 'Agenda', guides: 'Guias TISS', authorizations: 'Controle de autorizações', batches: 'Lotes de faturamento', financeiro: 'Financeiro', users: 'Usuários', patients: 'Pacientes', convenios: 'Convênios', feedback: 'Feedbacks', reports: 'Relatórios', audit: 'Trilha de auditoria', settings: 'Configurações' };
@@ -653,7 +654,7 @@ function feedbackView() {
   return `<div class="page-heading"><div><p class="eyebrow">Acompanhamento clínico</p><h1>Feedbacks de atendimento</h1><p class="heading-copy">Registros dos profissionais vinculados à guia e à data faturada para facilitar auditorias.</p></div></div><div class="panel"><div class="panel-header"><div><h2 class="panel-title">Feedbacks registrados</h2><p class="panel-subtitle">${feedbacks.length} registros</p></div></div><div class="search-bar"><input type="search" id="feedback-search" placeholder="Buscar por paciente, profissional, guia ou tipo" /></div><table><thead><tr><th>Paciente</th><th>Profissional</th><th>Tipo</th><th>Guia</th><th>Foto</th><th></th></tr></thead><tbody id="feedback-table-body">${feedbackRowsHtml('')}</tbody></table></div><form class="panel patient-form" id="feedback-form"><div class="panel-header"><div><h2 class="panel-title">Novo feedback</h2><p class="panel-subtitle">Informe primeiro o paciente e a data. O sistema mostrará somente as guias compatíveis com aquele atendimento.</p></div></div><div class="form-section"><div class="form-grid"><div class="field"><label for="feedback-patient">Paciente *</label><select id="feedback-patient" name="patient" required><option value="">Selecione o paciente</option>${patients.map(patient => `<option>${patient.name}</option>`).join('')}</select></div><div class="field"><label for="feedback-professional">Profissional *</label><select id="feedback-professional" name="professional" required><option value="">Selecione o profissional</option>${professionalOptions()}</select></div><div class="field"><label for="feedback-date">Data do atendimento *</label><input id="feedback-date" name="attendanceDate" type="date" required /></div><div class="field"><label for="feedback-type">Tipo de atendimento</label><select id="feedback-type" name="attendanceType"><option value="">Selecione</option><option>Consulta</option><option>Exame</option><option>Terapia</option></select></div><div class="field"><label for="feedback-guide">Guia vinculada (convênio)</label><select id="feedback-guide" name="guideId">${feedbackGuideOptions()}</select><small>A guia só aparece quando paciente e data correspondem ao faturamento.</small></div><div class="field"><label for="feedback-photo">Foto do atendimento (opcional)</label><input id="feedback-photo" name="photoFile" type="file" accept="image/*" /><input type="hidden" id="feedback-photo-data" name="photo" /></div></div><div class="field"><label for="feedback-content">Feedback *</label><textarea id="feedback-content" name="content" rows="4" required placeholder="Descreva a evolução, observações clínicas ou orientações passadas ao paciente"></textarea></div></div><div class="form-footer"><button class="primary-button" type="submit">Salvar feedback</button></div></form>`;
 }
 const auditActionLabels = { create: 'Criação', update: 'Alteração', delete: 'Exclusão', download: 'Download' };
-const auditEntityLabels = { guides: 'Guia', patients: 'Paciente', feedbacks: 'Feedback', appointments: 'Agenda', authorizations: 'Autorização', 'patient-documents': 'Documento', batches: 'Lote', invoices: 'Nota fiscal', glosas: 'Glosa', insurers: 'Convênio', settings: 'Configurações', users: 'Usuário' };
+const auditEntityLabels = { guides: 'Guia', patients: 'Paciente', feedbacks: 'Feedback', appointments: 'Agenda', authorizations: 'Autorização', 'patient-documents': 'Documento', batches: 'Lote', invoices: 'Nota fiscal', glosas: 'Glosa', insurers: 'Convênio', settings: 'Configurações', users: 'Usuário', reports: 'Relatório', backup: 'Backup', clinics: 'Clínica' };
 function auditRowsHtml() {
   const action = document.querySelector('#audit-action')?.value || '';
   const user = document.querySelector('#audit-user')?.value || '';
@@ -683,15 +684,19 @@ document.addEventListener('change', event => {
   if (body) body.innerHTML = auditRowsHtml();
 });
 function reportsView() {
-  const guideCounts = guides.reduce((summary, guide) => ({ ...summary, [guide.status]: (summary[guide.status] || 0) + 1 }), {});
-  const pendingAmount = invoices.filter(invoice => invoice.status === 'pending').reduce((sum, invoice) => sum + Number(invoice.amount || 0), 0);
-  const receivedAmount = invoices.filter(invoice => invoice.status === 'received').reduce((sum, invoice) => sum + Number(invoice.amount || 0), 0);
-  const upcomingInvoices = [...invoices].filter(invoice => invoice.status === 'pending').sort((first, second) => first.expectedDate.localeCompare(second.expectedDate));
-  const openGlosas = glosas.filter(glosa => glosa.status === 'aberta' || glosa.status === 'recurso_enviado');
+  const reportGuides = selectedReportCompetence ? guides.filter(guide => guide.competence === selectedReportCompetence) : guides;
+  const reportInvoices = selectedReportCompetence ? invoices.filter(invoice => String(invoice.expectedDate || '').startsWith(selectedReportCompetence)) : invoices;
+  const reportGuideIds = new Set(reportGuides.map(guide => guide.id));
+  const reportGlosas = selectedReportCompetence ? glosas.filter(glosa => reportGuideIds.has(glosa.guideId)) : glosas;
+  const guideCounts = reportGuides.reduce((summary, guide) => ({ ...summary, [guide.status]: (summary[guide.status] || 0) + 1 }), {});
+  const pendingAmount = reportInvoices.filter(invoice => invoice.status === 'pending').reduce((sum, invoice) => sum + Number(invoice.amount || 0), 0);
+  const receivedAmount = reportInvoices.filter(invoice => invoice.status === 'received').reduce((sum, invoice) => sum + Number(invoice.amount || 0), 0);
+  const upcomingInvoices = [...reportInvoices].filter(invoice => invoice.status === 'pending').sort((first, second) => first.expectedDate.localeCompare(second.expectedDate));
+  const openGlosas = reportGlosas.filter(glosa => glosa.status === 'aberta' || glosa.status === 'recurso_enviado');
   const openGlosaAmount = openGlosas.reduce((sum, glosa) => sum + Number(glosa.amount || 0), 0);
 
-  return `<div class="page-heading"><div><p class="eyebrow">Indicadores operacionais</p><h1>Relatórios</h1><p class="heading-copy">Acompanhe o desempenho das guias e a previsão financeira da clínica.</p></div><button class="secondary-button" data-action="refresh-report">Atualizar dados</button></div>
-  <div class="stats-grid"><article class="stat-card"><div class="stat-top"><span>Total de guias</span><span class="stat-icon">▣</span></div><div class="stat-value">${guides.length}</div><div class="stat-note">Registros salvos</div></article><article class="stat-card"><div class="stat-top"><span>Guias aprovadas</span><span class="stat-icon">◉</span></div><div class="stat-value">${guideCounts.approved || 0}</div><div class="stat-note">Processadas com sucesso</div></article><article class="stat-card"><div class="stat-top"><span>Valor pendente</span><span class="stat-icon">◷</span></div><div class="stat-value">${formatMoney(pendingAmount)}</div><div class="stat-note warn">Aguardando pagamento</div></article><article class="stat-card"><div class="stat-top"><span>Valor em glosa</span><span class="stat-icon">✕</span></div><div class="stat-value">${formatMoney(openGlosaAmount)}</div><div class="stat-note ${openGlosas.length ? 'warn' : ''}">${openGlosas.length} glosa(s) em aberto ou recurso</div></article></div>
+  return `<div class="page-heading"><div><p class="eyebrow">Indicadores operacionais</p><h1>Relatórios</h1><p class="heading-copy">Acompanhe o desempenho das guias e exporte os dados para conferência.</p></div><label class="report-competence">Competência <input id="report-competence" type="month" value="${selectedReportCompetence}" /></label></div><div class="report-export-bar"><span>Exportar CSV compatível com Excel</span><button class="secondary-button" data-report-export="guides">Guias</button><button class="secondary-button" data-report-export="invoices">Financeiro</button><button class="secondary-button" data-report-export="glosas">Glosas</button><button class="secondary-button" data-report-export="authorizations">Autorizações</button></div>
+  <div class="stats-grid"><article class="stat-card"><div class="stat-top"><span>Total de guias</span><span class="stat-icon">▣</span></div><div class="stat-value">${reportGuides.length}</div><div class="stat-note">Registros no filtro</div></article><article class="stat-card"><div class="stat-top"><span>Guias aprovadas</span><span class="stat-icon">◉</span></div><div class="stat-value">${guideCounts.approved || 0}</div><div class="stat-note">Processadas com sucesso</div></article><article class="stat-card"><div class="stat-top"><span>Valor pendente</span><span class="stat-icon">◷</span></div><div class="stat-value">${formatMoney(pendingAmount)}</div><div class="stat-note warn">${formatMoney(receivedAmount)} recebido(s)</div></article><article class="stat-card"><div class="stat-top"><span>Valor em glosa</span><span class="stat-icon">✕</span></div><div class="stat-value">${formatMoney(openGlosaAmount)}</div><div class="stat-note ${openGlosas.length ? 'warn' : ''}">${openGlosas.length} glosa(s) em aberto ou recurso</div></article></div>
   <div class="content-grid"><div class="panel"><div class="panel-header"><div><h2 class="panel-title">Status das guias</h2><p class="panel-subtitle">Distribuição atual do faturamento TISS</p></div></div><div class="report-status-list"><div><span>Enviadas</span><strong>${guideCounts.sent || 0}</strong></div><div><span>Em análise</span><strong>${guideCounts.review || 0}</strong></div><div><span>Aprovadas</span><strong>${guideCounts.approved || 0}</strong></div><div><span>Com glosa</span><strong>${guideCounts.error || 0}</strong></div><div><span>Recurso enviado</span><strong>${guideCounts.recurso || 0}</strong></div></div></div><div class="panel"><div class="panel-header"><div><h2 class="panel-title">Próximos pagamentos</h2><p class="panel-subtitle">Notas pendentes em ordem de vencimento</p></div></div><div class="report-payment-list">${upcomingInvoices.length ? upcomingInvoices.slice(0, 5).map(invoice => `<div class="report-payment-row"><div><strong>${invoice.id}</strong><small>${invoice.guideId || 'Sem guia vinculada'}</small></div><strong>${formatMoney(invoice.amount)}</strong><time>${new Date(`${invoice.expectedDate}T12:00:00`).toLocaleDateString('pt-BR')}</time></div>`).join('') : '<p class="panel-subtitle">Nenhum pagamento pendente.</p>'}</div></div></div>`;
 }
 function professionalRowHtml(professional = {}, index = 0) {
@@ -1764,8 +1769,31 @@ document.addEventListener('click', event => {
 });
 
 document.addEventListener('click', event => {
-  if (event.target.closest('[data-action="refresh-report"]')) render('reports');
+  const exportButton = event.target.closest('[data-report-export]');
+  if (exportButton) downloadCsvReport(exportButton.dataset.reportExport);
 });
+
+document.addEventListener('change', event => {
+  if (event.target.id !== 'report-competence') return;
+  selectedReportCompetence = event.target.value;
+  render('reports');
+});
+
+async function downloadCsvReport(type) {
+  if (!activeSession?.token) { showToast('Entre pela API para exportar relatórios.'); return; }
+  const query = selectedReportCompetence ? `?competence=${encodeURIComponent(selectedReportCompetence)}` : '';
+  try {
+    const response = await fetch(`${apiBase}/reports/${encodeURIComponent(type)}.csv${query}`, { headers: apiHeaders() });
+    if (!response.ok) { const payload = await response.json().catch(() => ({})); throw new Error(payload.error || 'Não foi possível exportar o relatório.'); }
+    const blob = await response.blob();
+    const disposition = response.headers.get('Content-Disposition') || '';
+    const filename = disposition.match(/filename="([^"]+)"/)?.[1] || `relatorio-${type}.csv`;
+    const url = URL.createObjectURL(blob);
+    const link = window.document.createElement('a'); link.href = url; link.download = filename; link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    showToast('Relatório exportado com sucesso.');
+  } catch (error) { showToast(error.message); }
+}
 
 document.addEventListener('submit', event => {
   if (event.target.id !== 'invoice-form') return;

@@ -165,6 +165,10 @@
 .patient-finance-groups strong { font-size:17px; }
 .patient-document-form { margin:0 21px 20px; padding:17px; border:1px solid var(--line); border-radius:7px; background:#f8fbf9; }
 .form-subtitle { margin:22px 0 13px; color:var(--green-dark); font-size:11px; }
+.consent-settings { margin:24px 0; padding:18px; border:1px solid var(--line); border-radius:8px; background:#f8fbf9; }
+.consent-settings .form-grid { grid-template-columns:1fr 1fr; }
+.consent-text-field { grid-column:1 / -1; }
+.consent-text-field textarea { width:100%; resize:vertical; border:1px solid #dfe7e1; border-radius:5px; padding:10px; background:#fff; color:var(--ink); font:11px Manrope,sans-serif; line-height:1.5; }
 .patient-document-form .field small { display:block; margin-top:5px; color:var(--muted); font-size:9px; }
 .patient-document-form .form-footer { padding-top:14px; }
 .document-validity { display:inline-flex; padding:5px 8px; border-radius:999px; font-size:9px; font-weight:700; }

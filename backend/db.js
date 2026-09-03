@@ -227,6 +227,9 @@ db.exec(`
     letterhead_footer_mm INTEGER NOT NULL DEFAULT 25,
     owners_json TEXT NOT NULL DEFAULT '[]',
     professionals_json TEXT NOT NULL DEFAULT '[]',
+    consent_title TEXT NOT NULL DEFAULT '',
+    consent_text TEXT NOT NULL DEFAULT '',
+    privacy_contact TEXT NOT NULL DEFAULT '',
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
   CREATE TABLE IF NOT EXISTS tuss_imports (
@@ -294,6 +297,9 @@ if (!settingsColumns.has('letterhead_data_url')) db.exec("ALTER TABLE clinic_set
 if (!settingsColumns.has('letterhead_header_mm')) db.exec('ALTER TABLE clinic_settings ADD COLUMN letterhead_header_mm INTEGER NOT NULL DEFAULT 35');
 if (!settingsColumns.has('letterhead_footer_mm')) db.exec('ALTER TABLE clinic_settings ADD COLUMN letterhead_footer_mm INTEGER NOT NULL DEFAULT 25');
 if (!settingsColumns.has('cnes')) db.exec("ALTER TABLE clinic_settings ADD COLUMN cnes TEXT NOT NULL DEFAULT ''");
+if (!settingsColumns.has('consent_title')) db.exec("ALTER TABLE clinic_settings ADD COLUMN consent_title TEXT NOT NULL DEFAULT ''");
+if (!settingsColumns.has('consent_text')) db.exec("ALTER TABLE clinic_settings ADD COLUMN consent_text TEXT NOT NULL DEFAULT ''");
+if (!settingsColumns.has('privacy_contact')) db.exec("ALTER TABLE clinic_settings ADD COLUMN privacy_contact TEXT NOT NULL DEFAULT ''");
 const insurerColumns = new Set(db.prepare('PRAGMA table_info(insurers)').all().map(column => column.name));
 if (!insurerColumns.has('procedure_rules')) db.exec("ALTER TABLE insurers ADD COLUMN procedure_rules TEXT NOT NULL DEFAULT '[]'");
 if (!insurerColumns.has('delivery_format')) db.exec("ALTER TABLE insurers ADD COLUMN delivery_format TEXT NOT NULL DEFAULT 'both' CHECK (delivery_format IN ('pdf', 'xml', 'both'))");

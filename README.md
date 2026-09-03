@@ -21,6 +21,7 @@ Protótipo de portfólio para operação de faturamento clínico. Demonstra o ci
 - **Autenticação real** via JWT + bcrypt, com dados persistidos em SQLite e isolados por `clinic_id` em todas as consultas.
 - **RBAC no servidor**: cada papel (admin, faturamento, recepção, médico) só consulta ou altera os recursos necessários ao seu trabalho; dados financeiros, feedbacks, documentos e agenda possuem leitura protegida pela API, não apenas menus ocultos.
 - **Gestão de usuários**: administradores cadastram a equipe, definem perfis, redefinem senhas e desativam acessos sem apagar o histórico; o sistema impede a remoção do último administrador ativo.
+- **Central de notificações**: reúne por perfil autorizações e documentos vencendo, saldos de sessões baixos, lotes incompletos, guias com glosa e atendimentos próximos.
 - **Financeiro**: cadastro, baixa e exclusão de notas fiscais vinculadas a guias aprovadas.
 - **Agenda compartilhada**: horários persistidos no servidor, checagem de conflitos, recorrência semanal de até 24 semanas e controle de confirmação, presença, falta e cancelamento. A presença consome uma sessão da autorização válida e libera o feedback já pré-preenchido.
 - **Busca/filtro** nas listagens de guias, pacientes, convênios e feedbacks.

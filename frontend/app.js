@@ -75,7 +75,7 @@ let auditLogs = [];
 let users = clinicUsers[activeClinicId] || [];
 function saveFeedbacks() { localStorage.setItem(clinicStorageKey('feedbacks'), JSON.stringify(feedbacks)); }
 let clinicSettings = JSON.parse(localStorage.getItem(clinicStorageKey('settings')) || 'null') || { tradeName: clinicProfiles[activeClinicId]?.name || '', legalName: '', cnpj: '', cnes: '', phone: '', instagram: '', address: '', city: '', state: '', postalCode: '', logoDataUrl: '', letterheadDataUrl: '', letterheadHeaderMm: 35, letterheadFooterMm: 25, owners: [], professionals: [] };
-const views = { overview: 'Visão geral', agenda: 'Agenda', guides: 'Guias TISS', authorizations: 'Controle de autorizações', batches: 'Lotes de faturamento', financeiro: 'Financeiro', users: 'Usuários', patients: 'Pacientes', convenios: 'Convênios', feedback: 'Feedbacks', reports: 'Relatórios', audit: 'Trilha de auditoria', settings: 'Configurações' };
+const views = { overview: 'Visão geral', alerts: 'Notificações', agenda: 'Agenda', guides: 'Guias TISS', authorizations: 'Controle de autorizações', batches: 'Lotes de faturamento', financeiro: 'Financeiro', users: 'Usuários', patients: 'Pacientes', convenios: 'Convênios', feedback: 'Feedbacks', reports: 'Relatórios', audit: 'Trilha de auditoria', settings: 'Configurações' };
 const appView = document.querySelector('#app-view');
 const breadcrumb = document.querySelector('#breadcrumb');
 const toast = document.querySelector('#toast');
@@ -119,10 +119,10 @@ function syncContractRules() {
 }
 new MutationObserver(() => { enhanceInsurerForm(); enhanceAgendaFeedbackActions(); }).observe(appView, { childList: true, subtree: true });
 const rolePermissions = {
-  admin: ['overview', 'agenda', 'guides', 'authorizations', 'batches', 'financeiro', 'users', 'patients', 'convenios', 'feedback', 'reports', 'audit', 'settings'],
-  faturamento: ['overview', 'guides', 'authorizations', 'batches', 'financeiro', 'reports'],
-  recepcao: ['overview', 'agenda', 'authorizations', 'patients', 'feedback'],
-  medico: ['overview', 'agenda', 'patients', 'feedback']
+  admin: ['overview', 'alerts', 'agenda', 'guides', 'authorizations', 'batches', 'financeiro', 'users', 'patients', 'convenios', 'feedback', 'reports', 'audit', 'settings'],
+  faturamento: ['overview', 'alerts', 'guides', 'authorizations', 'batches', 'financeiro', 'reports'],
+  recepcao: ['overview', 'alerts', 'agenda', 'authorizations', 'patients', 'feedback'],
+  medico: ['overview', 'alerts', 'agenda', 'patients', 'feedback']
 };
 function userCan(view) { return (rolePermissions[activeUser?.role || 'admin'] || []).includes(view); }
 function formatMoney(value) { return moneyFormatter.format(Number(value || 0)); }
@@ -285,6 +285,7 @@ async function loadApiData() {
     if (userCan('agenda')) appointments = apiAppointments;
     if (userCan('audit')) auditLogs = await apiRequest('/audit-logs');
     if (userCan('users')) users = await apiRequest('/users');
+    updateNotificationBadge();
     render();
   } catch (error) {
     showToast(`Modo local: ${error.message}`);
@@ -430,6 +431,31 @@ function authorizationState(item) {
   if (days <= 30) return { key: 'expiring', label: 'Próxima do vencimento', note: days === 0 ? 'Vence hoje' : `Vence em ${days} dia(s)` };
   return { key: 'active', label: 'Vigente', note: `Vence em ${days} dia(s)` };
 }
+
+function notificationItems() {
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const daysUntil = value => Math.ceil((new Date(`${value}T12:00:00`) - today) / 86400000);
+  const items = [];
+  if (userCan('authorizations')) authorizations.forEach(item => {
+    const days = daysUntil(item.validTo);
+    const balance = Number(item.authorizedQuantity || 0) - Number(item.usedQuantity || 0);
+    if (days < 0) items.push({ level: 'critical', title: `Autorização vencida · ${item.patient}`, detail: `${item.authorizationNumber} venceu em ${new Date(`${item.validTo}T12:00:00`).toLocaleDateString('pt-BR')}.`, view: 'authorizations' });
+    else if (days <= 30) items.push({ level: 'warning', title: `Autorização vence em ${days} dia(s)`, detail: `${item.patient} · ${item.authorizationNumber}`, view: 'authorizations' });
+    if (balance <= 2) items.push({ level: balance <= 0 ? 'critical' : 'warning', title: `Saldo de autorização: ${Math.max(0, balance)}`, detail: `${item.patient} possui poucas sessões disponíveis.`, view: 'authorizations' });
+  });
+  if (userCan('patients')) patientDocuments.forEach(item => {
+    if (!item.validUntil) return;
+    const days = daysUntil(item.validUntil);
+    if (days <= 30) items.push({ level: days < 0 ? 'critical' : 'warning', title: days < 0 ? 'Documento vencido' : `Documento vence em ${days} dia(s)`, detail: `${item.patient || item.patientId} · ${item.originalName}`, view: 'patients' });
+  });
+  if (userCan('batches')) batches.filter(batch => !batch.readyForSending && ['draft', 'ready'].includes(batch.status)).forEach(batch => items.push({ level: 'warning', title: `Lote ${batch.id} com pendências`, detail: `${batch.insurer} · ${batch.missingSignedPdfs || 0} PDF(s) pendente(s)${batch.xmlPending ? ' · XML pendente' : ''}.`, view: 'batches' }));
+  if (userCan('financeiro')) guides.filter(guide => guide.status === 'error').forEach(guide => items.push({ level: 'critical', title: `Guia ${guide.id} com glosa`, detail: `${guide.patient} · ${guide.insurer}`, view: 'guides' }));
+  if (userCan('agenda')) appointments.forEach(item => { const days = daysUntil(item.date); if (days >= 0 && days <= 1 && !['completed', 'cancelled'].includes(item.status)) items.push({ level: 'info', title: days === 0 ? 'Atendimento hoje' : 'Atendimento amanhã', detail: `${item.start} · ${item.patient} · ${item.professional}`, view: 'agenda' }); });
+  const priority = { critical: 0, warning: 1, info: 2 };
+  return items.sort((a, b) => priority[a.level] - priority[b.level]);
+}
+function updateNotificationBadge() { const badge = document.querySelector('.notification-count'); if (!badge) return; const count = notificationItems().length; badge.textContent = count > 99 ? '99+' : count; badge.hidden = count === 0; }
+function alertsView() { const items = notificationItems(); const critical = items.filter(item => item.level === 'critical').length; return `<div class="page-heading"><div><p class="eyebrow">Central de atenção</p><h1>Notificações</h1><p class="heading-copy">Pendências reunidas automaticamente conforme o seu perfil.</p></div><span class="status ${critical ? 'error' : 'approved'}">${critical ? `${critical} urgente(s)` : 'Sem urgências'}</span></div><div class="alert-stats"><div><span>Total</span><strong>${items.length}</strong></div><div><span>Urgentes</span><strong>${critical}</strong></div><div><span>Atenção</span><strong>${items.filter(item => item.level === 'warning').length}</strong></div><div><span>Informativos</span><strong>${items.filter(item => item.level === 'info').length}</strong></div></div><div class="panel"><div class="panel-header"><div><h2 class="panel-title">O que precisa de atenção</h2><p class="panel-subtitle">A lista é recalculada com os dados atuais do sistema.</p></div></div><div class="alert-list">${items.length ? items.map(item => `<button class="alert-item ${item.level}" data-action="open-alert-target" data-target-view="${item.view}"><span class="alert-marker"></span><span><strong>${item.title}</strong><small>${item.detail}</small></span><b>Ver detalhes →</b></button>`).join('') : '<div class="patient-folder-empty">Nenhuma pendência encontrada para o seu perfil.</div>'}</div></div>`; }
 function authorizationsView() {
   const expiring = authorizations.filter(item => ['expired', 'expiring'].includes(authorizationState(item).key)).length;
   const rows = authorizations.map(item => { const state = authorizationState(item); const balance = Math.max(0, Number(item.authorizedQuantity) - Number(item.usedQuantity)); return `<tr data-authorization-row="${item.id}" data-valid-to="${item.validTo}" data-authorized-quantity="${item.authorizedQuantity}"><td><strong>${item.patient}</strong><small>${item.insurer}</small></td><td><strong>${item.authorizationNumber}</strong></td><td>${new Date(`${item.validFrom}T12:00:00`).toLocaleDateString('pt-BR')}<small>até ${new Date(`${item.validTo}T12:00:00`).toLocaleDateString('pt-BR')}</small></td><td><span class="authorization-status ${state.key}">${state.label}</span><small>${state.note}</small></td><td><strong>${balance} restante(s)</strong><label class="authorization-used">Usadas <input type="number" min="0" value="${item.usedQuantity}" data-authorization-used /></label></td><td><button class="text-button" data-action="update-authorization" data-authorization-id="${item.id}">Atualizar saldo</button> <button class="finance-delete" data-action="delete-authorization" data-authorization-id="${item.id}">Excluir</button></td></tr>`; }).join('');
@@ -699,7 +725,7 @@ function settingsView() {
 function saveGuides() { localStorage.setItem(clinicStorageKey('guides'), JSON.stringify(guides)); }
 function restoreDraft() { const draft = JSON.parse(localStorage.getItem(clinicStorageKey('draft')) || 'null'); if (!draft) return; Object.entries(draft).forEach(([key, value]) => { const field = document.querySelector(`#${key}`); if (field) field.value = value; }); }
 function saveDraft(form) { localStorage.setItem(clinicStorageKey('draft'), JSON.stringify(Object.fromEntries(new FormData(form)))); }
-function render(view = 'overview') { breadcrumb.textContent = views[view] || views.overview; const safeView = userCan(view) ? view : 'overview'; appView.innerHTML = safeView === 'overview' ? overview() : safeView === 'agenda' ? agendaView() : safeView === 'guides' ? guideList() : safeView === 'authorizations' ? authorizationsView() : safeView === 'batches' ? batchesView() : safeView === 'financeiro' ? financeView() : safeView === 'reports' ? reportsView() : safeView === 'patients' ? patientsView() : safeView === 'users' ? usersView() : safeView === 'convenios' ? insurersView() : safeView === 'feedback' ? feedbackView() : safeView === 'settings' ? settingsView() : listing(views[safeView], `Gerencie ${views[safeView].toLowerCase()} em um só lugar.`, '↗'); document.querySelectorAll('.nav-item').forEach(item => { const visible = userCan(item.dataset.view); item.style.display = visible ? '' : 'none'; item.classList.toggle('active', item.dataset.view === safeView && visible); }); if (safeView === 'batches') batches.forEach(batch => { const card = document.querySelector(`[data-batch-id="${batch.id}"]`); const select = card?.querySelector('[data-batch-status]'); if (select) select.value = batch.status; }); }
+function render(view = 'overview') { breadcrumb.textContent = views[view] || views.overview; const safeView = userCan(view) ? view : 'overview'; appView.innerHTML = safeView === 'overview' ? overview() : safeView === 'alerts' ? alertsView() : safeView === 'agenda' ? agendaView() : safeView === 'guides' ? guideList() : safeView === 'authorizations' ? authorizationsView() : safeView === 'batches' ? batchesView() : safeView === 'financeiro' ? financeView() : safeView === 'reports' ? reportsView() : safeView === 'patients' ? patientsView() : safeView === 'users' ? usersView() : safeView === 'convenios' ? insurersView() : safeView === 'feedback' ? feedbackView() : safeView === 'settings' ? settingsView() : listing(views[safeView], `Gerencie ${views[safeView].toLowerCase()} em um só lugar.`, '↗'); document.querySelectorAll('.nav-item').forEach(item => { const visible = userCan(item.dataset.view); item.style.display = visible ? '' : 'none'; item.classList.toggle('active', item.dataset.view === safeView && visible); }); if (safeView === 'batches') batches.forEach(batch => { const card = document.querySelector(`[data-batch-id="${batch.id}"]`); const select = card?.querySelector('[data-batch-status]'); if (select) select.value = batch.status; }); updateNotificationBadge(); }
 function applySession() { const clinic = clinicProfiles[activeClinicId]; if (!clinic || !activeUser) return; document.querySelector('.workspace-switcher strong').textContent = clinic.name; document.querySelector('.workspace-switcher small').textContent = clinic.unit; document.querySelector('.workspace-switcher .avatar').textContent = clinic.initials; document.querySelector('#breadcrumb-clinic').textContent = clinic.name; document.querySelector('.profile strong').textContent = activeUser.name; document.querySelector('.profile small').textContent = activeUser.roleLabel || roleLabels[activeUser.role] || activeUser.role; document.querySelector('.user-button span:nth-child(2)').textContent = activeUser.name; document.querySelector('.user-button .avatar').textContent = activeUser.name.split(' ').map(name => name[0]).join('').slice(0, 2); }
 function usersView(editId = '') { const selected = users.find(user => user.id === editId); return `<div class="page-heading"><div><p class="eyebrow">Acesso e segurança</p><h1>Usuários da clínica</h1><p class="heading-copy">Cadastre a equipe e mantenha cada acesso no perfil correto.</p></div></div><div class="panel"><div class="panel-header"><div><h2 class="panel-title">Equipe</h2><p class="panel-subtitle">${users.filter(user => user.active !== false).length} acesso(s) ativo(s)</p></div></div><table><thead><tr><th>Nome</th><th>E-mail</th><th>Perfil</th><th>Situação</th><th></th></tr></thead><tbody>${users.map(user => `<tr><td><strong>${user.name}</strong></td><td>${user.email}</td><td>${roleLabels[user.role] || user.role}</td><td><span class="status ${user.active === false ? 'error' : 'approved'}">${user.active === false ? 'Inativo' : 'Ativo'}</span></td><td><button class="text-button" data-action="edit-user" data-user-id="${user.id}">Editar</button></td></tr>`).join('')}</tbody></table></div><form class="panel patient-form" id="user-form" data-user-id="${selected?.id || ''}"><div class="panel-header"><div><h2 class="panel-title">${selected ? 'Editar usuário' : 'Novo usuário'}</h2><p class="panel-subtitle">${selected ? 'Deixe a senha vazia para manter a atual.' : 'A senha inicial deve possuir pelo menos 8 caracteres.'}</p></div></div><div class="form-section"><div class="form-grid"><div class="field"><label>Nome *</label><input name="name" value="${selected?.name || ''}" required /></div><div class="field"><label>E-mail *</label><input name="email" type="email" value="${selected?.email || ''}" required /></div><div class="field"><label>Perfil *</label><select name="role" required>${Object.entries(roleLabels).map(([value,label]) => `<option value="${value}" ${selected?.role === value ? 'selected' : ''}>${label}</option>`).join('')}</select></div><div class="field"><label>${selected ? 'Nova senha' : 'Senha inicial *'}</label><input name="password" type="password" minlength="8" ${selected ? '' : 'required'} autocomplete="new-password" /></div>${selected ? `<label class="owner-active"><input name="active" type="checkbox" ${selected.active !== false ? 'checked' : ''} /> Usuário ativo</label>` : ''}</div></div><div class="form-footer"><button class="primary-button" type="submit">${selected ? 'Salvar alterações' : 'Cadastrar usuário'}</button>${selected ? '<button class="secondary-button" type="button" data-action="cancel-user-edit">Cancelar</button>' : ''}</div></form>`; }
 function showToast(message) { toast.textContent = message; toast.classList.add('show'); setTimeout(() => toast.classList.remove('show'), 2800); }
@@ -1710,6 +1736,9 @@ document.addEventListener('submit', event => {
   showToast('Nota fiscal cadastrada com sucesso.');
 });
 document.addEventListener('click', event => {
+  if (event.target.closest('[data-action="open-alerts"]')) render('alerts');
+  const alertTarget = event.target.closest('[data-action="open-alert-target"]');
+  if (alertTarget) render(alertTarget.dataset.targetView);
   const editButton = event.target.closest('[data-action="edit-user"]');
   if (editButton) { appView.innerHTML = usersView(editButton.dataset.userId); document.querySelector('#user-form input[name="name"]')?.focus(); }
   if (event.target.closest('[data-action="cancel-user-edit"]')) render('users');

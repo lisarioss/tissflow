@@ -481,6 +481,16 @@ app.get('/api/patient-consents/:id/pdf', auth, requireRole('admin', 'recepcao', 
   generatePatientConsentPDF(mappedSettings, patient, res);
 });
 
+app.patch('/api/patient-consents/:id/document', auth, requireRole('admin', 'recepcao', 'medico'), (req, res) => {
+  const consent = db.prepare('SELECT id, patient_id FROM patient_consents WHERE id = ? AND clinic_id = ?').get(req.params.id, req.session.clinicId);
+  if (!consent) return res.status(404).json({ error: 'Registro de consentimento não encontrado.' });
+  const documentId = String(req.body.documentId || '').trim();
+  const document = documentId ? db.prepare('SELECT id FROM patient_documents WHERE id = ? AND patient_id = ? AND clinic_id = ?').get(documentId, consent.patient_id, req.session.clinicId) : null;
+  if (documentId && !document) return res.status(400).json({ error: 'O comprovante deve pertencer à pasta do mesmo paciente.' });
+  db.prepare('UPDATE patient_consents SET signed_document_id = ? WHERE id = ? AND clinic_id = ?').run(document?.id || null, consent.id, req.session.clinicId);
+  res.json({ id: consent.id, signedDocumentId: document?.id || null });
+});
+
 app.get('/api/patients/:id/consent-pdf', auth, requireRole('admin', 'recepcao', 'medico'), (req, res) => {
   const patient = db.prepare('SELECT id, name, birth_date AS birthDate, guardian_name AS guardianName, guardian_relationship AS guardianRelationship, consent_status AS consentStatus, consent_date AS consentDate FROM patients WHERE id = ? AND clinic_id = ?').get(req.params.id, req.session.clinicId);
   if (!patient) return res.status(404).json({ error: 'Paciente não encontrado.' });
@@ -556,6 +566,7 @@ app.get('/api/audit-logs', auth, requireRole('admin'), (req, res) => {
 app.delete('/api/patient-documents/:id', auth, requireRole('admin', 'recepcao', 'medico'), (req, res) => {
   const document = db.prepare('SELECT * FROM patient_documents WHERE id = ? AND clinic_id = ?').get(req.params.id, req.session.clinicId);
   if (!document) return res.status(404).json({ error: 'Documento não encontrado.' });
+  if (db.prepare('SELECT 1 FROM patient_consents WHERE signed_document_id = ? AND clinic_id = ? LIMIT 1').get(document.id, req.session.clinicId)) return res.status(409).json({ error: 'Desvincule este comprovante do histórico de consentimento antes de excluí-lo.' });
   db.prepare('DELETE FROM patient_documents WHERE id = ? AND clinic_id = ?').run(req.params.id, req.session.clinicId);
   const storagePath = path.join(documentUploadRoot, req.session.clinicId, document.storage_name);
   if (fs.existsSync(storagePath)) fs.unlinkSync(storagePath);

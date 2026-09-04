@@ -141,6 +141,8 @@
 .consent-history > div .status { position:static; grid-column:2; grid-row:1; margin-left:auto; align-self:start; }
 .consent-history-actions { grid-column:2; grid-row:2 / span 3; align-self:center; display:flex; flex-direction:column; align-items:flex-end; gap:6px; }
 .consent-history-actions .text-button { padding:0; }
+.consent-document-form { display:flex; align-items:center; gap:7px; }
+.consent-document-form select { max-width:210px; border:1px solid var(--line); border-radius:5px; padding:6px; background:#fff; color:var(--ink); font:9px Manrope,sans-serif; }
 .patient-avatar { display:grid; width:48px; height:48px; place-items:center; border-radius:50%; background:var(--mint); color:var(--green-dark); font-weight:800; }
 .patient-folder-stats { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:10px; margin-bottom:18px; }
 .patient-folder-stats > div { padding:13px 15px; border:1px solid var(--line); border-radius:7px; background:#f7faf8; }

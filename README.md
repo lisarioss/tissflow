@@ -23,6 +23,7 @@ Protótipo de portfólio para operação de faturamento clínico. Demonstra o ci
 - **Termo configurável por clínica**: administradores podem definir o título, o conteúdo revisado e o contato de privacidade usados no PDF de consentimento, sem alterar o código do sistema.
 - **Versão histórica do consentimento**: cada manifestação preserva título, texto, contato e hash SHA-256 da versão apresentada, permitindo reemitir o PDF original mesmo depois de mudanças no modelo da clínica.
 - **Comprovante assinado**: o registro de consentimento pode ser vinculado ao PDF ou à imagem assinada armazenada na pasta do próprio paciente, com validação desse vínculo pela API.
+- **Atualização do comprovante**: permite anexar, substituir ou desvincular posteriormente o arquivo assinado sem modificar a data, a situação, o texto ou o hash da manifestação original.
 - **Trilha de auditoria**: registra automaticamente criações, alterações, exclusões e downloads, identificando usuário, data, registro e origem sem duplicar conteúdo clínico sensível no log.
 - **Autenticação real** via JWT + bcrypt, com dados persistidos em SQLite e isolados por `clinic_id` em todas as consultas.
 - **RBAC no servidor**: cada papel (admin, faturamento, recepção, médico) só consulta ou altera os recursos necessários ao seu trabalho; dados financeiros, feedbacks, documentos e agenda possuem leitura protegida pela API, não apenas menus ocultos.

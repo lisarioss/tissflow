@@ -267,3 +267,10 @@
 .onboarding-item small { color:var(--green); font-size:9px; white-space:nowrap; }
 .onboarding-item.complete b { color:var(--green); }
 .onboarding-item.complete small { color:var(--muted); }
+.import-feedback { position:relative; margin-bottom:18px; padding:16px 48px 16px 20px; border-left:4px solid var(--orange); }
+.import-feedback.success { border-left-color:var(--green); background:#f8fcfa; }
+.import-feedback.error { background:#fffaf8; }
+.import-feedback strong, .import-feedback small { display:block; }
+.import-feedback small { margin-top:4px; color:var(--muted); font-size:9px; }
+.import-feedback ol { margin:12px 0 0; padding-left:20px; color:var(--red); font-size:10px; line-height:1.7; }
+.import-feedback > button { position:absolute; top:16px; right:18px; }

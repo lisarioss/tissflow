@@ -11,6 +11,7 @@ const { generateGuidePackagePDF, generateGuideAuditPDF, generatePatientConsentPD
 const { feedbackDateBelongsToGuide } = require('./feedbackService');
 const { hasAppointmentConflict, weeklyDates } = require('./appointmentService');
 const { TISS_VERSION, calculateTissHash, validateTissXml } = require('./tissValidationService');
+const { parsePatientCsv, validatePatientImport } = require('./patientImportService');
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
@@ -370,6 +371,28 @@ app.get('/api/guides/:id/audit-pdf', auth, requireRole('admin', 'faturamento', '
 app.get('/api/patients', auth, (req, res) => {
   const patients = db.prepare('SELECT id, name, birth_date AS birthDate, insurer, ans_code AS ansCode, card_number AS cardNumber, plan, plan_validity AS planValidity, guardian_name AS guardianName, guardian_relationship AS guardianRelationship, guardian_phone AS guardianPhone, guardian_email AS guardianEmail, consent_status AS consentStatus, consent_date AS consentDate, active FROM patients WHERE clinic_id = ? ORDER BY active DESC, name').all(req.session.clinicId);
   res.json(patients);
+});
+
+app.get('/api/patients/export.csv', auth, requireRole('admin', 'recepcao'), (req, res) => {
+  const rows = db.prepare(`SELECT id, name, birth_date, insurer, ans_code, card_number, plan, plan_validity, guardian_name, guardian_relationship, guardian_phone, guardian_email, active
+    FROM patients WHERE clinic_id = ? ORDER BY active DESC, name`).all(req.session.clinicId);
+  return sendCsvReport(req, res, 'pacientes', ['id', 'nome', 'nascimento', 'convenio', 'codigo_ans', 'carteira', 'plano', 'validade_plano', 'responsavel', 'vinculo', 'telefone', 'email', 'ativo'], rows.map(row => [row.id, row.name, row.birth_date, row.insurer, row.ans_code, row.card_number, row.plan, row.plan_validity, row.guardian_name, row.guardian_relationship, row.guardian_phone, row.guardian_email, row.active ? 'sim' : 'não']));
+});
+
+app.post('/api/patients/import', auth, requireRole('admin', 'recepcao'), (req, res) => {
+  const csvText = String(req.body.csvText || '');
+  if (Buffer.byteLength(csvText, 'utf8') > 1024 * 1024) return res.status(413).json({ error: 'O CSV deve possuir no máximo 1 MB.' });
+  const parsed = parsePatientCsv(csvText);
+  if (parsed.errors.length) return res.status(400).json({ error: parsed.errors[0], errors: parsed.errors });
+  if (!parsed.rows.length) return res.status(400).json({ error: 'O CSV não possui pacientes para importar.' });
+  if (parsed.rows.length > 1000) return res.status(400).json({ error: 'Importe no máximo 1.000 pacientes por arquivo.' });
+  const insurers = db.prepare('SELECT name, ans_code AS ansCode FROM insurers WHERE clinic_id = ?').all(req.session.clinicId);
+  const existingPatients = db.prepare('SELECT id, card_number AS cardNumber FROM patients WHERE clinic_id = ?').all(req.session.clinicId);
+  const validation = validatePatientImport(parsed.rows, insurers, existingPatients);
+  if (validation.errors.length) return res.status(400).json({ error: `A importação possui ${validation.errors.length} linha(s) inválida(s). Nenhum paciente foi cadastrado.`, errors: validation.errors.slice(0, 50) });
+  const insert = db.prepare('INSERT INTO patients (id, clinic_id, name, birth_date, insurer, ans_code, card_number, plan, plan_validity, guardian_name, guardian_relationship, guardian_phone, guardian_email, consent_status, consent_date, active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+  db.transaction(rows => rows.forEach(patient => insert.run(patient.id, req.session.clinicId, patient.name, patient.birthDate, patient.insurer, patient.ansCode, patient.cardNumber, patient.plan, patient.planValidity, patient.guardianName, patient.guardianRelationship, patient.guardianPhone, patient.guardianEmail, 'pending', '', patient.active ? 1 : 0)))(validation.validRows);
+  res.status(201).json({ imported: validation.validRows.length });
 });
 
 app.post('/api/patients', auth, requireRole('admin', 'recepcao', 'medico'), (req, res) => {

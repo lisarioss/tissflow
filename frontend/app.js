@@ -73,6 +73,7 @@ function saveAuthorizations() { localStorage.setItem(clinicStorageKey('authoriza
 let feedbacks = JSON.parse(localStorage.getItem(clinicStorageKey('feedbacks')) || 'null') || [];
 let patientDocuments = [];
 let patientConsents = [];
+let patientImportFeedback = null;
 let auditLogs = [];
 let users = clinicUsers[activeClinicId] || [];
 let selectedReportCompetence = '';
@@ -133,7 +134,7 @@ function apiHeaders() { return activeSession?.token ? { Authorization: `Bearer $
 async function apiRequest(path, options = {}) {
   const response = await fetch(`${apiBase}${path}`, { ...options, headers: { 'Content-Type': 'application/json', ...apiHeaders(), ...(options.headers || {}) } });
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || 'Não foi possível comunicar com a API.');
+  if (!response.ok) { const error = new Error(payload.error || 'Não foi possível comunicar com a API.'); error.details = payload.errors || []; throw error; }
   return payload;
 }
 async function loadClinicOptions() {
@@ -604,7 +605,9 @@ function patientRowsHtml(term) {
   return filtered.map(patient => `<tr><td><strong>${patient.name}</strong><small>${new Date(`${patient.birthDate}T12:00:00`).toLocaleDateString('pt-BR')}</small></td><td>${patient.insurer}</td><td>${patient.cardNumber}</td><td>${patient.plan}</td><td>${new Date(`${patient.planValidity}T12:00:00`).toLocaleDateString('pt-BR')}</td><td><button class="text-button" data-action="open-patient-folder" data-patient-id="${patient.id}">Abrir pasta →</button> <button class="text-button" data-action="edit-patient" data-patient-id="${patient.id}">Editar</button></td></tr>`).join('');
 }
 function patientsView() {
-  return `<div class="page-heading"><div><p class="eyebrow">Cadastro da clínica</p><h1>Pacientes</h1><p class="heading-copy">Cada paciente possui uma pasta com seu histórico assistencial e de faturamento.</p></div><button class="primary-button" data-action="new-patient">＋ Novo paciente</button></div><div class="panel"><div class="panel-header"><div><h2 class="panel-title">Pacientes cadastrados</h2><p class="panel-subtitle">${patients.length} registros com dados de convênio</p></div></div><div class="search-bar"><input type="search" id="patient-search" placeholder="Buscar por nome, convênio, carteira ou plano" /></div><table><thead><tr><th>Paciente</th><th>Convênio</th><th>Carteira</th><th>Plano</th><th>Validade</th><th></th></tr></thead><tbody id="patient-table-body">${patientRowsHtml('')}</tbody></table></div><form class="panel patient-form" id="patient-form"><div class="panel-header"><div><h2 class="panel-title">Cadastrar paciente</h2><p class="panel-subtitle">Dados do plano, responsável legal e consentimento.</p></div></div><div class="form-section"><div class="form-grid"><div class="field"><label for="new-patient-name">Nome completo *</label><input id="new-patient-name" name="name" required /></div><div class="field"><label for="new-patient-birth">Data de nascimento *</label><input id="new-patient-birth" name="birthDate" type="date" required /></div><div class="field"><label for="new-patient-insurer">Convênio *</label><select id="new-patient-insurer" name="insurer" required><option value="">Selecione</option>${insurers.map(insurer => `<option>${insurer.name}</option>`).join('')}</select></div><div class="field"><label for="new-patient-ans">Código ANS</label><input id="new-patient-ans" name="ansCode" placeholder="Ex.: 004701" /></div><div class="field"><label for="new-patient-card">Número da carteira *</label><input id="new-patient-card" name="cardNumber" required /></div><div class="field"><label for="new-patient-plan">Plano *</label><input id="new-patient-plan" name="plan" required placeholder="Nome do plano" /></div><div class="field"><label for="new-patient-validity">Validade do plano *</label><input id="new-patient-validity" name="planValidity" type="date" required /></div></div><h3 class="form-subtitle">Responsável legal e consentimento</h3><div class="form-grid"><div class="field"><label for="new-patient-guardian">Nome do responsável</label><input id="new-patient-guardian" name="guardianName" /></div><div class="field"><label for="new-patient-relationship">Parentesco/vínculo</label><input id="new-patient-relationship" name="guardianRelationship" placeholder="Ex.: mãe, pai, tutor" /></div><div class="field"><label for="new-patient-phone">Telefone</label><input id="new-patient-phone" name="guardianPhone" /></div><div class="field"><label for="new-patient-email">E-mail</label><input id="new-patient-email" name="guardianEmail" type="email" /></div><div class="field"><label for="new-patient-consent">Consentimento para tratamento dos dados</label><select id="new-patient-consent" name="consentStatus"><option value="pending">Pendente</option><option value="granted">Concedido</option><option value="revoked">Revogado</option></select></div><div class="field"><label for="new-patient-consent-date">Data do consentimento</label><input id="new-patient-consent-date" name="consentDate" type="date" /></div></div><div class="form-footer"><button class="primary-button" type="submit">Salvar paciente</button></div></div></form>`;
+  const canImport = ['admin', 'recepcao'].includes(activeUser?.role || 'admin');
+  const importFeedback = patientImportFeedback ? `<div class="panel import-feedback ${patientImportFeedback.type}"><div><strong>${patientImportFeedback.title}</strong><small>${patientImportFeedback.message}</small></div>${patientImportFeedback.errors?.length ? `<ol>${patientImportFeedback.errors.slice(0, 20).map(error => `<li>${error}</li>`).join('')}</ol>${patientImportFeedback.errors.length > 20 ? `<small>Mais ${patientImportFeedback.errors.length - 20} erro(s) não exibido(s).</small>` : ''}` : ''}<button class="text-button" data-action="dismiss-patient-import-feedback">Fechar</button></div>` : '';
+  return `<div class="page-heading"><div><p class="eyebrow">Cadastro da clínica</p><h1>Pacientes</h1><p class="heading-copy">Cada paciente possui uma pasta com seu histórico assistencial e de faturamento.</p></div><div class="folder-actions">${canImport ? '<button class="secondary-button" data-action="download-patient-template">Baixar modelo CSV</button><button class="secondary-button" data-action="export-patients">Exportar pacientes</button><button class="secondary-button" data-action="choose-patient-import">Importar CSV</button><input id="patient-import-file" type="file" accept=".csv,text/csv" hidden />' : ''}<button class="primary-button" data-action="new-patient">＋ Novo paciente</button></div></div>${importFeedback}<div class="panel"><div class="panel-header"><div><h2 class="panel-title">Pacientes cadastrados</h2><p class="panel-subtitle">${patients.length} registros com dados de convênio</p></div></div><div class="search-bar"><input type="search" id="patient-search" placeholder="Buscar por nome, convênio, carteira ou plano" /></div><table><thead><tr><th>Paciente</th><th>Convênio</th><th>Carteira</th><th>Plano</th><th>Validade</th><th></th></tr></thead><tbody id="patient-table-body">${patientRowsHtml('')}</tbody></table></div><form class="panel patient-form" id="patient-form"><div class="panel-header"><div><h2 class="panel-title">Cadastrar paciente</h2><p class="panel-subtitle">Dados do plano, responsável legal e consentimento.</p></div></div><div class="form-section"><div class="form-grid"><div class="field"><label for="new-patient-name">Nome completo *</label><input id="new-patient-name" name="name" required /></div><div class="field"><label for="new-patient-birth">Data de nascimento *</label><input id="new-patient-birth" name="birthDate" type="date" required /></div><div class="field"><label for="new-patient-insurer">Convênio *</label><select id="new-patient-insurer" name="insurer" required><option value="">Selecione</option>${insurers.map(insurer => `<option>${insurer.name}</option>`).join('')}</select></div><div class="field"><label for="new-patient-ans">Código ANS</label><input id="new-patient-ans" name="ansCode" placeholder="Ex.: 004701" /></div><div class="field"><label for="new-patient-card">Número da carteira *</label><input id="new-patient-card" name="cardNumber" required /></div><div class="field"><label for="new-patient-plan">Plano *</label><input id="new-patient-plan" name="plan" required placeholder="Nome do plano" /></div><div class="field"><label for="new-patient-validity">Validade do plano *</label><input id="new-patient-validity" name="planValidity" type="date" required /></div></div><h3 class="form-subtitle">Responsável legal e consentimento</h3><div class="form-grid"><div class="field"><label for="new-patient-guardian">Nome do responsável</label><input id="new-patient-guardian" name="guardianName" /></div><div class="field"><label for="new-patient-relationship">Parentesco/vínculo</label><input id="new-patient-relationship" name="guardianRelationship" placeholder="Ex.: mãe, pai, tutor" /></div><div class="field"><label for="new-patient-phone">Telefone</label><input id="new-patient-phone" name="guardianPhone" /></div><div class="field"><label for="new-patient-email">E-mail</label><input id="new-patient-email" name="guardianEmail" type="email" /></div><div class="field"><label for="new-patient-consent">Consentimento para tratamento dos dados</label><select id="new-patient-consent" name="consentStatus"><option value="pending">Pendente</option><option value="granted">Concedido</option><option value="revoked">Revogado</option></select></div><div class="field"><label for="new-patient-consent-date">Data do consentimento</label><input id="new-patient-consent-date" name="consentDate" type="date" /></div></div><div class="form-footer"><button class="primary-button" type="submit">Salvar paciente</button></div></div></form>`;
 }
 function consentHistoryActions(item, documents) {
   const options = documents.map(document => `<option value="${document.id}" ${document.id === item.signedDocumentId ? 'selected' : ''}>${document.originalName}</option>`).join('');
@@ -938,6 +941,7 @@ function ownersFromSettingsForm(form) {
 }
 
 document.addEventListener('click', event => {
+  if (event.target.closest('[data-action="dismiss-patient-import-feedback"]')) { patientImportFeedback = null; render('patients'); return; }
   if (event.target.closest('[data-action="toggle-registration"]')) {
     const form = document.querySelector('#clinic-registration-form');
     form?.classList.toggle('hidden');
@@ -1151,6 +1155,48 @@ document.addEventListener('submit', async event => {
   } catch (error) {
     showToast(error.message);
   }
+});
+
+document.addEventListener('click', event => {
+  if (event.target.closest('[data-action="download-patient-template"]')) {
+    const header = 'id;nome;nascimento;convenio;codigo_ans;carteira;plano;validade_plano;responsavel;vinculo;telefone;email;ativo\r\n';
+    const blob = new Blob([`\uFEFF${header}`], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a'); link.href = url; link.download = 'modelo-importacao-pacientes.csv'; link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    showToast('Modelo CSV baixado. Preencha as datas no formato AAAA-MM-DD.');
+  }
+  if (event.target.closest('[data-action="choose-patient-import"]')) document.querySelector('#patient-import-file')?.click();
+  if (event.target.closest('[data-action="export-patients"]')) downloadPatientsCsv();
+});
+
+async function downloadPatientsCsv() {
+  if (!activeSession?.token) { showToast('Entre pela API para exportar pacientes.'); return; }
+  try {
+    const response = await fetch(`${apiBase}/patients/export.csv`, { headers: apiHeaders() });
+    if (!response.ok) { const payload = await response.json().catch(() => ({})); throw new Error(payload.error || 'Não foi possível exportar os pacientes.'); }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a'); link.href = url; link.download = 'pacientes.csv'; link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    showToast('Pacientes exportados com sucesso.');
+  } catch (error) { showToast(error.message); }
+}
+
+document.addEventListener('change', async event => {
+  if (event.target.id !== 'patient-import-file') return;
+  const file = event.target.files?.[0];
+  if (!file) return;
+  if (!activeSession?.token) { showToast('Entre pela API para importar pacientes.'); event.target.value = ''; return; }
+  try {
+    const csvText = await file.text();
+    const result = await apiRequest('/patients/import', { method: 'POST', body: JSON.stringify({ csvText }) });
+    patients = await apiRequest('/patients');
+    patientImportFeedback = { type: 'success', title: 'Importação concluída', message: `${result.imported} paciente(s) cadastrado(s).`, errors: [] };
+    render('patients');
+    showToast(`${result.imported} paciente(s) importado(s) com sucesso.`);
+  } catch (error) { patientImportFeedback = { type: 'error', title: 'Revise o arquivo CSV', message: error.message, errors: error.details || [] }; render('patients'); showToast(error.message); }
+  finally { event.target.value = ''; }
 });
 
 function printFeedback(feedback) {

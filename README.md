@@ -28,6 +28,9 @@ Protótipo de portfólio para operação de faturamento clínico. Demonstra o ci
 - **Renovação configurável do consentimento**: cada clínica pode desativar o controle ou escolher um ciclo de 6, 12, 24 ou 36 meses; o sistema avisa 30 dias antes e destaca termos vencidos.
 - **Relatório de consentimentos**: administradores acompanham a conformidade dos pacientes ativos e exportam CSV com responsável, manifestação vigente, renovação, comprovante e situação para auditoria.
 - **Checklist de implantação**: orienta o administrador na configuração inicial da clínica e reúne atalhos para timbrado, responsáveis, profissionais, convênios, equipe e primeiro paciente.
+- **Importação de pacientes por CSV**: administradores e recepção podem baixar um modelo e cadastrar até 1.000 pacientes de uma vez, com validação integral de datas, convênios, carteiras, IDs e e-mails antes de gravar qualquer registro.
+- **Relatório de erros da importação**: linhas inválidas são apresentadas na própria tela para correção, incluindo datas impossíveis, sem permitir cadastros parciais.
+- **Exportação de pacientes**: administradores e recepção podem baixar o cadastro no mesmo formato CSV da importação, facilitando conferência e migração com download registrado na auditoria.
 - **Trilha de auditoria**: registra automaticamente criações, alterações, exclusões e downloads, identificando usuário, data, registro e origem sem duplicar conteúdo clínico sensível no log.
 - **Autenticação real** via JWT + bcrypt, com dados persistidos em SQLite e isolados por `clinic_id` em todas as consultas.
 - **RBAC no servidor**: cada papel (admin, faturamento, recepção, médico) só consulta ou altera os recursos necessários ao seu trabalho; dados financeiros, feedbacks, documentos e agenda possuem leitura protegida pela API, não apenas menus ocultos.

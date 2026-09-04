@@ -2,11 +2,12 @@ const express = require('express');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 const db = require('./db');
-const { generateGuidePackagePDF, generateGuideAuditPDF, generatePatientConsentPDF } = require('./pdfService');
+const { generateGuidePackagePDF, generateGuideAuditPDF, generatePatientConsentPDF, consentDocumentContent } = require('./pdfService');
 const { feedbackDateBelongsToGuide } = require('./feedbackService');
 const { hasAppointmentConflict, weeklyDates } = require('./appointmentService');
 const { TISS_VERSION, calculateTissHash, validateTissXml } = require('./tissValidationService');
@@ -439,7 +440,7 @@ app.get('/api/insurers', auth, (req, res) => {
 });
 
 app.get('/api/patient-consents', auth, requireRole('admin', 'recepcao', 'medico'), (req, res) => {
-  const rows = db.prepare(`SELECT patient_consents.id, patient_consents.patient_id AS patientId, patient_consents.status, patient_consents.event_date AS eventDate, patient_consents.notes, patient_consents.created_at AS createdAt, users.name AS recordedBy
+  const rows = db.prepare(`SELECT patient_consents.id, patient_consents.patient_id AS patientId, patient_consents.status, patient_consents.event_date AS eventDate, patient_consents.notes, patient_consents.document_hash AS documentHash, patient_consents.consent_title AS consentTitle, patient_consents.created_at AS createdAt, users.name AS recordedBy
     FROM patient_consents JOIN users ON users.id = patient_consents.recorded_by AND users.clinic_id = patient_consents.clinic_id
     WHERE patient_consents.clinic_id = ? ORDER BY patient_consents.event_date DESC, patient_consents.created_at DESC`).all(req.session.clinicId);
   res.json(rows);
@@ -452,11 +453,29 @@ app.post('/api/patients/:id/consents', auth, requireRole('admin', 'recepcao', 'm
   const patient = db.prepare('SELECT id FROM patients WHERE id = ? AND clinic_id = ?').get(req.params.id, req.session.clinicId);
   if (!patient) return res.status(404).json({ error: 'Paciente não encontrado.' });
   const id = `CONS-${Date.now()}`;
+  const clinic = db.prepare('SELECT id, name, unit FROM clinics WHERE id = ?').get(req.session.clinicId);
+  const settings = db.prepare('SELECT * FROM clinic_settings WHERE clinic_id = ?').get(req.session.clinicId);
+  const documentContent = consentDocumentContent(mapClinicSettings(settings, clinic));
+  const documentHash = crypto.createHash('sha256').update(JSON.stringify(documentContent), 'utf8').digest('hex');
   db.transaction(() => {
-    db.prepare('INSERT INTO patient_consents (id, clinic_id, patient_id, status, event_date, notes, recorded_by) VALUES (?, ?, ?, ?, ?, ?, ?)').run(id, req.session.clinicId, patient.id, status, eventDate, String(notes).trim().slice(0, 500) || null, req.session.userId);
+    db.prepare('INSERT INTO patient_consents (id, clinic_id, patient_id, status, event_date, notes, consent_title, consent_text, privacy_contact, document_hash, recorded_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, req.session.clinicId, patient.id, status, eventDate, String(notes).trim().slice(0, 500) || null, documentContent.title, documentContent.text, documentContent.privacyContact, documentHash, req.session.userId);
     db.prepare('UPDATE patients SET consent_status = ?, consent_date = ? WHERE id = ? AND clinic_id = ?').run(status, eventDate, patient.id, req.session.clinicId);
   })();
-  res.status(201).json({ id, status, eventDate });
+  res.status(201).json({ id, status, eventDate, documentHash });
+});
+
+app.get('/api/patient-consents/:id/pdf', auth, requireRole('admin', 'recepcao', 'medico'), (req, res) => {
+  const consent = db.prepare(`SELECT patient_consents.*, patients.name, patients.birth_date AS birthDate, patients.guardian_name AS guardianName, patients.guardian_relationship AS guardianRelationship
+    FROM patient_consents JOIN patients ON patients.id = patient_consents.patient_id AND patients.clinic_id = patient_consents.clinic_id
+    WHERE patient_consents.id = ? AND patient_consents.clinic_id = ?`).get(req.params.id, req.session.clinicId);
+  if (!consent) return res.status(404).json({ error: 'Registro de consentimento não encontrado.' });
+  if (!consent.document_hash) return res.status(409).json({ error: 'Este registro antigo não possui uma versão histórica do documento.' });
+  const clinic = db.prepare('SELECT id, name, unit FROM clinics WHERE id = ?').get(req.session.clinicId);
+  const settings = db.prepare('SELECT * FROM clinic_settings WHERE clinic_id = ?').get(req.session.clinicId);
+  const mappedSettings = { ...mapClinicSettings(settings, clinic), consentTitle: consent.consent_title, consentText: consent.consent_text, privacyContact: consent.privacy_contact };
+  const patient = { id: consent.patient_id, name: consent.name, birthDate: consent.birthDate, guardianName: consent.guardianName, guardianRelationship: consent.guardianRelationship, consentStatus: consent.status, consentDate: consent.event_date };
+  recordAudit(req, 'download', 'patient-consents', consent.id, { document: 'historical-consent-pdf', patientId: consent.patient_id, documentHash: consent.document_hash });
+  generatePatientConsentPDF(mappedSettings, patient, res);
 });
 
 app.get('/api/patients/:id/consent-pdf', auth, requireRole('admin', 'recepcao', 'medico'), (req, res) => {

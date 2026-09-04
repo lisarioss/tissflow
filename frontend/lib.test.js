@@ -1,6 +1,21 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { nextSequentialId, timeToMinutes, hasScheduleConflictWith, escapeXml, findSessionOutsidePlanValidity, exceedsAuthorizedQuantity, findCidIncompatibility, filterGuides, filterPatients, filterInsurers, filterFeedbacks, consentAlertItems } = require('./lib.js');
+const { nextSequentialId, timeToMinutes, hasScheduleConflictWith, escapeXml, findSessionOutsidePlanValidity, exceedsAuthorizedQuantity, findCidIncompatibility, filterGuides, filterPatients, filterInsurers, filterFeedbacks, consentAlertItems, clinicOnboardingChecklist } = require('./lib.js');
+
+test('clinicOnboardingChecklist identifica uma clínica pronta para operar', () => {
+  const settings = { tradeName: 'Clínica', cnpj: '1', cnes: '1234567', letterheadDataUrl: 'data:image/png;base64,x', owners: [{ name: 'Ana', active: true }], professionals: [{ name: 'Bia', councilType: 'CRP', councilNumber: '1', councilState: 'BA', cbo: '251510' }] };
+  const insurers = [{ name: 'Plano', ansCode: '123456', providerCode: 'P1', acceptedProcedures: ['50000000'] }];
+  const users = [{ id: 'U1' }, { id: 'U2' }];
+  const patients = [{ id: 'P1' }];
+  assert.equal(clinicOnboardingChecklist(settings, insurers, users, patients).every(item => item.complete), true);
+});
+
+test('clinicOnboardingChecklist aponta cada configuração ausente e sua tela', () => {
+  const checklist = clinicOnboardingChecklist({ owners: [], professionals: [] }, [], [{ id: 'U1' }], []);
+  assert.equal(checklist.filter(item => !item.complete).length, 7);
+  assert.equal(checklist.find(item => item.id === 'insurers').view, 'convenios');
+  assert.equal(checklist.find(item => item.id === 'team').view, 'users');
+});
 
 test('consentAlertItems identifica pendência, revogação e ausência de comprovante', () => {
   const patients = [

@@ -313,6 +313,33 @@ app.get('/api/reports/:type.csv', auth, requireRole('admin', 'faturamento'), (re
     const rows = db.prepare(`SELECT authorizations.id, patients.name AS patient, insurers.name AS insurer, authorizations.authorization_number, authorizations.valid_from, authorizations.valid_to, authorizations.authorized_quantity, authorizations.used_quantity, authorizations.notes, authorizations.created_at FROM authorizations JOIN patients ON patients.id = authorizations.patient_id AND patients.clinic_id = authorizations.clinic_id JOIN insurers ON insurers.id = authorizations.insurer_id AND insurers.clinic_id = authorizations.clinic_id WHERE authorizations.clinic_id = ?${competence ? " AND substr(authorizations.valid_from, 1, 7) <= ? AND substr(authorizations.valid_to, 1, 7) >= ?" : ''} ORDER BY authorizations.valid_to`).all(...(competence ? [clinicId, competence, competence] : [clinicId]));
     return sendCsvReport(req, res, 'autorizacoes', ['ID', 'Paciente', 'Convênio', 'Número', 'Início', 'Vencimento', 'Autorizada', 'Utilizada', 'Observações', 'Criada em'], rows.map(row => [row.id, row.patient, row.insurer, row.authorization_number, row.valid_from, row.valid_to, row.authorized_quantity, row.used_quantity, row.notes, row.created_at]));
   }
+  if (req.params.type === 'consents') {
+    if (req.session.role !== 'admin') return res.status(403).json({ error: 'Somente administradores podem exportar consentimentos.' });
+    const settings = db.prepare('SELECT consent_renewal_months FROM clinic_settings WHERE clinic_id = ?').get(clinicId);
+    const renewalMonths = Number(settings?.consent_renewal_months || 0);
+    const rows = db.prepare(`SELECT patients.id, patients.name, patients.insurer, patients.guardian_name, patients.guardian_relationship, patients.guardian_phone, patients.guardian_email, patients.consent_status, patients.consent_date, patients.active,
+      patient_consents.event_date, patient_consents.signed_document_id, patient_documents.original_name AS signed_document_name, users.name AS recorded_by
+      FROM patients
+      LEFT JOIN patient_consents ON patient_consents.id = (SELECT latest.id FROM patient_consents latest WHERE latest.patient_id = patients.id AND latest.clinic_id = patients.clinic_id ORDER BY latest.event_date DESC, latest.created_at DESC LIMIT 1)
+      LEFT JOIN patient_documents ON patient_documents.id = patient_consents.signed_document_id AND patient_documents.clinic_id = patients.clinic_id
+      LEFT JOIN users ON users.id = patient_consents.recorded_by AND users.clinic_id = patients.clinic_id
+      WHERE patients.clinic_id = ? ORDER BY patients.active DESC, patients.name`).all(clinicId);
+    const reportRows = rows.map(row => {
+      let renewalDate = '';
+      let compliance = row.active ? 'Regular' : 'Paciente inativo';
+      if (row.consent_status === 'pending') compliance = 'Consentimento pendente';
+      else if (row.consent_status === 'revoked') compliance = 'Consentimento revogado';
+      else if (!row.event_date) compliance = 'Sem histórico de manifestação';
+      else if (!row.signed_document_id) compliance = 'Sem comprovante assinado';
+      if (row.consent_status === 'granted' && row.event_date && renewalMonths > 0) {
+        const date = new Date(`${row.event_date}T12:00:00`); date.setMonth(date.getMonth() + renewalMonths); renewalDate = date.toISOString().slice(0, 10);
+        const days = Math.ceil((new Date(`${renewalDate}T00:00:00`) - new Date(new Date().toISOString().slice(0, 10) + 'T00:00:00')) / 86400000);
+        if (days < 0) compliance = 'Renovação vencida'; else if (days <= 30 && compliance === 'Regular') compliance = 'Renovação próxima';
+      }
+      return [row.id, row.name, row.insurer, row.guardian_name, row.guardian_relationship, row.guardian_phone, row.guardian_email, row.consent_status, row.event_date || row.consent_date, renewalDate, row.signed_document_name, row.recorded_by, compliance, row.active ? 'Sim' : 'Não'];
+    });
+    return sendCsvReport(req, res, 'consentimentos', ['Paciente ID', 'Paciente', 'Convênio', 'Responsável', 'Vínculo', 'Telefone', 'E-mail', 'Manifestação', 'Data', 'Próxima renovação', 'Comprovante', 'Registrado por', 'Conformidade', 'Paciente ativo'], reportRows);
+  }
   res.status(404).json({ error: 'Tipo de relatório não encontrado.' });
 });
 

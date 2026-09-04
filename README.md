@@ -26,6 +26,8 @@ Protótipo de portfólio para operação de faturamento clínico. Demonstra o ci
 - **Atualização do comprovante**: permite anexar, substituir ou desvincular posteriormente o arquivo assinado sem modificar a data, a situação, o texto ou o hash da manifestação original.
 - **Alertas de consentimento**: notifica perfis assistenciais sobre pacientes com manifestação pendente, consentimento revogado ou comprovante assinado ausente, com acesso direto à pasta correspondente.
 - **Renovação configurável do consentimento**: cada clínica pode desativar o controle ou escolher um ciclo de 6, 12, 24 ou 36 meses; o sistema avisa 30 dias antes e destaca termos vencidos.
+- **Relatório de consentimentos**: administradores acompanham a conformidade dos pacientes ativos e exportam CSV com responsável, manifestação vigente, renovação, comprovante e situação para auditoria.
+- **Checklist de implantação**: orienta o administrador na configuração inicial da clínica e reúne atalhos para timbrado, responsáveis, profissionais, convênios, equipe e primeiro paciente.
 - **Trilha de auditoria**: registra automaticamente criações, alterações, exclusões e downloads, identificando usuário, data, registro e origem sem duplicar conteúdo clínico sensível no log.
 - **Autenticação real** via JWT + bcrypt, com dados persistidos em SQLite e isolados por `clinic_id` em todas as consultas.
 - **RBAC no servidor**: cada papel (admin, faturamento, recepção, médico) só consulta ou altera os recursos necessários ao seu trabalho; dados financeiros, feedbacks, documentos e agenda possuem leitura protegida pela API, não apenas menus ocultos.

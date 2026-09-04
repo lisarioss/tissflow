@@ -118,8 +118,24 @@ function consentAlertItems(patients, consentEvents, renewalMonths = 0, today = n
   });
 }
 
+function clinicOnboardingChecklist(settings, insurers, users, patients) {
+  const activeOwners = (settings.owners || []).filter(owner => owner.active !== false && String(owner.name || '').trim());
+  const completeProfessionals = (settings.professionals || []).filter(professional => professional.name && professional.councilType && professional.councilNumber && professional.councilState && professional.cbo);
+  const configuredInsurers = (insurers || []).filter(insurer => insurer.name && insurer.ansCode && insurer.providerCode && ((insurer.procedureRules || []).length || (insurer.acceptedProcedures || []).length));
+  const activeUsers = (users || []).filter(user => user.active !== false);
+  return [
+    { id: 'identity', label: 'Dados institucionais, CNPJ e CNES', complete: Boolean(settings.tradeName && settings.cnpj && settings.cnes), view: 'settings' },
+    { id: 'letterhead', label: 'Papel timbrado A4', complete: Boolean(settings.letterheadDataUrl), view: 'settings' },
+    { id: 'owners', label: 'Responsável que assina a capa', complete: activeOwners.length > 0, view: 'settings' },
+    { id: 'professionals', label: 'Profissionais com conselho e CBO', complete: completeProfessionals.length > 0, view: 'settings' },
+    { id: 'insurers', label: 'Convênio com código do prestador e procedimentos', complete: configuredInsurers.length > 0, view: 'convenios' },
+    { id: 'team', label: 'Equipe com acesso ao sistema', complete: activeUsers.length > 1, view: 'users' },
+    { id: 'patients', label: 'Primeiro paciente cadastrado', complete: (patients || []).some(patient => patient.active !== false), view: 'patients' }
+  ];
+}
+
 // Disponibiliza as funções tanto para <script> no navegador (globais em
 // `window`) quanto para `require()` em testes Node — sem precisar de bundler.
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { nextSequentialId, timeToMinutes, hasScheduleConflictWith, escapeXml, findSessionOutsidePlanValidity, exceedsAuthorizedQuantity, findCidIncompatibility, filterGuides, filterPatients, filterInsurers, filterFeedbacks, consentAlertItems };
+  module.exports = { nextSequentialId, timeToMinutes, hasScheduleConflictWith, escapeXml, findSessionOutsidePlanValidity, exceedsAuthorizedQuantity, findCidIncompatibility, filterGuides, filterPatients, filterInsurers, filterFeedbacks, consentAlertItems, clinicOnboardingChecklist };
 }

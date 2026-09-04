@@ -179,6 +179,7 @@ db.exec(`
     consent_text TEXT NOT NULL DEFAULT '',
     privacy_contact TEXT NOT NULL DEFAULT '',
     document_hash TEXT NOT NULL DEFAULT '',
+    signed_document_id TEXT REFERENCES patient_documents(id),
     recorded_by TEXT NOT NULL REFERENCES users(id),
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
@@ -309,6 +310,7 @@ if (!consentColumns.has('consent_title')) db.exec("ALTER TABLE patient_consents 
 if (!consentColumns.has('consent_text')) db.exec("ALTER TABLE patient_consents ADD COLUMN consent_text TEXT NOT NULL DEFAULT ''");
 if (!consentColumns.has('privacy_contact')) db.exec("ALTER TABLE patient_consents ADD COLUMN privacy_contact TEXT NOT NULL DEFAULT ''");
 if (!consentColumns.has('document_hash')) db.exec("ALTER TABLE patient_consents ADD COLUMN document_hash TEXT NOT NULL DEFAULT ''");
+if (!consentColumns.has('signed_document_id')) db.exec('ALTER TABLE patient_consents ADD COLUMN signed_document_id TEXT REFERENCES patient_documents(id)');
 const insurerColumns = new Set(db.prepare('PRAGMA table_info(insurers)').all().map(column => column.name));
 if (!insurerColumns.has('procedure_rules')) db.exec("ALTER TABLE insurers ADD COLUMN procedure_rules TEXT NOT NULL DEFAULT '[]'");
 if (!insurerColumns.has('delivery_format')) db.exec("ALTER TABLE insurers ADD COLUMN delivery_format TEXT NOT NULL DEFAULT 'both' CHECK (delivery_format IN ('pdf', 'xml', 'both'))");

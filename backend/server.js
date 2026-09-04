@@ -440,28 +440,31 @@ app.get('/api/insurers', auth, (req, res) => {
 });
 
 app.get('/api/patient-consents', auth, requireRole('admin', 'recepcao', 'medico'), (req, res) => {
-  const rows = db.prepare(`SELECT patient_consents.id, patient_consents.patient_id AS patientId, patient_consents.status, patient_consents.event_date AS eventDate, patient_consents.notes, patient_consents.document_hash AS documentHash, patient_consents.consent_title AS consentTitle, patient_consents.created_at AS createdAt, users.name AS recordedBy
+  const rows = db.prepare(`SELECT patient_consents.id, patient_consents.patient_id AS patientId, patient_consents.status, patient_consents.event_date AS eventDate, patient_consents.notes, patient_consents.document_hash AS documentHash, patient_consents.consent_title AS consentTitle, patient_consents.signed_document_id AS signedDocumentId, patient_documents.original_name AS signedDocumentName, patient_consents.created_at AS createdAt, users.name AS recordedBy
     FROM patient_consents JOIN users ON users.id = patient_consents.recorded_by AND users.clinic_id = patient_consents.clinic_id
+    LEFT JOIN patient_documents ON patient_documents.id = patient_consents.signed_document_id AND patient_documents.clinic_id = patient_consents.clinic_id
     WHERE patient_consents.clinic_id = ? ORDER BY patient_consents.event_date DESC, patient_consents.created_at DESC`).all(req.session.clinicId);
   res.json(rows);
 });
 
 app.post('/api/patients/:id/consents', auth, requireRole('admin', 'recepcao', 'medico'), (req, res) => {
-  const { status, eventDate, notes = '' } = req.body;
+  const { status, eventDate, notes = '', signedDocumentId = '' } = req.body;
   if (!['granted', 'revoked'].includes(status)) return res.status(400).json({ error: 'Informe se o consentimento foi concedido ou revogado.' });
   if (!/^\d{4}-\d{2}-\d{2}$/.test(eventDate || '')) return res.status(400).json({ error: 'Informe a data da manifestação.' });
   const patient = db.prepare('SELECT id FROM patients WHERE id = ? AND clinic_id = ?').get(req.params.id, req.session.clinicId);
   if (!patient) return res.status(404).json({ error: 'Paciente não encontrado.' });
+  const signedDocument = signedDocumentId ? db.prepare('SELECT id FROM patient_documents WHERE id = ? AND patient_id = ? AND clinic_id = ?').get(signedDocumentId, patient.id, req.session.clinicId) : null;
+  if (signedDocumentId && !signedDocument) return res.status(400).json({ error: 'O documento assinado deve pertencer à pasta deste paciente.' });
   const id = `CONS-${Date.now()}`;
   const clinic = db.prepare('SELECT id, name, unit FROM clinics WHERE id = ?').get(req.session.clinicId);
   const settings = db.prepare('SELECT * FROM clinic_settings WHERE clinic_id = ?').get(req.session.clinicId);
   const documentContent = consentDocumentContent(mapClinicSettings(settings, clinic));
   const documentHash = crypto.createHash('sha256').update(JSON.stringify(documentContent), 'utf8').digest('hex');
   db.transaction(() => {
-    db.prepare('INSERT INTO patient_consents (id, clinic_id, patient_id, status, event_date, notes, consent_title, consent_text, privacy_contact, document_hash, recorded_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, req.session.clinicId, patient.id, status, eventDate, String(notes).trim().slice(0, 500) || null, documentContent.title, documentContent.text, documentContent.privacyContact, documentHash, req.session.userId);
+    db.prepare('INSERT INTO patient_consents (id, clinic_id, patient_id, status, event_date, notes, consent_title, consent_text, privacy_contact, document_hash, signed_document_id, recorded_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, req.session.clinicId, patient.id, status, eventDate, String(notes).trim().slice(0, 500) || null, documentContent.title, documentContent.text, documentContent.privacyContact, documentHash, signedDocument?.id || null, req.session.userId);
     db.prepare('UPDATE patients SET consent_status = ?, consent_date = ? WHERE id = ? AND clinic_id = ?').run(status, eventDate, patient.id, req.session.clinicId);
   })();
-  res.status(201).json({ id, status, eventDate, documentHash });
+  res.status(201).json({ id, status, eventDate, documentHash, signedDocumentId: signedDocument?.id || null });
 });
 
 app.get('/api/patient-consents/:id/pdf', auth, requireRole('admin', 'recepcao', 'medico'), (req, res) => {

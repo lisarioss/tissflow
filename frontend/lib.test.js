@@ -1,6 +1,37 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { nextSequentialId, timeToMinutes, hasScheduleConflictWith, escapeXml, findSessionOutsidePlanValidity, exceedsAuthorizedQuantity, findCidIncompatibility, filterGuides, filterPatients, filterInsurers, filterFeedbacks } = require('./lib.js');
+const { nextSequentialId, timeToMinutes, hasScheduleConflictWith, escapeXml, findSessionOutsidePlanValidity, exceedsAuthorizedQuantity, findCidIncompatibility, filterGuides, filterPatients, filterInsurers, filterFeedbacks, consentAlertItems } = require('./lib.js');
+
+test('consentAlertItems identifica pendência, revogação e ausência de comprovante', () => {
+  const patients = [
+    { id: 'P-1', name: 'Ana', consentStatus: 'pending' },
+    { id: 'P-2', name: 'Bia', consentStatus: 'revoked', consentDate: '2026-09-01' },
+    { id: 'P-3', name: 'Caio', consentStatus: 'granted' },
+    { id: 'P-4', name: 'Davi', consentStatus: 'granted' }
+  ];
+  const events = [
+    { patientId: 'P-3', eventDate: '2026-09-01' },
+    { patientId: 'P-4', eventDate: '2026-09-01', signedDocumentId: 'DOC-1' }
+  ];
+  const alerts = consentAlertItems(patients, events);
+  assert.deepEqual(alerts.map(item => item.targetId), ['P-1', 'P-2', 'P-3']);
+  assert.deepEqual(alerts.map(item => item.level), ['warning', 'critical', 'warning']);
+});
+
+test('consentAlertItems usa o evento mais recente e ignora paciente inativo', () => {
+  const patients = [
+    { id: 'P-1', name: 'Ana', consentStatus: 'granted' },
+    { id: 'P-2', name: 'Bia', consentStatus: 'pending', active: false }
+  ];
+  const events = [
+    { patientId: 'P-1', eventDate: '2026-08-01', signedDocumentId: 'DOC-ANTIGO' },
+    { patientId: 'P-1', eventDate: '2026-09-01' }
+  ];
+  const alerts = consentAlertItems(patients, events);
+  assert.equal(alerts.length, 1);
+  assert.equal(alerts[0].targetId, 'P-1');
+  assert.match(alerts[0].title, /Comprovante de consentimento ausente/);
+});
 
 test('nextSequentialId gera o próximo número com base no maior ID existente', () => {
   const list = [{ id: 'G-2026-00478' }, { id: 'G-2026-00481' }];

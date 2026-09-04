@@ -95,8 +95,21 @@ function filterFeedbacks(feedbacks, term) {
   return feedbacks.filter(feedback => [feedback.patient, feedback.professional, feedback.guideId, feedback.attendanceType].some(field => String(field || '').toLowerCase().includes(query)));
 }
 
+function consentAlertItems(patients, consentEvents) {
+  return patients.filter(patient => patient.active !== false).flatMap(patient => {
+    const currentConsent = consentEvents
+      .filter(item => item.patientId === patient.id)
+      .sort((first, second) => `${second.eventDate}${second.createdAt || ''}`.localeCompare(`${first.eventDate}${first.createdAt || ''}`))[0];
+    const status = patient.consentStatus || 'pending';
+    if (status === 'pending') return [{ level: 'warning', title: `Consentimento pendente · ${patient.name}`, detail: 'Registre a manifestação do responsável na pasta do paciente.', view: 'patients', targetId: patient.id }];
+    if (status === 'revoked') return [{ level: 'critical', title: `Consentimento revogado · ${patient.name}`, detail: `Revogação registrada${patient.consentDate ? ` em ${new Date(`${patient.consentDate}T12:00:00`).toLocaleDateString('pt-BR')}` : ''}. Confira o fluxo assistencial e administrativo.`, view: 'patients', targetId: patient.id }];
+    if (status === 'granted' && !currentConsent?.signedDocumentId) return [{ level: 'warning', title: `Comprovante de consentimento ausente · ${patient.name}`, detail: 'Anexe e vincule o termo assinado ao registro mais recente.', view: 'patients', targetId: patient.id }];
+    return [];
+  });
+}
+
 // Disponibiliza as funções tanto para <script> no navegador (globais em
 // `window`) quanto para `require()` em testes Node — sem precisar de bundler.
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { nextSequentialId, timeToMinutes, hasScheduleConflictWith, escapeXml, findSessionOutsidePlanValidity, exceedsAuthorizedQuantity, findCidIncompatibility, filterGuides, filterPatients, filterInsurers, filterFeedbacks };
+  module.exports = { nextSequentialId, timeToMinutes, hasScheduleConflictWith, escapeXml, findSessionOutsidePlanValidity, exceedsAuthorizedQuantity, findCidIncompatibility, filterGuides, filterPatients, filterInsurers, filterFeedbacks, consentAlertItems };
 }

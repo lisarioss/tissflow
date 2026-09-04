@@ -95,7 +95,7 @@ function filterFeedbacks(feedbacks, term) {
   return feedbacks.filter(feedback => [feedback.patient, feedback.professional, feedback.guideId, feedback.attendanceType].some(field => String(field || '').toLowerCase().includes(query)));
 }
 
-function consentAlertItems(patients, consentEvents) {
+function consentAlertItems(patients, consentEvents, renewalMonths = 0, today = new Date()) {
   return patients.filter(patient => patient.active !== false).flatMap(patient => {
     const currentConsent = consentEvents
       .filter(item => item.patientId === patient.id)
@@ -103,8 +103,18 @@ function consentAlertItems(patients, consentEvents) {
     const status = patient.consentStatus || 'pending';
     if (status === 'pending') return [{ level: 'warning', title: `Consentimento pendente · ${patient.name}`, detail: 'Registre a manifestação do responsável na pasta do paciente.', view: 'patients', targetId: patient.id }];
     if (status === 'revoked') return [{ level: 'critical', title: `Consentimento revogado · ${patient.name}`, detail: `Revogação registrada${patient.consentDate ? ` em ${new Date(`${patient.consentDate}T12:00:00`).toLocaleDateString('pt-BR')}` : ''}. Confira o fluxo assistencial e administrativo.`, view: 'patients', targetId: patient.id }];
-    if (status === 'granted' && !currentConsent?.signedDocumentId) return [{ level: 'warning', title: `Comprovante de consentimento ausente · ${patient.name}`, detail: 'Anexe e vincule o termo assinado ao registro mais recente.', view: 'patients', targetId: patient.id }];
-    return [];
+    if (status !== 'granted') return [];
+    const alerts = [];
+    if (!currentConsent?.signedDocumentId) alerts.push({ level: 'warning', title: `Comprovante de consentimento ausente · ${patient.name}`, detail: 'Anexe e vincule o termo assinado ao registro mais recente.', view: 'patients', targetId: patient.id });
+    if (renewalMonths > 0 && currentConsent?.eventDate) {
+      const renewalDate = new Date(`${currentConsent.eventDate}T12:00:00`);
+      renewalDate.setMonth(renewalDate.getMonth() + Number(renewalMonths));
+      renewalDate.setHours(0, 0, 0, 0);
+      const referenceDate = new Date(today); referenceDate.setHours(0, 0, 0, 0);
+      const days = Math.ceil((renewalDate - referenceDate) / 86400000);
+      if (days <= 30) alerts.push({ level: days < 0 ? 'critical' : 'warning', title: days < 0 ? `Consentimento vencido · ${patient.name}` : `Consentimento vence em ${days} dia(s) · ${patient.name}`, detail: `Renovação prevista para ${renewalDate.toLocaleDateString('pt-BR')}. Registre uma nova manifestação.`, view: 'patients', targetId: patient.id });
+    }
+    return alerts;
   });
 }
 

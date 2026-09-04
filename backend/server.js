@@ -124,7 +124,8 @@ function mapClinicSettings(row, clinic) {
     logoDataUrl: row?.logo_data_url || '', letterheadDataUrl: row?.letterhead_data_url || '',
     letterheadHeaderMm: Number(row?.letterhead_header_mm || 35), letterheadFooterMm: Number(row?.letterhead_footer_mm || 25),
     owners: parseJsonArray(row?.owners_json), professionals: parseJsonArray(row?.professionals_json),
-    consentTitle: row?.consent_title || '', consentText: row?.consent_text || '', privacyContact: row?.privacy_contact || ''
+    consentTitle: row?.consent_title || '', consentText: row?.consent_text || '', privacyContact: row?.privacy_contact || '',
+    consentRenewalMonths: Number(row?.consent_renewal_months || 0)
   };
 }
 
@@ -232,7 +233,7 @@ app.get('/api/tuss', auth, (req, res) => {
 });
 
 app.put('/api/settings', auth, requireRole('admin'), (req, res) => {
-  const { legalName, tradeName, cnpj, cnes, phone, instagram, address, city, state, postalCode, logoDataUrl, letterheadDataUrl, letterheadHeaderMm = 35, letterheadFooterMm = 25, owners = [], professionals = [], consentTitle = '', consentText = '', privacyContact = '' } = req.body;
+  const { legalName, tradeName, cnpj, cnes, phone, instagram, address, city, state, postalCode, logoDataUrl, letterheadDataUrl, letterheadHeaderMm = 35, letterheadFooterMm = 25, owners = [], professionals = [], consentTitle = '', consentText = '', privacyContact = '', consentRenewalMonths = 0 } = req.body;
   if (!tradeName) return res.status(400).json({ error: 'O nome da clínica é obrigatório.' });
   if (!Array.isArray(owners) || !Array.isArray(professionals)) return res.status(400).json({ error: 'Responsáveis e profissionais devem ser listas.' });
   if (cnes && !/^\d{7}$/.test(String(cnes))) return res.status(400).json({ error: 'O CNES deve possuir 7 dígitos.' });
@@ -241,12 +242,14 @@ app.put('/api/settings', auth, requireRole('admin'), (req, res) => {
   if (logoDataUrl && !/^data:image\/(png|jpeg);base64,/i.test(logoDataUrl)) return res.status(400).json({ error: 'Use um logotipo PNG ou JPEG.' });
   if (letterheadDataUrl && !/^data:image\/(png|jpeg);base64,/i.test(letterheadDataUrl)) return res.status(400).json({ error: 'Use um papel timbrado em PNG ou JPEG.' });
   if (String(consentTitle).length > 120 || String(consentText).length > 5000 || String(privacyContact).length > 180) return res.status(400).json({ error: 'Revise o tamanho do título, texto do consentimento e contato de privacidade.' });
+  const safeConsentRenewalMonths = Number(consentRenewalMonths);
+  if (!Number.isInteger(safeConsentRenewalMonths) || safeConsentRenewalMonths < 0 || safeConsentRenewalMonths > 60) return res.status(400).json({ error: 'O prazo de renovação deve ser de 0 a 60 meses.' });
   const safeHeaderMm = Math.min(Math.max(Number(letterheadHeaderMm) || 35, 20), 70);
   const safeFooterMm = Math.min(Math.max(Number(letterheadFooterMm) || 25, 15), 50);
-  db.prepare(`INSERT INTO clinic_settings (clinic_id, legal_name, trade_name, cnpj, cnes, phone, instagram, address, city, state, postal_code, logo_data_url, letterhead_data_url, letterhead_header_mm, letterhead_footer_mm, owners_json, professionals_json, consent_title, consent_text, privacy_contact)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(clinic_id) DO UPDATE SET legal_name=excluded.legal_name, trade_name=excluded.trade_name, cnpj=excluded.cnpj, cnes=excluded.cnes, phone=excluded.phone, instagram=excluded.instagram, address=excluded.address, city=excluded.city, state=excluded.state, postal_code=excluded.postal_code, logo_data_url=excluded.logo_data_url, letterhead_data_url=excluded.letterhead_data_url, letterhead_header_mm=excluded.letterhead_header_mm, letterhead_footer_mm=excluded.letterhead_footer_mm, owners_json=excluded.owners_json, professionals_json=excluded.professionals_json, consent_title=excluded.consent_title, consent_text=excluded.consent_text, privacy_contact=excluded.privacy_contact, updated_at=CURRENT_TIMESTAMP`)
-    .run(req.session.clinicId, legalName || '', tradeName, cnpj || '', cnes || '', phone || '', instagram || '', address || '', city || '', state || '', postalCode || '', logoDataUrl || '', letterheadDataUrl || '', safeHeaderMm, safeFooterMm, JSON.stringify(owners), JSON.stringify(professionals), String(consentTitle).trim(), String(consentText).trim(), String(privacyContact).trim());
+  db.prepare(`INSERT INTO clinic_settings (clinic_id, legal_name, trade_name, cnpj, cnes, phone, instagram, address, city, state, postal_code, logo_data_url, letterhead_data_url, letterhead_header_mm, letterhead_footer_mm, owners_json, professionals_json, consent_title, consent_text, privacy_contact, consent_renewal_months)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(clinic_id) DO UPDATE SET legal_name=excluded.legal_name, trade_name=excluded.trade_name, cnpj=excluded.cnpj, cnes=excluded.cnes, phone=excluded.phone, instagram=excluded.instagram, address=excluded.address, city=excluded.city, state=excluded.state, postal_code=excluded.postal_code, logo_data_url=excluded.logo_data_url, letterhead_data_url=excluded.letterhead_data_url, letterhead_header_mm=excluded.letterhead_header_mm, letterhead_footer_mm=excluded.letterhead_footer_mm, owners_json=excluded.owners_json, professionals_json=excluded.professionals_json, consent_title=excluded.consent_title, consent_text=excluded.consent_text, privacy_contact=excluded.privacy_contact, consent_renewal_months=excluded.consent_renewal_months, updated_at=CURRENT_TIMESTAMP`)
+    .run(req.session.clinicId, legalName || '', tradeName, cnpj || '', cnes || '', phone || '', instagram || '', address || '', city || '', state || '', postalCode || '', logoDataUrl || '', letterheadDataUrl || '', safeHeaderMm, safeFooterMm, JSON.stringify(owners), JSON.stringify(professionals), String(consentTitle).trim(), String(consentText).trim(), String(privacyContact).trim(), safeConsentRenewalMonths);
   res.json({ saved: true });
 });
 

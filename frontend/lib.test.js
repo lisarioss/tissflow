@@ -33,6 +33,29 @@ test('consentAlertItems usa o evento mais recente e ignora paciente inativo', ()
   assert.match(alerts[0].title, /Comprovante de consentimento ausente/);
 });
 
+test('consentAlertItems avisa quando a renovação se aproxima ou está vencida', () => {
+  const patients = [
+    { id: 'P-1', name: 'Ana', consentStatus: 'granted' },
+    { id: 'P-2', name: 'Bia', consentStatus: 'granted' }
+  ];
+  const events = [
+    { patientId: 'P-1', eventDate: '2025-09-20', signedDocumentId: 'DOC-1' },
+    { patientId: 'P-2', eventDate: '2025-08-01', signedDocumentId: 'DOC-2' }
+  ];
+  const alerts = consentAlertItems(patients, events, 12, new Date('2026-09-04T12:00:00'));
+  assert.equal(alerts.length, 2);
+  assert.match(alerts[0].title, /vence em 16 dia/);
+  assert.equal(alerts[0].level, 'warning');
+  assert.match(alerts[1].title, /Consentimento vencido/);
+  assert.equal(alerts[1].level, 'critical');
+});
+
+test('consentAlertItems não impõe renovação quando o controle está desativado', () => {
+  const patients = [{ id: 'P-1', name: 'Ana', consentStatus: 'granted' }];
+  const events = [{ patientId: 'P-1', eventDate: '2020-01-01', signedDocumentId: 'DOC-1' }];
+  assert.deepEqual(consentAlertItems(patients, events, 0, new Date('2026-09-04T12:00:00')), []);
+});
+
 test('nextSequentialId gera o próximo número com base no maior ID existente', () => {
   const list = [{ id: 'G-2026-00478' }, { id: 'G-2026-00481' }];
   assert.equal(nextSequentialId(list, 'G-2026-', 5), 'G-2026-00482');

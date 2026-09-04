@@ -235,6 +235,7 @@ db.exec(`
     consent_title TEXT NOT NULL DEFAULT '',
     consent_text TEXT NOT NULL DEFAULT '',
     privacy_contact TEXT NOT NULL DEFAULT '',
+    consent_renewal_months INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
   CREATE TABLE IF NOT EXISTS tuss_imports (
@@ -305,6 +306,7 @@ if (!settingsColumns.has('cnes')) db.exec("ALTER TABLE clinic_settings ADD COLUM
 if (!settingsColumns.has('consent_title')) db.exec("ALTER TABLE clinic_settings ADD COLUMN consent_title TEXT NOT NULL DEFAULT ''");
 if (!settingsColumns.has('consent_text')) db.exec("ALTER TABLE clinic_settings ADD COLUMN consent_text TEXT NOT NULL DEFAULT ''");
 if (!settingsColumns.has('privacy_contact')) db.exec("ALTER TABLE clinic_settings ADD COLUMN privacy_contact TEXT NOT NULL DEFAULT ''");
+if (!settingsColumns.has('consent_renewal_months')) db.exec('ALTER TABLE clinic_settings ADD COLUMN consent_renewal_months INTEGER NOT NULL DEFAULT 0');
 const consentColumns = new Set(db.prepare('PRAGMA table_info(patient_consents)').all().map(column => column.name));
 if (!consentColumns.has('consent_title')) db.exec("ALTER TABLE patient_consents ADD COLUMN consent_title TEXT NOT NULL DEFAULT ''");
 if (!consentColumns.has('consent_text')) db.exec("ALTER TABLE patient_consents ADD COLUMN consent_text TEXT NOT NULL DEFAULT ''");

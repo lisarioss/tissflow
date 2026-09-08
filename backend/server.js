@@ -13,6 +13,10 @@ const { hasAppointmentConflict, weeklyDates } = require('./appointmentService');
 const { TISS_VERSION, calculateTissHash, validateTissXml } = require('./tissValidationService');
 const { parsePatientCsv, validatePatientImport } = require('./patientImportService');
 const { validatePatientData, findDuplicatePatient, patientStatusAuditDetails } = require('./patientValidationService');
+const { signBackup, validateBackup } = require('./backupIntegrityService');
+const { encryptBackup, decryptBackup } = require('./backupEncryptionService');
+const { restoreBackupDatabase, recoveryPointBelongsToClinic, recoveryPointsToRemove, recoveryPointName, hasDailyRecoveryPoint, backupHealth, latestRecoveryPointName } = require('./backupRestoreService');
+const { sessionVersionMatches, validateNewPassword, loginFailureState, accountIsLocked } = require('./authSecurityService');
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
@@ -43,8 +47,9 @@ function auth(req, res, next) {
   if (!token) return res.status(401).json({ error: 'Token não informado.' });
   try {
     req.session = jwt.verify(token, jwtSecret);
-    const user = db.prepare('SELECT role, active FROM users WHERE id = ? AND clinic_id = ?').get(req.session.userId, req.session.clinicId);
+    const user = db.prepare('SELECT role, active, token_version FROM users WHERE id = ? AND clinic_id = ?').get(req.session.userId, req.session.clinicId);
     if (!user?.active) return res.status(401).json({ error: 'Usuário inativo ou não encontrado.' });
+    if (!sessionVersionMatches(req.session.tokenVersion, user.token_version)) return res.status(401).json({ error: 'Sua senha foi alterada. Entre novamente.' });
     req.session.role = user.role;
     next();
   } catch {
@@ -95,6 +100,12 @@ function rateLimit({ windowMs, max, message, resetOnSuccess = false }) {
 const loginRateLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 15, resetOnSuccess: true, message: 'Muitas tentativas de acesso. Aguarde 15 minutos e tente novamente.' });
 const registrationRateLimit = rateLimit({ windowMs: 60 * 60 * 1000, max: 5, message: 'Limite de cadastros atingido. Aguarde uma hora e tente novamente.' });
 
+function recordLoginEvent(clinicId, userId, email, outcome, ipAddress) {
+  if (!db.prepare('SELECT 1 FROM clinics WHERE id = ?').get(clinicId)) return;
+  db.prepare('INSERT INTO login_events (clinic_id, user_id, email, outcome, ip_address) VALUES (?, ?, ?, ?, ?)').run(clinicId, userId || null, String(email || '').trim().toLowerCase().slice(0, 180), outcome, ipAddress || null);
+  db.prepare("DELETE FROM login_events WHERE created_at < datetime('now', '-180 days')").run();
+}
+
 function recordAudit(req, action, entityType, entityId = null, details = {}) {
   if (!req.session) return;
   db.prepare('INSERT INTO audit_logs (clinic_id, user_id, action, entity_type, entity_id, route, details_json, ip_address) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(req.session.clinicId, req.session.userId, action, entityType, entityId, req.originalUrl.split('?')[0], JSON.stringify(details), req.ip || null);
@@ -137,7 +148,7 @@ app.get('/api/clinics', (req, res) => {
 
 app.post('/api/auth/register-clinic', registrationRateLimit, (req, res) => {
   const { clinicName, unit, cnpj, cnes, adminName, email, password } = req.body;
-  if (String(clinicName || '').trim().length < 3 || String(adminName || '').trim().length < 3 || !/^\S+@\S+\.\S+$/.test(String(email || '')) || String(password || '').length < 8) return res.status(400).json({ error: 'Informe clínica, responsável, e-mail válido e senha de pelo menos 8 caracteres.' });
+  if (String(clinicName || '').trim().length < 3 || String(adminName || '').trim().length < 3 || !/^\S+@\S+\.\S+$/.test(String(email || '')) || String(password || '').length < 12) return res.status(400).json({ error: 'Informe clínica, responsável, e-mail válido e senha de pelo menos 12 caracteres.' });
   if (cnes && !/^\d{7}$/.test(String(cnes))) return res.status(400).json({ error: 'O CNES deve possuir 7 dígitos.' });
   const baseSlug = String(clinicName).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 32) || 'clinica';
   let clinicId = baseSlug;
@@ -153,7 +164,7 @@ app.post('/api/auth/register-clinic', registrationRateLimit, (req, res) => {
     })();
     const clinic = { id: clinicId, name: String(clinicName).trim(), unit: String(unit || 'Unidade principal').trim() };
     const user = { id: userId, name: String(adminName).trim(), email: String(email).trim().toLowerCase(), role: 'admin' };
-    const token = jwt.sign({ userId, clinicId, role: 'admin' }, jwtSecret, { expiresIn: '8h' });
+    const token = jwt.sign({ userId, clinicId, role: 'admin', tokenVersion: 0 }, jwtSecret, { expiresIn: '8h' });
     res.status(201).json({ token, user, clinicId, clinic });
   } catch (error) { res.status(409).json({ error: error.message.includes('UNIQUE') ? 'Este e-mail já está cadastrado nesta clínica.' : error.message }); }
 });
@@ -161,11 +172,39 @@ app.post('/api/auth/register-clinic', registrationRateLimit, (req, res) => {
 app.post('/api/auth/login', loginRateLimit, (req, res) => {
   const { clinicId, email, password } = req.body;
   const user = db.prepare('SELECT * FROM users WHERE clinic_id = ? AND lower(email) = lower(?)').get(clinicId, email);
-  if (!user || !user.active || !bcrypt.compareSync(password || '', user.password_hash)) return res.status(401).json({ error: 'Credenciais inválidas.' });
+  if (user && accountIsLocked(user.locked_until)) {
+    recordLoginEvent(clinicId, user.id, email, 'blocked', req.ip);
+    return res.status(429).json({ error: 'Conta temporariamente bloqueada por tentativas incorretas. Tente novamente mais tarde ou fale com o administrador.' });
+  }
+  if (!user || !user.active || !bcrypt.compareSync(password || '', user.password_hash)) {
+    if (user?.active) {
+      const currentAttempts = user.locked_until && !accountIsLocked(user.locked_until) ? 0 : user.failed_login_attempts;
+      const failure = loginFailureState(currentAttempts);
+      db.prepare('UPDATE users SET failed_login_attempts = ?, locked_until = ? WHERE id = ? AND clinic_id = ?').run(failure.attempts, failure.lockedUntil || '', user.id, user.clinic_id);
+    }
+    recordLoginEvent(clinicId, user?.id, email, 'failure', req.ip);
+    return res.status(401).json({ error: 'Credenciais inválidas.' });
+  }
 
-  const token = jwt.sign({ userId: user.id, clinicId: user.clinic_id, role: user.role }, jwtSecret, { expiresIn: '8h' });
+  db.prepare("UPDATE users SET failed_login_attempts = 0, locked_until = '' WHERE id = ? AND clinic_id = ?").run(user.id, user.clinic_id);
+  recordLoginEvent(clinicId, user.id, email, 'success', req.ip);
+  const token = jwt.sign({ userId: user.id, clinicId: user.clinic_id, role: user.role, tokenVersion: Number(user.token_version || 0) }, jwtSecret, { expiresIn: '8h' });
   const clinic = db.prepare('SELECT id, name, unit FROM clinics WHERE id = ?').get(user.clinic_id);
   res.json({ token, user: { id: user.id, name: user.name, email: user.email, role: user.role }, clinicId: user.clinic_id, clinic });
+});
+
+app.post('/api/auth/change-password', auth, (req, res) => {
+  const { currentPassword, newPassword } = req.body || {};
+  const passwordError = validateNewPassword(newPassword);
+  if (passwordError) return res.status(400).json({ error: passwordError });
+  const user = db.prepare('SELECT * FROM users WHERE id = ? AND clinic_id = ?').get(req.session.userId, req.session.clinicId);
+  if (!user || !bcrypt.compareSync(String(currentPassword || ''), user.password_hash)) return res.status(401).json({ error: 'A senha atual não confere.' });
+  if (bcrypt.compareSync(String(newPassword), user.password_hash)) return res.status(400).json({ error: 'Escolha uma senha diferente da atual.' });
+  const tokenVersion = Number(user.token_version || 0) + 1;
+  db.prepare('UPDATE users SET password_hash = ?, token_version = ? WHERE id = ? AND clinic_id = ?').run(bcrypt.hashSync(String(newPassword), 10), tokenVersion, user.id, user.clinic_id);
+  const token = jwt.sign({ userId: user.id, clinicId: user.clinic_id, role: user.role, tokenVersion }, jwtSecret, { expiresIn: '8h' });
+  req.auditDetails = { sessionsRevoked: true };
+  res.json({ token });
 });
 
 app.get('/api/settings', auth, (req, res) => {
@@ -175,14 +214,21 @@ app.get('/api/settings', auth, (req, res) => {
 });
 
 app.get('/api/users', auth, requireRole('admin'), (req, res) => {
-  const users = db.prepare('SELECT id, name, email, role, active FROM users WHERE clinic_id = ? ORDER BY active DESC, name').all(req.session.clinicId);
-  res.json(users.map(user => ({ ...user, active: Boolean(user.active) })));
+  const users = db.prepare('SELECT id, name, email, role, active, failed_login_attempts AS failedLoginAttempts, locked_until AS lockedUntil FROM users WHERE clinic_id = ? ORDER BY active DESC, name').all(req.session.clinicId);
+  res.json(users.map(user => ({ ...user, active: Boolean(user.active), locked: accountIsLocked(user.lockedUntil) })));
+});
+
+app.get('/api/security/login-events', auth, requireRole('admin'), (req, res) => {
+  const events = db.prepare(`SELECT login_events.id, login_events.email, login_events.outcome, login_events.created_at AS createdAt,
+    users.name AS userName FROM login_events LEFT JOIN users ON users.id = login_events.user_id
+    WHERE login_events.clinic_id = ? ORDER BY login_events.created_at DESC, login_events.id DESC LIMIT 100`).all(req.session.clinicId);
+  res.json(events);
 });
 
 app.post('/api/users', auth, requireRole('admin'), (req, res) => {
   const { name, email, password, role } = req.body;
   const allowedRoles = ['admin', 'faturamento', 'recepcao', 'medico'];
-  if (!String(name || '').trim() || !/^\S+@\S+\.\S+$/.test(String(email || '')) || String(password || '').length < 8 || !allowedRoles.includes(role)) return res.status(400).json({ error: 'Informe nome, e-mail válido, perfil e uma senha de pelo menos 8 caracteres.' });
+  if (!String(name || '').trim() || !/^\S+@\S+\.\S+$/.test(String(email || '')) || String(password || '').length < 12 || !allowedRoles.includes(role)) return res.status(400).json({ error: 'Informe nome, e-mail válido, perfil e uma senha de pelo menos 12 caracteres.' });
   const id = `USR-${req.session.clinicId}-${Date.now()}`;
   try {
     db.prepare('INSERT INTO users (id, clinic_id, name, email, password_hash, role, active) VALUES (?, ?, ?, ?, ?, ?, 1)').run(id, req.session.clinicId, String(name).trim(), String(email).trim().toLowerCase(), bcrypt.hashSync(password, 10), role);
@@ -195,16 +241,24 @@ app.put('/api/users/:id', auth, requireRole('admin'), (req, res) => {
   if (!current) return res.status(404).json({ error: 'Usuário não encontrado.' });
   const { name, email, password, role, active = true } = req.body;
   const allowedRoles = ['admin', 'faturamento', 'recepcao', 'medico'];
-  if (!String(name || '').trim() || !/^\S+@\S+\.\S+$/.test(String(email || '')) || !allowedRoles.includes(role) || (password && String(password).length < 8)) return res.status(400).json({ error: 'Revise nome, e-mail, perfil e a nova senha (mínimo de 8 caracteres).' });
+  if (!String(name || '').trim() || !/^\S+@\S+\.\S+$/.test(String(email || '')) || !allowedRoles.includes(role) || (password && String(password).length < 12)) return res.status(400).json({ error: 'Revise nome, e-mail, perfil e a nova senha (mínimo de 12 caracteres).' });
   if (current.id === req.session.userId && !active) return res.status(409).json({ error: 'Você não pode desativar o próprio acesso.' });
+  if (current.id === req.session.userId && password) return res.status(409).json({ error: 'Altere sua própria senha na seção Segurança da conta.' });
   const removesAdmin = current.role === 'admin' && current.active && (role !== 'admin' || !active);
   const activeAdmins = db.prepare("SELECT count(*) AS total FROM users WHERE clinic_id = ? AND role = 'admin' AND active = 1").get(req.session.clinicId).total;
   if (removesAdmin && activeAdmins <= 1) return res.status(409).json({ error: 'A clínica precisa manter pelo menos um administrador ativo.' });
   try {
-    if (password) db.prepare('UPDATE users SET name = ?, email = ?, role = ?, active = ?, password_hash = ? WHERE id = ? AND clinic_id = ?').run(String(name).trim(), String(email).trim().toLowerCase(), role, active ? 1 : 0, bcrypt.hashSync(password, 10), current.id, req.session.clinicId);
+    if (password) db.prepare('UPDATE users SET name = ?, email = ?, role = ?, active = ?, password_hash = ?, token_version = token_version + 1 WHERE id = ? AND clinic_id = ?').run(String(name).trim(), String(email).trim().toLowerCase(), role, active ? 1 : 0, bcrypt.hashSync(password, 10), current.id, req.session.clinicId);
     else db.prepare('UPDATE users SET name = ?, email = ?, role = ?, active = ? WHERE id = ? AND clinic_id = ?').run(String(name).trim(), String(email).trim().toLowerCase(), role, active ? 1 : 0, current.id, req.session.clinicId);
     res.json({ id: current.id });
   } catch (error) { res.status(409).json({ error: error.message.includes('UNIQUE') ? 'Já existe um usuário com esse e-mail na clínica.' : error.message }); }
+});
+
+app.post('/api/users/:id/unlock', auth, requireRole('admin'), (req, res) => {
+  const result = db.prepare("UPDATE users SET failed_login_attempts = 0, locked_until = '' WHERE id = ? AND clinic_id = ?").run(req.params.id, req.session.clinicId);
+  if (!result.changes) return res.status(404).json({ error: 'Usuário não encontrado.' });
+  req.auditDetails = { accountUnlocked: true };
+  res.json({ id: req.params.id, unlocked: true });
 });
 
 app.get('/api/tuss', auth, (req, res) => {
@@ -255,6 +309,47 @@ app.put('/api/settings', auth, requireRole('admin'), (req, res) => {
   res.json({ saved: true });
 });
 
+function buildClinicBackup(clinicId) {
+  const clinic = db.prepare('SELECT id, name, unit FROM clinics WHERE id = ?').get(clinicId);
+  const byClinic = table => db.prepare(`SELECT * FROM ${table} WHERE clinic_id = ?`).all(clinicId);
+  const users = db.prepare('SELECT id, clinic_id, name, email, role, active FROM users WHERE clinic_id = ?').all(clinicId);
+  const documents = byClinic('patient_documents').map(document => {
+    const storagePath = path.join(__dirname, 'uploads', clinicId, path.basename(document.storage_name));
+    return { ...document, content_base64: fs.existsSync(storagePath) ? fs.readFileSync(storagePath).toString('base64') : null };
+  });
+  const batchGuides = db.prepare(`SELECT billing_batch_guides.* FROM billing_batch_guides JOIN billing_batches ON billing_batches.id = billing_batch_guides.batch_id WHERE billing_batches.clinic_id = ?`).all(clinicId);
+  return signBackup({ format: 'tiss-flow-backup', version: 1, exportedAt: new Date().toISOString(), clinic, data: {
+    clinicSettings: db.prepare('SELECT * FROM clinic_settings WHERE clinic_id = ?').get(clinicId) || null,
+    users, patients: byClinic('patients'), guides: byClinic('guides'), insurers: byClinic('insurers'), invoices: byClinic('invoices'),
+    glosas: byClinic('glosas'), authorizations: byClinic('authorizations'), billingBatches: byClinic('billing_batches'),
+    billingBatchGuides: batchGuides, feedbacks: byClinic('feedbacks'), patientDocuments: documents,
+    patientConsents: byClinic('patient_consents'), appointments: byClinic('appointments'), auditLogs: byClinic('audit_logs')
+  } });
+}
+
+function createRecoveryPoint(clinicId, reason = 'manual') {
+  const recoveryRoot = path.join(__dirname, 'recovery-backups');
+  fs.mkdirSync(recoveryRoot, { recursive: true });
+  const name = recoveryPointName(clinicId, reason);
+  fs.writeFileSync(path.join(recoveryRoot, name), JSON.stringify(buildClinicBackup(clinicId)), { encoding: 'utf8', flag: 'wx' });
+  recoveryPointsToRemove(fs.readdirSync(recoveryRoot), clinicId, 20).forEach(oldName => fs.unlinkSync(path.join(recoveryRoot, oldName)));
+  return { name, reason };
+}
+
+function ensureDailyRecoveryPoints(now = new Date()) {
+  const recoveryRoot = path.join(__dirname, 'recovery-backups');
+  fs.mkdirSync(recoveryRoot, { recursive: true });
+  const names = fs.readdirSync(recoveryRoot);
+  db.prepare('SELECT id FROM clinics').all().forEach(({ id }) => {
+    const latestDaily = latestRecoveryPointName(names, id, 'daily');
+    let latestIsValid = false;
+    if (latestDaily && hasDailyRecoveryPoint(names, id, now)) {
+      try { latestIsValid = validateBackup(JSON.parse(fs.readFileSync(path.join(recoveryRoot, latestDaily), 'utf8')), id).valid; } catch {}
+    }
+    if (!latestIsValid) createRecoveryPoint(id, 'daily');
+  });
+}
+
 app.get('/api/backup', auth, requireRole('admin'), (req, res) => {
   const clinicId = req.session.clinicId;
   const clinic = db.prepare('SELECT id, name, unit FROM clinics WHERE id = ?').get(clinicId);
@@ -265,7 +360,7 @@ app.get('/api/backup', auth, requireRole('admin'), (req, res) => {
     return { ...document, content_base64: fs.existsSync(storagePath) ? fs.readFileSync(storagePath).toString('base64') : null };
   });
   const batchGuides = db.prepare(`SELECT billing_batch_guides.* FROM billing_batch_guides JOIN billing_batches ON billing_batches.id = billing_batch_guides.batch_id WHERE billing_batches.clinic_id = ?`).all(clinicId);
-  const backup = {
+  const backup = signBackup({
     format: 'tiss-flow-backup', version: 1, exportedAt: new Date().toISOString(), clinic,
     data: {
       clinicSettings: db.prepare('SELECT * FROM clinic_settings WHERE clinic_id = ?').get(clinicId) || null,
@@ -274,13 +369,131 @@ app.get('/api/backup', auth, requireRole('admin'), (req, res) => {
       billingBatches: byClinic('billing_batches'), billingBatchGuides: batchGuides, feedbacks: byClinic('feedbacks'),
       patientDocuments: documents, patientConsents: byClinic('patient_consents'), appointments: byClinic('appointments'), auditLogs: byClinic('audit_logs')
     }
-  };
+  });
   recordAudit(req, 'download', 'backup', clinicId, { document: 'clinic-backup', version: backup.version });
   const stamp = new Date().toISOString().slice(0, 10);
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="backup-${clinicId}-${stamp}.json"`);
   res.send(JSON.stringify(backup));
+});
+
+app.post('/api/backup/encrypted', auth, requireRole('admin'), (req, res) => {
+  try {
+    const encrypted = encryptBackup(buildClinicBackup(req.session.clinicId), req.body?.password);
+    req.auditDetails = { document: 'encrypted-clinic-backup', encryption: 'AES-256-GCM' };
+    const stamp = new Date().toISOString().slice(0, 10);
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="backup-protegido-${req.session.clinicId}-${stamp}.tissbackup"`);
+    res.send(JSON.stringify(encrypted));
+  } catch (error) { res.status(400).json({ error: error.message }); }
+});
+
+app.post('/api/backup/encrypted/validate', auth, requireRole('admin'), (req, res) => {
+  try {
+    const backup = decryptBackup(req.body?.envelope, req.body?.password);
+    const result = validateBackup(backup, req.session.clinicId);
+    req.auditDetails = { encryptedBackupValidation: result.valid ? 'valid' : 'invalid' };
+    if (!result.valid) return res.status(400).json(result);
+    res.json(result);
+  } catch (error) {
+    req.auditDetails = { encryptedBackupValidation: 'invalid' };
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post('/api/backup/encrypted/restore', auth, requireRole('admin'), (req, res) => {
+  if (req.body?.confirmation !== 'RESTAURAR') return res.status(400).json({ error: 'Digite RESTAURAR para confirmar a substituição dos dados.' });
+  let backup;
+  try { backup = decryptBackup(req.body?.envelope, req.body?.password); }
+  catch (error) { return res.status(400).json({ error: error.message }); }
+  const validation = validateBackup(backup, req.session.clinicId);
+  if (!validation.valid) return res.status(400).json(validation);
+  const recoveryName = createRecoveryPoint(req.session.clinicId, 'before-restore').name;
+  try {
+    const restored = restoreBackupDatabase(db, backup, req.session.clinicId, req.session.userId);
+    const clinicDirectory = path.join(__dirname, 'uploads', req.session.clinicId);
+    fs.mkdirSync(clinicDirectory, { recursive: true });
+    (backup.data.patientDocuments || []).forEach(document => {
+      if (document.content_base64 && document.storage_name) fs.writeFileSync(path.join(clinicDirectory, path.basename(document.storage_name)), Buffer.from(document.content_base64, 'base64'));
+    });
+    req.auditDetails = { encryptedBackupRestore: 'completed', recoveryFile: recoveryName, restored };
+    res.json({ restored: true, recoveryFile: recoveryName, summary: validation.summary });
+  } catch (error) {
+    console.error('Falha ao restaurar backup protegido:', error.message);
+    res.status(500).json({ error: 'A restauração não pôde ser concluída. O ponto de recuperação foi preservado.' });
+  }
+});
+
+app.post('/api/backup/validate', auth, requireRole('admin'), (req, res) => {
+  const result = validateBackup(req.body, req.session.clinicId);
+  req.auditDetails = { backupValidation: result.valid ? 'valid' : 'invalid' };
+  if (!result.valid) return res.status(400).json(result);
+  res.json(result);
+});
+
+app.post('/api/backup/restore', auth, requireRole('admin'), (req, res) => {
+  const { backup, confirmation } = req.body || {};
+  if (confirmation !== 'RESTAURAR') return res.status(400).json({ error: 'Digite RESTAURAR para confirmar a substituição dos dados.' });
+  const validation = validateBackup(backup, req.session.clinicId);
+  if (!validation.valid) return res.status(400).json(validation);
+  const recoveryName = createRecoveryPoint(req.session.clinicId, 'before-restore').name;
+  try {
+    const restored = restoreBackupDatabase(db, backup, req.session.clinicId, req.session.userId);
+    const clinicDirectory = path.join(__dirname, 'uploads', req.session.clinicId);
+    fs.mkdirSync(clinicDirectory, { recursive: true });
+    (backup.data.patientDocuments || []).forEach(document => {
+      if (document.content_base64 && document.storage_name) fs.writeFileSync(path.join(clinicDirectory, path.basename(document.storage_name)), Buffer.from(document.content_base64, 'base64'));
+    });
+    req.auditDetails = { backupRestore: 'completed', recoveryFile: recoveryName, restored };
+    res.json({ restored: true, recoveryFile: recoveryName, summary: validation.summary });
+  } catch (error) {
+    console.error('Falha ao restaurar backup:', error.message);
+    res.status(500).json({ error: 'A restauração não pôde ser concluída. O ponto de recuperação foi preservado.' });
+  }
+});
+
+app.post('/api/backup/recovery-points', auth, requireRole('admin'), (req, res) => {
+  try {
+    const reason = req.body?.reason === 'daily' ? 'daily' : 'manual';
+    const point = createRecoveryPoint(req.session.clinicId, reason);
+    req.auditDetails = { recoveryPoint: 'created', file: point.name };
+    res.status(201).json(point);
+  } catch (error) { res.status(500).json({ error: 'Não foi possível criar o ponto de recuperação.' }); }
+});
+
+app.get('/api/backup/recovery-points', auth, requireRole('admin'), (req, res) => {
+  const recoveryRoot = path.join(__dirname, 'recovery-backups');
+  if (!fs.existsSync(recoveryRoot)) return res.json([]);
+  const points = fs.readdirSync(recoveryRoot)
+    .filter(name => recoveryPointBelongsToClinic(name, req.session.clinicId))
+    .map(name => { const stats = fs.statSync(path.join(recoveryRoot, name)); const reason = name.includes('--') ? name.split('--')[0] : 'before-restore'; return { name, reason, createdAt: stats.mtime.toISOString(), sizeBytes: stats.size }; })
+    .sort((first, second) => second.createdAt.localeCompare(first.createdAt));
+  res.json(points);
+});
+
+app.get('/api/backup/status', auth, requireRole('admin'), (req, res) => {
+  const recoveryRoot = path.join(__dirname, 'recovery-backups');
+  const names = fs.existsSync(recoveryRoot) ? fs.readdirSync(recoveryRoot).filter(name => recoveryPointBelongsToClinic(name, req.session.clinicId)) : [];
+  const health = backupHealth(names, req.session.clinicId);
+  const latestDaily = latestRecoveryPointName(names, req.session.clinicId, 'daily');
+  let integrityStatus = latestDaily ? 'corrupt' : 'missing';
+  if (latestDaily) {
+    try {
+      const backup = JSON.parse(fs.readFileSync(path.join(recoveryRoot, latestDaily), 'utf8'));
+      integrityStatus = validateBackup(backup, req.session.clinicId).valid ? 'valid' : 'corrupt';
+    } catch {}
+  }
+  res.json({ ...health, healthy: health.healthy && integrityStatus === 'valid', integrityStatus, recoveryPointCount: names.length, retentionLimit: 20 });
+});
+
+app.get('/api/backup/recovery-points/:name', auth, requireRole('admin'), (req, res) => {
+  const name = path.basename(req.params.name);
+  if (!recoveryPointBelongsToClinic(req.params.name, req.session.clinicId)) return res.status(400).json({ error: 'Ponto de recuperação inválido.' });
+  const filePath = path.join(__dirname, 'recovery-backups', name);
+  if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Ponto de recuperação não encontrado.' });
+  recordAudit(req, 'download', 'backup', req.session.clinicId, { document: 'recovery-point', file: name });
+  res.download(filePath, name);
 });
 
 function csvCell(value) { return `"${String(value ?? '').replace(/"/g, '""')}"`; }
@@ -1004,4 +1217,11 @@ app.use((error, req, res, next) => {
   res.status(500).json({ error: 'Erro interno do servidor.' });
 });
 
-app.listen(port, () => console.log(`TISS Flow API disponível em http://localhost:${port}`));
+app.listen(port, () => {
+  console.log(`TISS Flow API disponível em http://localhost:${port}`);
+  try { ensureDailyRecoveryPoints(); } catch (error) { console.error('Falha ao criar backup diário:', error.message); }
+  const dailyBackupTimer = setInterval(() => {
+    try { ensureDailyRecoveryPoints(); } catch (error) { console.error('Falha ao criar backup diário:', error.message); }
+  }, 6 * 60 * 60 * 1000);
+  dailyBackupTimer.unref();
+});

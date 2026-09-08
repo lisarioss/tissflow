@@ -74,11 +74,15 @@ let feedbacks = JSON.parse(localStorage.getItem(clinicStorageKey('feedbacks')) |
 let patientDocuments = [];
 let patientConsents = [];
 let patientImportFeedback = null;
+let validatedBackupForRestore = null;
+let encryptedBackupForRestore = null;
+let encryptedBackupPassword = '';
 let patientStatusFilter = 'active';
 let patientPage = 1;
 const patientPageSize = 20;
 let auditLogs = [];
 let users = clinicUsers[activeClinicId] || [];
+let loginEvents = [];
 let selectedReportCompetence = '';
 function saveFeedbacks() { localStorage.setItem(clinicStorageKey('feedbacks'), JSON.stringify(feedbacks)); }
 let clinicSettings = JSON.parse(localStorage.getItem(clinicStorageKey('settings')) || 'null') || { tradeName: clinicProfiles[activeClinicId]?.name || '', legalName: '', cnpj: '', cnes: '', phone: '', instagram: '', address: '', city: '', state: '', postalCode: '', logoDataUrl: '', letterheadDataUrl: '', letterheadHeaderMm: 35, letterheadFooterMm: 25, owners: [], professionals: [], consentTitle: '', consentText: '', privacyContact: '', consentRenewalMonths: 0 };
@@ -330,7 +334,7 @@ async function loadApiData() {
     patientConsents = apiPatientConsents;
     if (userCan('agenda')) appointments = apiAppointments;
     if (userCan('audit')) auditLogs = await apiRequest('/audit-logs');
-    if (userCan('users')) users = await apiRequest('/users');
+    if (userCan('users')) { users = await apiRequest('/users'); loginEvents = await apiRequest('/security/login-events'); }
     updateNotificationBadge();
     render();
   } catch (error) {
@@ -833,11 +837,30 @@ function professionalsFromSettingsForm(form) {
     return { name: value('name'), title: value('title'), councilType, councilNumber, councilState: value('councilState').toUpperCase(), cbo: value('cbo'), council: `${councilType} ${councilNumber}`.trim() };
   }).filter(professional => professional.name);
 }
+function ensureBackupValidationControls() {
+  const downloadButton = document.querySelector('[data-action="download-backup"]');
+  if (!downloadButton || document.querySelector('[data-action="choose-backup-validation"]')) return;
+  const validateButton = document.createElement('button');
+  validateButton.type = 'button'; validateButton.className = 'secondary-button'; validateButton.dataset.action = 'choose-backup-validation'; validateButton.textContent = 'Validar backup';
+  const input = document.createElement('input');
+  input.id = 'backup-validation-file'; input.type = 'file'; input.accept = '.json,application/json'; input.hidden = true;
+  const recoveryButton = document.createElement('button');
+  recoveryButton.type = 'button'; recoveryButton.className = 'secondary-button'; recoveryButton.dataset.action = 'list-recovery-points'; recoveryButton.textContent = 'Pontos de recuperação';
+  const encryptedButton = document.createElement('button');
+  encryptedButton.type = 'button'; encryptedButton.className = 'secondary-button'; encryptedButton.dataset.action = 'open-encrypted-backup'; encryptedButton.textContent = 'Backup protegido';
+  const encryptedRestoreButton = document.createElement('button');
+  encryptedRestoreButton.type = 'button'; encryptedRestoreButton.className = 'secondary-button'; encryptedRestoreButton.dataset.action = 'choose-encrypted-backup'; encryptedRestoreButton.textContent = 'Restaurar protegido';
+  const encryptedInput = document.createElement('input');
+  encryptedInput.id = 'encrypted-backup-file'; encryptedInput.type = 'file'; encryptedInput.accept = '.tissbackup,application/json'; encryptedInput.hidden = true;
+  downloadButton.before(recoveryButton, validateButton, encryptedButton, encryptedRestoreButton, input, encryptedInput);
+}
 function settingsView() {
   const logo = clinicSettings.letterheadDataUrl ? '<p class="panel-subtitle">Papel timbrado A4 cadastrado.</p>' : clinicSettings.logoDataUrl ? `<img src="${clinicSettings.logoDataUrl}" alt="Logotipo atual" style="max-width:180px;max-height:90px;object-fit:contain" />` : '<p class="panel-subtitle">Nenhum timbrado cadastrado.</p>';
   const owners = clinicSettings.owners?.length ? clinicSettings.owners : [{}];
   const professionals = clinicSettings.professionals?.length ? clinicSettings.professionals : [{}];
+  queueMicrotask(() => { ensureBackupValidationControls(); loadBackupHealth(); });
   return `<div class="page-heading"><div><p class="eyebrow">Identidade dos documentos</p><h1>Configurações da clínica</h1><p class="heading-copy">Estes dados serão usados na capa e na guia impressa.</p></div><button class="secondary-button" data-action="download-backup">Baixar backup da clínica</button></div>
+    <div class="backup-health-card" id="backup-health"><strong>Proteção dos dados</strong><div><span>Verificando a cópia diária…</span><button type="button" class="text-button" data-action="refresh-daily-backup">Criar cópia agora</button></div></div>
     <form class="panel patient-form" id="settings-form">
       <div class="panel-header"><div><h2 class="panel-title">Timbrado e responsáveis</h2><p class="panel-subtitle">Somente administradores podem alterar estas informações.</p></div>${logo}</div>
       <div class="form-section">
@@ -862,14 +885,50 @@ function settingsView() {
         <div class="owners-settings"><div class="owners-settings-heading"><div><label>Profissionais da clínica</label><small>Conselho, UF e CBO são usados na guia eletrônica.</small></div><button type="button" class="secondary-button" data-action="add-professional">＋ Adicionar profissional</button></div><div id="professionals-settings-list">${professionals.map(professionalRowHtml).join('')}</div></div>
       </div>
       <div class="form-footer"><button class="primary-button" type="submit">Salvar configurações</button></div>
+    </form>
+    <form class="panel patient-form" id="change-password-form">
+      <div class="panel-header"><div><h2 class="panel-title">Segurança da conta</h2><p class="panel-subtitle">Ao trocar a senha, todas as outras sessões abertas serão encerradas.</p></div></div>
+      <div class="form-section"><div class="form-grid">
+        <div class="field"><label>Senha atual *</label><input name="currentPassword" type="password" required autocomplete="current-password" /></div>
+        <div class="field"><label>Nova senha *</label><input name="newPassword" type="password" minlength="12" required autocomplete="new-password" /></div>
+        <div class="field"><label>Confirmar nova senha *</label><input name="confirmation" type="password" minlength="12" required autocomplete="new-password" /></div>
+      </div></div>
+      <div class="form-footer"><button class="primary-button" type="submit">Alterar minha senha</button></div>
     </form>`;
+}
+
+async function loadBackupHealth() {
+  const card = document.querySelector('#backup-health');
+  if (!card || !activeSession?.token) return;
+  try {
+    const status = await apiRequest('/backup/status');
+    if (!document.body.contains(card)) return;
+    card.classList.toggle('backup-health-warning', !status.healthy);
+    const text = card.querySelector('span');
+    if (text) text.textContent = status.healthy
+      ? `Backup diário íntegro · última cópia ${new Date(status.lastDailyAt).toLocaleString('pt-BR')} · ${status.recoveryPointCount}/${status.retentionLimit} pontos armazenados`
+      : status.integrityStatus === 'corrupt'
+        ? 'Atenção: a cópia diária mais recente está corrompida ou foi alterada. Crie um novo ponto e verifique o armazenamento.'
+        : 'Atenção: nenhuma cópia diária recente foi encontrada. Use “Criar ponto agora” e verifique o servidor.';
+  } catch (error) {
+    card.classList.add('backup-health-warning');
+    const text = card.querySelector('span'); if (text) text.textContent = 'Não foi possível verificar a situação dos backups.';
+  }
 }
 function saveGuides() { localStorage.setItem(clinicStorageKey('guides'), JSON.stringify(guides)); }
 function restoreDraft() { const draft = JSON.parse(localStorage.getItem(clinicStorageKey('draft')) || 'null'); if (!draft) return; Object.entries(draft).forEach(([key, value]) => { const field = document.querySelector(`#${key}`); if (field) field.value = value; }); }
 function saveDraft(form) { localStorage.setItem(clinicStorageKey('draft'), JSON.stringify(Object.fromEntries(new FormData(form)))); }
 function render(view = 'overview') { breadcrumb.textContent = views[view] || views.overview; const safeView = userCan(view) ? view : 'overview'; appView.innerHTML = safeView === 'overview' ? overview() : safeView === 'alerts' ? alertsView() : safeView === 'agenda' ? agendaView() : safeView === 'guides' ? guideList() : safeView === 'authorizations' ? authorizationsView() : safeView === 'batches' ? batchesView() : safeView === 'financeiro' ? financeView() : safeView === 'reports' ? reportsView() : safeView === 'patients' ? patientsView() : safeView === 'users' ? usersView() : safeView === 'convenios' ? insurersView() : safeView === 'feedback' ? feedbackView() : safeView === 'settings' ? settingsView() : listing(views[safeView], `Gerencie ${views[safeView].toLowerCase()} em um só lugar.`, '↗'); document.querySelectorAll('.nav-item').forEach(item => { const visible = userCan(item.dataset.view); item.style.display = visible ? '' : 'none'; item.classList.toggle('active', item.dataset.view === safeView && visible); }); if (safeView === 'batches') batches.forEach(batch => { const card = document.querySelector(`[data-batch-id="${batch.id}"]`); const select = card?.querySelector('[data-batch-status]'); if (select) select.value = batch.status; }); updateNotificationBadge(); }
 function applySession() { const clinic = activeClinic; if (!clinic || !activeUser) return; const initials = clinic.initials || clinic.name.split(' ').map(name => name[0]).join('').slice(0, 2).toUpperCase(); document.querySelector('.workspace-switcher strong').textContent = clinic.name; document.querySelector('.workspace-switcher small').textContent = clinic.unit; document.querySelector('.workspace-switcher .avatar').textContent = initials; document.querySelector('#breadcrumb-clinic').textContent = clinic.name; document.querySelector('.profile strong').textContent = activeUser.name; document.querySelector('.profile small').textContent = activeUser.roleLabel || roleLabels[activeUser.role] || activeUser.role; document.querySelector('.user-button span:nth-child(2)').textContent = activeUser.name; document.querySelector('.user-button .avatar').textContent = activeUser.name.split(' ').map(name => name[0]).join('').slice(0, 2); }
-function usersView(editId = '') { const selected = users.find(user => user.id === editId); return `<div class="page-heading"><div><p class="eyebrow">Acesso e segurança</p><h1>Usuários da clínica</h1><p class="heading-copy">Cadastre a equipe e mantenha cada acesso no perfil correto.</p></div></div><div class="panel"><div class="panel-header"><div><h2 class="panel-title">Equipe</h2><p class="panel-subtitle">${users.filter(user => user.active !== false).length} acesso(s) ativo(s)</p></div></div><table><thead><tr><th>Nome</th><th>E-mail</th><th>Perfil</th><th>Situação</th><th></th></tr></thead><tbody>${users.map(user => `<tr><td><strong>${user.name}</strong></td><td>${user.email}</td><td>${roleLabels[user.role] || user.role}</td><td><span class="status ${user.active === false ? 'error' : 'approved'}">${user.active === false ? 'Inativo' : 'Ativo'}</span></td><td><button class="text-button" data-action="edit-user" data-user-id="${user.id}">Editar</button></td></tr>`).join('')}</tbody></table></div><form class="panel patient-form" id="user-form" data-user-id="${selected?.id || ''}"><div class="panel-header"><div><h2 class="panel-title">${selected ? 'Editar usuário' : 'Novo usuário'}</h2><p class="panel-subtitle">${selected ? 'Deixe a senha vazia para manter a atual.' : 'A senha inicial deve possuir pelo menos 8 caracteres.'}</p></div></div><div class="form-section"><div class="form-grid"><div class="field"><label>Nome *</label><input name="name" value="${selected?.name || ''}" required /></div><div class="field"><label>E-mail *</label><input name="email" type="email" value="${selected?.email || ''}" required /></div><div class="field"><label>Perfil *</label><select name="role" required>${Object.entries(roleLabels).map(([value,label]) => `<option value="${value}" ${selected?.role === value ? 'selected' : ''}>${label}</option>`).join('')}</select></div><div class="field"><label>${selected ? 'Nova senha' : 'Senha inicial *'}</label><input name="password" type="password" minlength="8" ${selected ? '' : 'required'} autocomplete="new-password" /></div>${selected ? `<label class="owner-active"><input name="active" type="checkbox" ${selected.active !== false ? 'checked' : ''} /> Usuário ativo</label>` : ''}</div></div><div class="form-footer"><button class="primary-button" type="submit">${selected ? 'Salvar alterações' : 'Cadastrar usuário'}</button>${selected ? '<button class="secondary-button" type="button" data-action="cancel-user-edit">Cancelar</button>' : ''}</div></form>`; }
+function loginEventsPanel() {
+  const labels = { success: 'Acesso autorizado', failure: 'Senha incorreta', blocked: 'Tentativa bloqueada' };
+  const rows = loginEvents.slice(0, 20).map(item => {
+    const timestamp = item.createdAt ? new Date(`${item.createdAt.replace(' ', 'T')}Z`).toLocaleString('pt-BR') : 'Data não informada';
+    return `<tr><td>${timestamp}</td><td><strong>${item.userName || 'Usuário não identificado'}</strong><small>${item.email}</small></td><td><span class="status ${item.outcome === 'success' ? 'approved' : 'error'}">${labels[item.outcome] || item.outcome}</span></td></tr>`;
+  }).join('');
+  return `<div class="panel"><div class="panel-header"><div><h2 class="panel-title">Histórico de acessos</h2><p class="panel-subtitle">Últimos registros de autenticação da clínica. O histórico é mantido por 180 dias.</p></div></div><table><thead><tr><th>Data e hora</th><th>Usuário</th><th>Resultado</th></tr></thead><tbody>${rows || '<tr><td colspan="3">Nenhum acesso registrado ainda.</td></tr>'}</tbody></table></div>`;
+}
+function usersView(editId = '') { const selected = users.find(user => user.id === editId); return `<div class="page-heading"><div><p class="eyebrow">Acesso e segurança</p><h1>Usuários da clínica</h1><p class="heading-copy">Cadastre a equipe e mantenha cada acesso no perfil correto.</p></div></div><div class="panel"><div class="panel-header"><div><h2 class="panel-title">Equipe</h2><p class="panel-subtitle">${users.filter(user => user.active !== false).length} acesso(s) ativo(s)</p></div></div><table><thead><tr><th>Nome</th><th>E-mail</th><th>Perfil</th><th>Situação</th><th></th></tr></thead><tbody>${users.map(user => `<tr><td><strong>${user.name}</strong></td><td>${user.email}</td><td>${roleLabels[user.role] || user.role}</td><td><span class="status ${user.active === false || user.locked ? 'error' : 'approved'}">${user.active === false ? 'Inativo' : user.locked ? 'Bloqueado' : 'Ativo'}</span></td><td>${user.locked ? `<button class="text-button" data-action="unlock-user" data-user-id="${user.id}">Desbloquear</button>` : ''}<button class="text-button" data-action="edit-user" data-user-id="${user.id}">Editar</button></td></tr>`).join('')}</tbody></table></div><form class="panel patient-form" id="user-form" data-user-id="${selected?.id || ''}"><div class="panel-header"><div><h2 class="panel-title">${selected ? 'Editar usuário' : 'Novo usuário'}</h2><p class="panel-subtitle">${selected ? 'Deixe a senha vazia para manter a atual.' : 'A senha inicial deve possuir pelo menos 12 caracteres.'}</p></div></div><div class="form-section"><div class="form-grid"><div class="field"><label>Nome *</label><input name="name" value="${selected?.name || ''}" required /></div><div class="field"><label>E-mail *</label><input name="email" type="email" value="${selected?.email || ''}" required /></div><div class="field"><label>Perfil *</label><select name="role" required>${Object.entries(roleLabels).map(([value,label]) => `<option value="${value}" ${selected?.role === value ? 'selected' : ''}>${label}</option>`).join('')}</select></div><div class="field"><label>${selected ? 'Nova senha' : 'Senha inicial *'}</label><input name="password" type="password" minlength="12" ${selected ? '' : 'required'} autocomplete="new-password" /></div>${selected ? `<label class="owner-active"><input name="active" type="checkbox" ${selected.active !== false ? 'checked' : ''} /> Usuário ativo</label>` : ''}</div></div><div class="form-footer"><button class="primary-button" type="submit">${selected ? 'Salvar alterações' : 'Cadastrar usuário'}</button>${selected ? '<button class="secondary-button" type="button" data-action="cancel-user-edit">Cancelar</button>' : ''}</div></form>${loginEventsPanel()}`; }
 function showToast(message) { toast.textContent = message; toast.classList.add('show'); setTimeout(() => toast.classList.remove('show'), 2800); }
 function createTissXml(data, guideId) {
   const sessions = JSON.parse(data.sessions || '[]');
@@ -1062,6 +1121,22 @@ document.addEventListener('submit', async event => {
   } catch (error) { showToast(error.message); }
 }, true);
 
+document.addEventListener('submit', async event => {
+  if (event.target.id !== 'change-password-form') return;
+  event.preventDefault(); event.stopImmediatePropagation();
+  const data = Object.fromEntries(new FormData(event.target));
+  if (data.newPassword.length < 12) { showToast('A nova senha deve possuir pelo menos 12 caracteres.'); return; }
+  if (data.newPassword !== data.confirmation) { showToast('A confirmação da nova senha não coincide.'); return; }
+  const button = event.target.querySelector('button[type="submit"]'); button.disabled = true; button.textContent = 'Alterando…';
+  try {
+    const result = await apiRequest('/auth/change-password', { method: 'POST', body: JSON.stringify({ currentPassword: data.currentPassword, newPassword: data.newPassword }) });
+    activeSession.token = result.token;
+    localStorage.setItem('tiss-session', JSON.stringify(activeSession));
+    event.target.reset(); showToast('Senha alterada. As outras sessões foram encerradas.');
+  } catch (error) { showToast(error.message); }
+  finally { button.disabled = false; button.textContent = 'Alterar minha senha'; }
+}, true);
+
 document.addEventListener('change', event => {
   if (!['batch-insurer', 'batch-competence'].includes(event.target.id)) return;
   const insurerId = document.querySelector('#batch-insurer')?.value;
@@ -1095,6 +1170,25 @@ document.addEventListener('submit', async event => {
     showToast('Lote criado com as exigências do convênio.');
   } catch (error) { showToast(error.message); }
 }, true);
+
+function showBackupPreview(result) {
+  document.querySelector('.backup-preview-overlay')?.remove();
+  const labels = { patients: 'Pacientes', guides: 'Guias', patientDocuments: 'Documentos', feedbacks: 'Feedbacks', authorizations: 'Autorizações', billingBatches: 'Lotes', appointments: 'Atendimentos', insurers: 'Convênios' };
+  const overlay = document.createElement('div');
+  overlay.className = 'backup-preview-overlay';
+  const card = document.createElement('section');
+  card.className = 'backup-preview-card';
+  const title = document.createElement('h2'); title.textContent = 'Backup íntegro e compatível';
+  const date = document.createElement('p'); date.textContent = `Exportado em ${result.exportedAt ? new Date(result.exportedAt).toLocaleString('pt-BR') : 'data não informada'} · versão ${result.version}`;
+  const grid = document.createElement('div'); grid.className = 'backup-preview-grid';
+  Object.entries(labels).forEach(([key, label]) => { const item = document.createElement('div'); const strong = document.createElement('strong'); strong.textContent = String(result.summary?.[key] || 0); const span = document.createElement('span'); span.textContent = label; item.append(strong, span); grid.append(item); });
+  const note = document.createElement('small'); note.textContent = 'Nenhum dado foi alterado. Para substituir os dados operacionais, digite RESTAURAR abaixo.';
+  const confirmation = document.createElement('input'); confirmation.id = 'backup-restore-confirmation'; confirmation.placeholder = 'Digite RESTAURAR'; confirmation.autocomplete = 'off';
+  const restore = document.createElement('button'); restore.type = 'button'; restore.className = 'danger-button'; restore.dataset.action = 'restore-validated-backup'; restore.textContent = 'Restaurar este backup'; restore.disabled = true;
+  const close = document.createElement('button'); close.type = 'button'; close.className = 'primary-button'; close.dataset.action = 'close-backup-preview'; close.textContent = 'Fechar prévia';
+  const actions = document.createElement('div'); actions.className = 'backup-preview-actions'; actions.append(restore, close);
+  card.append(title, date, grid, note, confirmation, actions); overlay.append(card); document.body.append(overlay); close.focus();
+}
 
 document.addEventListener('change', async event => {
   if (event.target.dataset.action !== 'toggle-signed-pdf') return;
@@ -2009,6 +2103,12 @@ document.addEventListener('submit', event => {
 document.addEventListener('click', event => {
   const backupButton = event.target.closest('[data-action="download-backup"]');
   if (backupButton) downloadClinicBackup();
+  if (event.target.closest('[data-action="choose-backup-validation"]')) document.querySelector('#backup-validation-file')?.click();
+  if (event.target.closest('[data-action="choose-encrypted-backup"]')) document.querySelector('#encrypted-backup-file')?.click();
+  if (event.target.closest('[data-action="list-recovery-points"]')) showRecoveryPoints();
+  if (event.target.closest('[data-action="open-encrypted-backup"]')) showEncryptedBackupDialog();
+  const dailyBackupButton = event.target.closest('[data-action="refresh-daily-backup"]');
+  if (dailyBackupButton) createDailyRecoveryPoint(dailyBackupButton);
   if (event.target.closest('[data-action="open-alerts"]')) render('alerts');
   const alertTarget = event.target.closest('[data-action="open-alert-target"]');
   if (alertTarget) {
@@ -2017,8 +2117,191 @@ document.addEventListener('click', event => {
   }
   const editButton = event.target.closest('[data-action="edit-user"]');
   if (editButton) { appView.innerHTML = usersView(editButton.dataset.userId); document.querySelector('#user-form input[name="name"]')?.focus(); }
+  const unlockButton = event.target.closest('[data-action="unlock-user"]');
+  if (unlockButton) unlockUser(unlockButton.dataset.userId, unlockButton);
   if (event.target.closest('[data-action="cancel-user-edit"]')) render('users');
 });
+
+async function unlockUser(userId, button) {
+  button.disabled = true; button.textContent = 'Desbloqueando…';
+  try {
+    await apiRequest(`/users/${encodeURIComponent(userId)}/unlock`, { method: 'POST', body: '{}' });
+    users = await apiRequest('/users'); render('users'); showToast('Acesso desbloqueado.');
+  } catch (error) { showToast(error.message); button.disabled = false; button.textContent = 'Desbloquear'; }
+}
+
+async function showRecoveryPoints() {
+  try {
+    const points = await apiRequest('/backup/recovery-points');
+    document.querySelector('.recovery-points-overlay')?.remove();
+    const overlay = document.createElement('div'); overlay.className = 'backup-preview-overlay recovery-points-overlay';
+    const card = document.createElement('section'); card.className = 'backup-preview-card';
+    const title = document.createElement('h2'); title.textContent = 'Pontos de recuperação';
+    const description = document.createElement('p'); description.textContent = 'O sistema mantém até 20 cópias por clínica e cria automaticamente uma nova a cada dia.';
+    const create = document.createElement('button'); create.type = 'button'; create.className = 'secondary-button'; create.dataset.action = 'create-recovery-point'; create.textContent = 'Criar ponto agora';
+    const list = document.createElement('div'); list.className = 'recovery-points-list';
+    if (!points.length) { const empty = document.createElement('small'); empty.textContent = 'Nenhum ponto de recuperação foi criado ainda.'; list.append(empty); }
+    points.forEach(point => {
+      const row = document.createElement('div'); const info = document.createElement('span');
+      const strong = document.createElement('strong'); strong.textContent = new Date(point.createdAt).toLocaleString('pt-BR');
+      const reasonLabels = { daily: 'Backup diário', manual: 'Criado manualmente', 'before-restore': 'Antes da restauração' };
+      const small = document.createElement('small'); small.textContent = `${reasonLabels[point.reason] || 'Ponto de recuperação'} · ${(point.sizeBytes / 1024).toFixed(1)} KB`;
+      const button = document.createElement('button'); button.type = 'button'; button.className = 'secondary-button'; button.dataset.action = 'download-recovery-point'; button.dataset.recoveryName = point.name; button.textContent = 'Baixar';
+      info.append(strong, small); row.append(info, button); list.append(row);
+    });
+    const close = document.createElement('button'); close.type = 'button'; close.className = 'primary-button'; close.dataset.action = 'close-recovery-points'; close.textContent = 'Fechar';
+    card.append(title, description, create, list, close); overlay.append(card); document.body.append(overlay); close.focus();
+  } catch (error) { showToast(error.message); }
+}
+
+async function downloadRecoveryPoint(name) {
+  try {
+    const response = await fetch(`${apiBase}/backup/recovery-points/${encodeURIComponent(name)}`, { headers: apiHeaders() });
+    if (!response.ok) { const payload = await response.json().catch(() => ({})); throw new Error(payload.error || 'Não foi possível baixar o ponto de recuperação.'); }
+    const url = URL.createObjectURL(await response.blob()); const link = document.createElement('a'); link.href = url; link.download = name; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+    showToast('Ponto de recuperação baixado.');
+  } catch (error) { showToast(error.message); }
+}
+
+async function createManualRecoveryPoint(button) {
+  if (button) { button.disabled = true; button.textContent = 'Criando…'; }
+  try {
+    await apiRequest('/backup/recovery-points', { method: 'POST', body: '{}' });
+    showToast('Ponto de recuperação criado.');
+    await showRecoveryPoints();
+  } catch (error) { showToast(error.message); if (button) { button.disabled = false; button.textContent = 'Criar ponto agora'; } }
+}
+
+async function createDailyRecoveryPoint(button) {
+  button.disabled = true; button.textContent = 'Criando…';
+  try {
+    await apiRequest('/backup/recovery-points', { method: 'POST', body: JSON.stringify({ reason: 'daily' }) });
+    showToast('Nova cópia diária criada e verificada.');
+    await loadBackupHealth();
+  } catch (error) { showToast(error.message); }
+  finally { button.disabled = false; button.textContent = 'Criar cópia agora'; }
+}
+
+function showEncryptedBackupDialog() {
+  document.querySelector('.encrypted-backup-overlay')?.remove();
+  const overlay = document.createElement('div'); overlay.className = 'backup-preview-overlay encrypted-backup-overlay';
+  const card = document.createElement('section'); card.className = 'backup-preview-card';
+  const title = document.createElement('h2'); title.textContent = 'Baixar backup protegido';
+  const description = document.createElement('p'); description.textContent = 'Defina uma senha com pelo menos 12 caracteres. Ela será necessária para recuperar o arquivo e não poderá ser redefinida.';
+  const password = document.createElement('input'); password.type = 'password'; password.id = 'encrypted-backup-password'; password.placeholder = 'Senha do backup'; password.autocomplete = 'new-password';
+  const confirmation = document.createElement('input'); confirmation.type = 'password'; confirmation.id = 'encrypted-backup-confirmation'; confirmation.placeholder = 'Repita a senha'; confirmation.autocomplete = 'new-password';
+  const status = document.createElement('small'); status.id = 'encrypted-backup-status'; status.textContent = 'Use no mínimo 12 caracteres.';
+  const download = document.createElement('button'); download.type = 'button'; download.className = 'primary-button'; download.dataset.action = 'download-encrypted-backup'; download.textContent = 'Gerar backup protegido'; download.disabled = true;
+  const close = document.createElement('button'); close.type = 'button'; close.className = 'secondary-button'; close.dataset.action = 'close-encrypted-backup'; close.textContent = 'Cancelar';
+  const actions = document.createElement('div'); actions.className = 'backup-preview-actions'; actions.append(close, download);
+  card.append(title, description, password, confirmation, status, actions); overlay.append(card); document.body.append(overlay); password.focus();
+}
+
+function showEncryptedRestoreDialog(envelope) {
+  document.querySelector('.encrypted-restore-overlay')?.remove();
+  const overlay = document.createElement('div'); overlay.className = 'backup-preview-overlay encrypted-restore-overlay';
+  const card = document.createElement('section'); card.className = 'backup-preview-card';
+  const title = document.createElement('h2'); title.textContent = 'Abrir backup protegido';
+  const description = document.createElement('p'); description.textContent = 'Digite a senha usada na criação do arquivo. O conteúdo será validado antes de qualquer alteração.';
+  const password = document.createElement('input'); password.type = 'password'; password.id = 'encrypted-restore-password'; password.placeholder = 'Senha do backup'; password.autocomplete = 'current-password';
+  const validate = document.createElement('button'); validate.type = 'button'; validate.className = 'primary-button'; validate.dataset.action = 'validate-encrypted-backup'; validate.textContent = 'Descriptografar e validar';
+  const close = document.createElement('button'); close.type = 'button'; close.className = 'secondary-button'; close.dataset.action = 'close-encrypted-restore'; close.textContent = 'Cancelar';
+  const actions = document.createElement('div'); actions.className = 'backup-preview-actions'; actions.append(close, validate);
+  card.append(title, description, password, actions); overlay.append(card); document.body.append(overlay);
+  encryptedBackupForRestore = envelope; encryptedBackupPassword = ''; password.focus();
+}
+
+async function validateEncryptedBackup(button) {
+  const password = document.querySelector('#encrypted-restore-password')?.value || '';
+  if (!encryptedBackupForRestore || !password) { showToast('Informe a senha do backup.'); return; }
+  button.disabled = true; button.textContent = 'Validando…';
+  try {
+    const result = await apiRequest('/backup/encrypted/validate', { method: 'POST', body: JSON.stringify({ envelope: encryptedBackupForRestore, password }) });
+    encryptedBackupPassword = password;
+    document.querySelector('.encrypted-restore-overlay')?.remove();
+    showBackupPreview(result);
+  } catch (error) { showToast(error.message); button.disabled = false; button.textContent = 'Descriptografar e validar'; }
+}
+
+async function downloadEncryptedBackup(button) {
+  const password = document.querySelector('#encrypted-backup-password')?.value || '';
+  if (password.length < 12 || password !== document.querySelector('#encrypted-backup-confirmation')?.value) return;
+  button.disabled = true; button.textContent = 'Criptografando…';
+  try {
+    const response = await fetch(`${apiBase}/backup/encrypted`, { method: 'POST', headers: apiHeaders(), body: JSON.stringify({ password }) });
+    if (!response.ok) { const payload = await response.json().catch(() => ({})); throw new Error(payload.error || 'Não foi possível gerar o backup protegido.'); }
+    const disposition = response.headers.get('Content-Disposition') || ''; const filename = disposition.match(/filename="([^"]+)"/)?.[1] || `backup-protegido-${activeClinicId}.tissbackup`;
+    const url = URL.createObjectURL(await response.blob()); const link = document.createElement('a'); link.href = url; link.download = filename; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+    document.querySelector('.encrypted-backup-overlay')?.remove(); showToast('Backup protegido gerado. Guarde a senha em local seguro.');
+  } catch (error) { showToast(error.message); button.disabled = false; button.textContent = 'Gerar backup protegido'; }
+}
+
+document.addEventListener('change', async event => {
+  if (!['backup-validation-file', 'encrypted-backup-file'].includes(event.target.id)) return;
+  const file = event.target.files?.[0];
+  const encrypted = event.target.id === 'encrypted-backup-file';
+  event.target.value = '';
+  if (!file) return;
+  if (file.size > 8 * 1024 * 1024) { showToast('O backup excede o limite de validação de 8 MB.'); return; }
+  try {
+    const backup = JSON.parse(await file.text());
+    if (encrypted) { showEncryptedRestoreDialog(backup); return; }
+    const result = await apiRequest('/backup/validate', { method: 'POST', body: JSON.stringify(backup) });
+    encryptedBackupForRestore = null; encryptedBackupPassword = '';
+    validatedBackupForRestore = backup;
+    showBackupPreview(result);
+  } catch (error) { showToast(error instanceof SyntaxError ? 'O arquivo selecionado não contém um arquivo de backup válido.' : error.message); }
+});
+
+document.addEventListener('click', event => {
+  if (event.target.closest('[data-action="close-backup-preview"]')) { validatedBackupForRestore = null; encryptedBackupForRestore = null; encryptedBackupPassword = ''; document.querySelector('.backup-preview-overlay')?.remove(); }
+  if (event.target.closest('[data-action="restore-validated-backup"]')) restoreValidatedBackup();
+  if (event.target.closest('[data-action="close-recovery-points"]')) document.querySelector('.recovery-points-overlay')?.remove();
+  const recoveryDownload = event.target.closest('[data-action="download-recovery-point"]');
+  if (recoveryDownload) downloadRecoveryPoint(recoveryDownload.dataset.recoveryName);
+  const recoveryCreate = event.target.closest('[data-action="create-recovery-point"]');
+  if (recoveryCreate) createManualRecoveryPoint(recoveryCreate);
+  if (event.target.closest('[data-action="close-encrypted-backup"]')) document.querySelector('.encrypted-backup-overlay')?.remove();
+  if (event.target.closest('[data-action="close-encrypted-restore"]')) { encryptedBackupForRestore = null; encryptedBackupPassword = ''; document.querySelector('.encrypted-restore-overlay')?.remove(); }
+  const encryptedValidation = event.target.closest('[data-action="validate-encrypted-backup"]');
+  if (encryptedValidation) validateEncryptedBackup(encryptedValidation);
+  const encryptedDownload = event.target.closest('[data-action="download-encrypted-backup"]');
+  if (encryptedDownload) downloadEncryptedBackup(encryptedDownload);
+});
+
+document.addEventListener('input', event => {
+  if (event.target.id !== 'backup-restore-confirmation') return;
+  const button = document.querySelector('[data-action="restore-validated-backup"]');
+  if (button) button.disabled = event.target.value !== 'RESTAURAR';
+});
+
+document.addEventListener('input', event => {
+  if (!['encrypted-backup-password', 'encrypted-backup-confirmation'].includes(event.target.id)) return;
+  const password = document.querySelector('#encrypted-backup-password')?.value || '';
+  const confirmation = document.querySelector('#encrypted-backup-confirmation')?.value || '';
+  const button = document.querySelector('[data-action="download-encrypted-backup"]'); const status = document.querySelector('#encrypted-backup-status');
+  const valid = password.length >= 12 && password === confirmation;
+  if (button) button.disabled = !valid;
+  if (status) status.textContent = password.length < 12 ? 'Use no mínimo 12 caracteres.' : password !== confirmation ? 'As senhas não coincidem.' : 'Senha confirmada.';
+});
+
+async function restoreValidatedBackup() {
+  const confirmation = document.querySelector('#backup-restore-confirmation')?.value;
+  if ((!validatedBackupForRestore && !encryptedBackupForRestore) || confirmation !== 'RESTAURAR') return;
+  const button = document.querySelector('[data-action="restore-validated-backup"]');
+  if (button) { button.disabled = true; button.textContent = 'Restaurando…'; }
+  try {
+    const encrypted = Boolean(encryptedBackupForRestore);
+    const endpoint = encrypted ? '/backup/encrypted/restore' : '/backup/restore';
+    const payload = encrypted ? { envelope: encryptedBackupForRestore, password: encryptedBackupPassword, confirmation } : { backup: validatedBackupForRestore, confirmation };
+    const result = await apiRequest(endpoint, { method: 'POST', body: JSON.stringify(payload) });
+    validatedBackupForRestore = null;
+    encryptedBackupForRestore = null; encryptedBackupPassword = '';
+    document.querySelector('.backup-preview-overlay')?.remove();
+    showToast(`Backup restaurado. Ponto de recuperação: ${result.recoveryFile}.`);
+    await hydrateFromApi(); render('overview');
+  } catch (error) { showToast(error.message); if (button) { button.disabled = false; button.textContent = 'Restaurar este backup'; } }
+}
 
 async function downloadClinicBackup() {
   if (!activeSession?.token) { showToast('Entre pela API para gerar o backup.'); return; }

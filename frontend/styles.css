@@ -283,3 +283,27 @@
 .patient-pagination { display:flex; justify-content:flex-end; align-items:center; gap:12px; padding:14px 21px 18px; border-top:1px solid #eef2ef; }
 .patient-pagination span { min-width:90px; text-align:center; color:var(--muted); font-size:11px; font-weight:700; }
 .patient-pagination button:disabled { opacity:.45; cursor:not-allowed; }
+.backup-preview-overlay { position:fixed; inset:0; z-index:1000; display:grid; place-items:center; padding:24px; background:rgba(20,38,29,.58); }
+.backup-preview-card { width:min(620px,100%); padding:28px; border-radius:12px; background:#fff; box-shadow:0 24px 70px rgba(0,0,0,.24); }
+.backup-preview-card h2 { margin:0 0 6px; color:var(--ink); }
+.backup-preview-card p,.backup-preview-card > small { display:block; color:var(--muted); }
+.backup-preview-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin:22px 0; }
+.backup-preview-grid div { padding:14px 10px; border:1px solid #e5ece7; border-radius:8px; text-align:center; background:#f8faf8; }
+.backup-preview-grid strong,.backup-preview-grid span { display:block; }
+.backup-preview-grid strong { font-size:22px; color:var(--green); }
+.backup-preview-grid span { margin-top:3px; font-size:10px; color:var(--muted); }
+.backup-preview-card > input { width:100%; margin-top:16px; border:1px solid #dfe7e1; border-radius:6px; padding:10px 12px; font:12px Manrope,sans-serif; }
+.encrypted-backup-overlay .backup-preview-card > input + input { margin-top:8px; }
+.encrypted-backup-overlay #encrypted-backup-status { margin-top:8px; }
+.backup-preview-actions { display:flex; justify-content:flex-end; gap:10px; margin-top:22px; }
+.backup-preview-actions button:disabled { opacity:.45; cursor:not-allowed; }
+.backup-health-card { display:flex; align-items:center; justify-content:space-between; gap:18px; margin:0 0 18px; padding:13px 16px; border:1px solid #cfe5d8; border-radius:9px; color:#245b3b; background:#f1faf4; }
+.backup-health-card > div { display:flex; align-items:center; gap:14px; }
+.backup-health-card span { font-size:11px; text-align:right; }
+.backup-health-card.backup-health-warning { border-color:#efcf9d; color:#8a5410; background:#fff8eb; }
+.recovery-points-list { display:grid; gap:8px; max-height:360px; margin:20px 0; overflow:auto; }
+.recovery-points-list > div { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px; border:1px solid #e5ece7; border-radius:8px; }
+.recovery-points-list span,.recovery-points-list strong,.recovery-points-list small { display:block; }
+.recovery-points-list small { margin-top:3px; color:var(--muted); }
+.recovery-points-overlay .backup-preview-card > button { display:block; margin-left:auto; }
+@media (max-width:600px) { .backup-preview-grid { grid-template-columns:repeat(2,1fr); } .backup-health-card,.backup-health-card > div { align-items:flex-start; flex-direction:column; } .backup-health-card span { text-align:left; } }

@@ -214,6 +214,16 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
   CREATE INDEX IF NOT EXISTS idx_audit_logs_clinic_date ON audit_logs(clinic_id, created_at DESC);
+  CREATE TABLE IF NOT EXISTS login_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    clinic_id TEXT NOT NULL REFERENCES clinics(id),
+    user_id TEXT REFERENCES users(id),
+    email TEXT NOT NULL,
+    outcome TEXT NOT NULL CHECK (outcome IN ('success', 'failure', 'blocked')),
+    ip_address TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE INDEX IF NOT EXISTS idx_login_events_clinic_date ON login_events(clinic_id, created_at DESC);
   CREATE TABLE IF NOT EXISTS clinic_settings (
     clinic_id TEXT PRIMARY KEY REFERENCES clinics(id),
     legal_name TEXT NOT NULL DEFAULT '',
@@ -298,6 +308,9 @@ if (!patientColumns.has('consent_status')) db.exec("ALTER TABLE patients ADD COL
 if (!patientColumns.has('consent_date')) db.exec("ALTER TABLE patients ADD COLUMN consent_date TEXT NOT NULL DEFAULT ''");
 const userColumns = new Set(db.prepare('PRAGMA table_info(users)').all().map(column => column.name));
 if (!userColumns.has('active')) db.exec('ALTER TABLE users ADD COLUMN active INTEGER NOT NULL DEFAULT 1');
+if (!userColumns.has('token_version')) db.exec('ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0');
+if (!userColumns.has('failed_login_attempts')) db.exec('ALTER TABLE users ADD COLUMN failed_login_attempts INTEGER NOT NULL DEFAULT 0');
+if (!userColumns.has('locked_until')) db.exec("ALTER TABLE users ADD COLUMN locked_until TEXT NOT NULL DEFAULT ''");
 const settingsColumns = new Set(db.prepare('PRAGMA table_info(clinic_settings)').all().map(column => column.name));
 if (!settingsColumns.has('letterhead_data_url')) db.exec("ALTER TABLE clinic_settings ADD COLUMN letterhead_data_url TEXT NOT NULL DEFAULT ''");
 if (!settingsColumns.has('letterhead_header_mm')) db.exec('ALTER TABLE clinic_settings ADD COLUMN letterhead_header_mm INTEGER NOT NULL DEFAULT 35');

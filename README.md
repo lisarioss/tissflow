@@ -33,6 +33,17 @@ Protótipo de portfólio para operação de faturamento clínico. Demonstra o ci
 - **Exportação de pacientes**: administradores e recepção podem baixar o cadastro no mesmo formato CSV da importação, facilitando conferência e migração com download registrado na auditoria.
 - **Arquivamento de pacientes**: pacientes podem ser inativados sem perder guias, documentos ou histórico; registros inativos deixam de aparecer em novas guias, autorizações e agendamentos e podem ser reativados pelo cadastro.
 - **Rastreabilidade do cadastro**: a auditoria identifica importações em massa, arquivamentos e reativações sem copiar nome, carteira ou conteúdo clínico para o log.
+- **Integridade do backup**: cada exportação recebe uma assinatura SHA-256 e pode ser validada antes da restauração, detectando arquivo corrompido, alterado ou pertencente a outra clínica.
+- **Prévia da restauração**: após validar o backup, o sistema mostra data da exportação e totais de pacientes, guias, documentos, feedbacks, autorizações, lotes, agenda e convênios antes de qualquer alteração.
+- **Restauração protegida**: somente administradores podem restaurar um backup íntegro da própria clínica; a operação exige confirmação textual, preserva usuários e auditoria e cria automaticamente um ponto de recuperação local.
+- **Pontos de recuperação**: administradores podem consultar e baixar as cópias automáticas anteriores a cada restauração, sempre isoladas por clínica e com download auditado.
+- **Backup diário automático**: enquanto o servidor estiver ativo, cada clínica recebe um ponto de recuperação diário; o sistema conserva as 20 cópias mais recentes e identifica se foram criadas automaticamente, manualmente ou antes de uma restauração.
+- **Monitoramento do backup**: a área de configurações informa a data da última cópia, o uso da retenção e verifica se o backup diário continua íntegro; arquivos ausentes, atrasados ou corrompidos geram alerta e podem ser substituídos por uma nova cópia imediata.
+- **Troca segura de senha**: cada usuário pode alterar a própria senha confirmando a senha atual; a nova senha exige 12 caracteres e invalida imediatamente todas as sessões anteriores da conta.
+- **Proteção contra tentativas de acesso**: após cinco senhas incorretas, a conta fica bloqueada por 15 minutos; administradores visualizam o bloqueio e podem liberar o usuário, com registro na auditoria.
+- **Histórico de autenticação**: logins autorizados, senhas incorretas e tentativas em contas bloqueadas ficam disponíveis somente aos administradores da clínica por 180 dias, sem armazenar senhas.
+- **Cópia manual e retenção**: o administrador pode criar um ponto antes de mudanças importantes; o servidor conserva as 20 cópias mais recentes de cada clínica para controlar o espaço utilizado.
+- **Backup criptografado**: a clínica pode exportar e restaurar uma cópia `.tissbackup` protegida por senha com AES-256-GCM e derivação scrypt; antes da restauração, o arquivo é descriptografado, validado e exibido em uma prévia. A senha nunca é armazenada nem registrada na auditoria.
 - **Filtro de pacientes arquivados**: a listagem informa os totais de ativos e arquivados e permite consultar cada grupo ou todos os cadastros.
 - **Paginação de pacientes**: busca e filtros exibem até 20 registros por página, mantendo o cadastro organizado à medida que a clínica cresce.
 - **Alertas de validade do plano**: a central de notificações avisa 30 dias antes do vencimento da carteira e destaca planos já vencidos, com acesso ao paciente para atualização.

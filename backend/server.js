@@ -12,6 +12,7 @@ const { feedbackDateBelongsToGuide } = require('./feedbackService');
 const { hasAppointmentConflict, weeklyDates } = require('./appointmentService');
 const { TISS_VERSION, calculateTissHash, validateTissXml } = require('./tissValidationService');
 const { parsePatientCsv, validatePatientImport } = require('./patientImportService');
+const { validatePatientData, findDuplicatePatient, patientStatusAuditDetails } = require('./patientValidationService');
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
@@ -108,7 +109,7 @@ app.use('/api', (req, res, next) => {
     const entityType = parts[0] || 'api';
     const entityId = parts[1] && !['status', 'recurso', 'resolve'].includes(parts[1]) ? parts[1] : req.body?.id || null;
     const safeFields = Object.keys(req.body || {}).filter(key => !/password|photo|content|dataurl|justification/i.test(key));
-    try { recordAudit(req, action, entityType, entityId, { changedFields: safeFields, statusCode: res.statusCode }); } catch (error) { console.error('Falha ao registrar auditoria:', error.message); }
+    try { recordAudit(req, action, entityType, entityId, { changedFields: safeFields, statusCode: res.statusCode, ...(req.auditDetails || {}) }); } catch (error) { console.error('Falha ao registrar auditoria:', error.message); }
   });
   next();
 });
@@ -387,18 +388,23 @@ app.post('/api/patients/import', auth, requireRole('admin', 'recepcao'), (req, r
   if (!parsed.rows.length) return res.status(400).json({ error: 'O CSV não possui pacientes para importar.' });
   if (parsed.rows.length > 1000) return res.status(400).json({ error: 'Importe no máximo 1.000 pacientes por arquivo.' });
   const insurers = db.prepare('SELECT name, ans_code AS ansCode FROM insurers WHERE clinic_id = ?').all(req.session.clinicId);
-  const existingPatients = db.prepare('SELECT id, card_number AS cardNumber FROM patients WHERE clinic_id = ?').all(req.session.clinicId);
+  const existingPatients = db.prepare('SELECT id, insurer, card_number AS cardNumber FROM patients WHERE clinic_id = ?').all(req.session.clinicId);
   const validation = validatePatientImport(parsed.rows, insurers, existingPatients);
   if (validation.errors.length) return res.status(400).json({ error: `A importação possui ${validation.errors.length} linha(s) inválida(s). Nenhum paciente foi cadastrado.`, errors: validation.errors.slice(0, 50) });
   const insert = db.prepare('INSERT INTO patients (id, clinic_id, name, birth_date, insurer, ans_code, card_number, plan, plan_validity, guardian_name, guardian_relationship, guardian_phone, guardian_email, consent_status, consent_date, active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
   db.transaction(rows => rows.forEach(patient => insert.run(patient.id, req.session.clinicId, patient.name, patient.birthDate, patient.insurer, patient.ansCode, patient.cardNumber, patient.plan, patient.planValidity, patient.guardianName, patient.guardianRelationship, patient.guardianPhone, patient.guardianEmail, 'pending', '', patient.active ? 1 : 0)))(validation.validRows);
+  req.auditDetails = { importedCount: validation.validRows.length };
   res.status(201).json({ imported: validation.validRows.length });
 });
 
 app.post('/api/patients', auth, requireRole('admin', 'recepcao', 'medico'), (req, res) => {
   const { id, name, birthDate, insurer, ansCode, cardNumber, plan, planValidity, guardianName = '', guardianRelationship = '', guardianPhone = '', guardianEmail = '', consentStatus = 'pending', consentDate = '' } = req.body;
   if (!id || !name || !birthDate || !insurer || !cardNumber || !plan || !planValidity) return res.status(400).json({ error: 'Nome, nascimento, convênio, carteira, plano e validade são obrigatórios.' });
-  if (consentStatus === 'granted' && !/^\d{4}-\d{2}-\d{2}$/.test(consentDate)) return res.status(400).json({ error: 'Informe a data em que o consentimento foi concedido.' });
+  const clinicInsurers = db.prepare('SELECT name FROM insurers WHERE clinic_id = ?').all(req.session.clinicId);
+  const validationError = validatePatientData(req.body, clinicInsurers);
+  if (validationError) return res.status(400).json({ error: validationError });
+  const clinicPatients = db.prepare('SELECT id, insurer, card_number AS cardNumber FROM patients WHERE clinic_id = ?').all(req.session.clinicId);
+  if (findDuplicatePatient(clinicPatients, cardNumber)) return res.status(409).json({ error: 'Já existe um paciente com esta carteira.' });
   try {
     db.prepare('INSERT INTO patients (id, clinic_id, name, birth_date, insurer, ans_code, card_number, plan, plan_validity, guardian_name, guardian_relationship, guardian_phone, guardian_email, consent_status, consent_date, active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)').run(id, req.session.clinicId, name, birthDate, insurer, ansCode || '', cardNumber, plan, planValidity, guardianName, guardianRelationship, guardianPhone, guardianEmail, ['pending', 'granted', 'revoked'].includes(consentStatus) ? consentStatus : 'pending', consentDate);
     res.status(201).json({ id });
@@ -410,7 +416,14 @@ app.post('/api/patients', auth, requireRole('admin', 'recepcao', 'medico'), (req
 app.patch('/api/patients/:id', auth, requireRole('admin', 'recepcao', 'medico'), (req, res) => {
   const { name, birthDate, insurer, ansCode, cardNumber, plan, planValidity, guardianName = '', guardianRelationship = '', guardianPhone = '', guardianEmail = '', consentStatus = 'pending', consentDate = '', active = 1 } = req.body;
   if (!name || !birthDate || !insurer || !cardNumber || !plan || !planValidity) return res.status(400).json({ error: 'Nome, nascimento, convênio, carteira, plano e validade são obrigatórios.' });
-  if (consentStatus === 'granted' && !/^\d{4}-\d{2}-\d{2}$/.test(consentDate)) return res.status(400).json({ error: 'Informe a data em que o consentimento foi concedido.' });
+  const clinicInsurers = db.prepare('SELECT name FROM insurers WHERE clinic_id = ?').all(req.session.clinicId);
+  const validationError = validatePatientData(req.body, clinicInsurers);
+  if (validationError) return res.status(400).json({ error: validationError });
+  const clinicPatients = db.prepare('SELECT id, insurer, card_number AS cardNumber, active FROM patients WHERE clinic_id = ?').all(req.session.clinicId);
+  if (findDuplicatePatient(clinicPatients, cardNumber, req.params.id)) return res.status(409).json({ error: 'Já existe outro paciente com esta carteira.' });
+  const currentPatient = clinicPatients.find(patient => patient.id === req.params.id);
+  if (!currentPatient) return res.status(404).json({ error: 'Paciente não encontrado.' });
+  req.auditDetails = patientStatusAuditDetails(currentPatient.active, active);
   const result = db.prepare('UPDATE patients SET name = ?, birth_date = ?, insurer = ?, ans_code = ?, card_number = ?, plan = ?, plan_validity = ?, guardian_name = ?, guardian_relationship = ?, guardian_phone = ?, guardian_email = ?, consent_status = ?, consent_date = ?, active = ? WHERE id = ? AND clinic_id = ?').run(name, birthDate, insurer, ansCode || '', cardNumber, plan, planValidity, guardianName, guardianRelationship, guardianPhone, guardianEmail, ['pending', 'granted', 'revoked'].includes(consentStatus) ? consentStatus : 'pending', consentDate, active ? 1 : 0, req.params.id, req.session.clinicId);
   if (!result.changes) return res.status(404).json({ error: 'Paciente não encontrado.' });
   res.json({ id: req.params.id });

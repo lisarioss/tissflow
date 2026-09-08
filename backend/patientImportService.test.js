@@ -37,3 +37,17 @@ test('validatePatientImport preserva paciente inativo em uma reimportação', ()
   assert.equal(result.errors.length, 0);
   assert.equal(result.validRows[0].active, false);
 });
+
+test('validatePatientImport rejeita carteira já cadastrada mesmo em outro convênio', () => {
+  const parsed = parsePatientCsv('nome;nascimento;convenio;carteira;plano;validade_plano\nAna;2010-01-02;Amil;123;Plano A;2027-12-31');
+  const result = validatePatientImport(parsed.rows, [{ name: 'Amil' }], [{ id: 'P-1', insurer: 'Unimed', cardNumber: '123' }]);
+  assert.equal(result.validRows.length, 0);
+  assert.match(result.errors[0], /carteira duplicada/);
+});
+
+test('validatePatientImport rejeita carteira já cadastrada no mesmo convênio apesar da formatação', () => {
+  const parsed = parsePatientCsv('nome;nascimento;convenio;carteira;plano;validade_plano\nAna;2010-01-02;Unimed;123456;Plano A;2027-12-31');
+  const result = validatePatientImport(parsed.rows, [{ name: 'Unimed' }], [{ id: 'P-1', insurer: 'Unimed', cardNumber: '123.456' }]);
+  assert.equal(result.validRows.length, 0);
+  assert.match(result.errors[0], /carteira duplicada/);
+});

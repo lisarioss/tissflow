@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { nextSequentialId, timeToMinutes, hasScheduleConflictWith, escapeXml, findSessionOutsidePlanValidity, exceedsAuthorizedQuantity, findCidIncompatibility, filterGuides, filterPatients, filterInsurers, filterFeedbacks, isActivePatient, consentAlertItems, clinicOnboardingChecklist } = require('./lib.js');
+const { nextSequentialId, timeToMinutes, hasScheduleConflictWith, escapeXml, findSessionOutsidePlanValidity, exceedsAuthorizedQuantity, findCidIncompatibility, filterGuides, filterPatients, filterPatientsByStatus, paginateItems, filterInsurers, filterFeedbacks, isActivePatient, planValidityAlertItems, consentAlertItems, clinicOnboardingChecklist } = require('./lib.js');
 
 test('isActivePatient trata booleanos locais e inteiros vindos do SQLite', () => {
   assert.equal(isActivePatient({ active: true }), true);
@@ -8,6 +8,37 @@ test('isActivePatient trata booleanos locais e inteiros vindos do SQLite', () =>
   assert.equal(isActivePatient({}), true);
   assert.equal(isActivePatient({ active: false }), false);
   assert.equal(isActivePatient({ active: 0 }), false);
+});
+
+test('filterPatientsByStatus separa pacientes ativos e arquivados', () => {
+  const patients = [{ id: '1', active: 1 }, { id: '2', active: 0 }, { id: '3' }];
+  assert.deepEqual(filterPatientsByStatus(patients, 'active').map(patient => patient.id), ['1', '3']);
+  assert.deepEqual(filterPatientsByStatus(patients, 'inactive').map(patient => patient.id), ['2']);
+  assert.equal(filterPatientsByStatus(patients, 'all').length, 3);
+});
+
+test('paginateItems limita resultados e corrige página fora do intervalo', () => {
+  const items = Array.from({ length: 45 }, (_, index) => index + 1);
+  assert.deepEqual(paginateItems(items, 2, 20).items, items.slice(20, 40));
+  assert.equal(paginateItems(items, 99, 20).page, 3);
+  assert.equal(paginateItems([], 2, 20).totalPages, 1);
+});
+
+test('planValidityAlertItems avisa sobre plano próximo do vencimento e vencido', () => {
+  const patients = [
+    { id: '1', name: 'Ana', insurer: 'Unimed', cardNumber: '123', planValidity: '2026-09-20' },
+    { id: '2', name: 'Bia', insurer: 'Amil', cardNumber: '456', planValidity: '2026-08-01' },
+    { id: '3', name: 'Caio', planValidity: '2027-12-31' }
+  ];
+  const alerts = planValidityAlertItems(patients, new Date('2026-09-08T12:00:00'));
+  assert.deepEqual(alerts.map(item => item.level), ['warning', 'critical']);
+  assert.match(alerts[0].title, /12 dia/);
+  assert.match(alerts[1].title, /Plano vencido/);
+});
+
+test('planValidityAlertItems ignora pacientes arquivados', () => {
+  const patients = [{ id: '1', name: 'Ana', planValidity: '2020-01-01', active: 0 }];
+  assert.deepEqual(planValidityAlertItems(patients, new Date('2026-09-08T12:00:00')), []);
 });
 
 test('clinicOnboardingChecklist identifica uma clínica pronta para operar', () => {

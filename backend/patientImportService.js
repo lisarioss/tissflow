@@ -1,3 +1,5 @@
+const { normalizeCardNumber, isValidIsoDate } = require('./patientValidationService');
+
 function parseCsvLine(line, delimiter) {
   const cells = [];
   let value = '';
@@ -29,17 +31,10 @@ function parsePatientCsv(csvText) {
   return { rows, errors: [] };
 }
 
-function isValidIsoDate(value) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value || '')) return false;
-  const [year, month, day] = value.split('-').map(Number);
-  const date = new Date(Date.UTC(year, month - 1, day));
-  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
-}
-
 function validatePatientImport(parsedRows, insurers, existingPatients) {
   const insurerByName = new Map(insurers.map(insurer => [String(insurer.name).trim().toLowerCase(), insurer]));
   const knownIds = new Set(existingPatients.map(patient => patient.id));
-  const knownCards = new Set(existingPatients.map(patient => String(patient.cardNumber || patient.card_number)));
+  const knownCards = new Set(existingPatients.map(patient => normalizeCardNumber(patient.cardNumber || patient.card_number)));
   const fileIds = new Set();
   const fileCards = new Set();
   const errors = [];
@@ -55,11 +50,12 @@ function validatePatientImport(parsedRows, insurers, existingPatients) {
     if (!data.plano) lineErrors.push('plano obrigatório');
     if (!isValidIsoDate(data.validade_plano)) lineErrors.push('validade_plano deve ser uma data válida em AAAA-MM-DD');
     if (knownIds.has(id) || fileIds.has(id)) lineErrors.push('ID duplicado');
-    if (knownCards.has(data.carteira) || fileCards.has(data.carteira)) lineErrors.push('carteira duplicada');
+    const importedCardKey = normalizeCardNumber(data.carteira);
+    if (knownCards.has(importedCardKey) || fileCards.has(importedCardKey)) lineErrors.push('carteira duplicada');
     if (data.email && !/^\S+@\S+\.\S+$/.test(data.email)) lineErrors.push('e-mail inválido');
     if (lineErrors.length) errors.push(`Linha ${line}: ${lineErrors.join('; ')}.`);
     else {
-      fileIds.add(id); fileCards.add(data.carteira);
+      fileIds.add(id); fileCards.add(importedCardKey);
       validRows.push({ id, name: data.nome, birthDate: data.nascimento, insurer: insurer.name, ansCode: data.codigo_ans || insurer.ansCode || '', cardNumber: data.carteira, plan: data.plano, planValidity: data.validade_plano, guardianName: data.responsavel || '', guardianRelationship: data.vinculo || '', guardianPhone: data.telefone || '', guardianEmail: data.email || '', active: !/^(n[aã]o|0|false)$/i.test(data.ativo || '') });
     }
   });

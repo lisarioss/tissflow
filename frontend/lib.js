@@ -95,7 +95,37 @@ function filterFeedbacks(feedbacks, term) {
   return feedbacks.filter(feedback => [feedback.patient, feedback.professional, feedback.guideId, feedback.attendanceType].some(field => String(field || '').toLowerCase().includes(query)));
 }
 
+function filterPatientsByStatus(patients, status = 'active') {
+  if (status === 'all') return patients;
+  return patients.filter(patient => status === 'active' ? isActivePatient(patient) : !isActivePatient(patient));
+}
+
+function paginateItems(items, requestedPage = 1, pageSize = 20) {
+  const safeSize = Math.max(1, Number(pageSize) || 20);
+  const totalPages = Math.max(1, Math.ceil(items.length / safeSize));
+  const page = Math.min(totalPages, Math.max(1, Number(requestedPage) || 1));
+  return { items: items.slice((page - 1) * safeSize, page * safeSize), page, totalPages, total: items.length };
+}
+
 function isActivePatient(patient) { return patient?.active !== false && patient?.active !== 0; }
+
+function planValidityAlertItems(patients, today = new Date()) {
+  const referenceDate = new Date(today); referenceDate.setHours(0, 0, 0, 0);
+  return patients.filter(isActivePatient).flatMap(patient => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(patient.planValidity || '')) return [];
+    const validityDate = new Date(`${patient.planValidity}T12:00:00`); validityDate.setHours(0, 0, 0, 0);
+    const days = Math.ceil((validityDate - referenceDate) / 86400000);
+    if (days > 30) return [];
+    const formattedDate = validityDate.toLocaleDateString('pt-BR');
+    return [{
+      level: days < 0 ? 'critical' : 'warning',
+      title: days < 0 ? `Plano vencido · ${patient.name}` : days === 0 ? `Plano vence hoje · ${patient.name}` : `Plano vence em ${days} dia(s) · ${patient.name}`,
+      detail: `${patient.insurer} · carteira ${patient.cardNumber || 'não informada'} · validade ${formattedDate}.`,
+      view: 'patients',
+      targetId: patient.id
+    }];
+  });
+}
 
 function consentAlertItems(patients, consentEvents, renewalMonths = 0, today = new Date()) {
   return patients.filter(isActivePatient).flatMap(patient => {
@@ -139,5 +169,5 @@ function clinicOnboardingChecklist(settings, insurers, users, patients) {
 // Disponibiliza as funções tanto para <script> no navegador (globais em
 // `window`) quanto para `require()` em testes Node — sem precisar de bundler.
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { nextSequentialId, timeToMinutes, hasScheduleConflictWith, escapeXml, findSessionOutsidePlanValidity, exceedsAuthorizedQuantity, findCidIncompatibility, filterGuides, filterPatients, filterInsurers, filterFeedbacks, isActivePatient, consentAlertItems, clinicOnboardingChecklist };
+  module.exports = { nextSequentialId, timeToMinutes, hasScheduleConflictWith, escapeXml, findSessionOutsidePlanValidity, exceedsAuthorizedQuantity, findCidIncompatibility, filterGuides, filterPatients, filterPatientsByStatus, paginateItems, filterInsurers, filterFeedbacks, isActivePatient, planValidityAlertItems, consentAlertItems, clinicOnboardingChecklist };
 }

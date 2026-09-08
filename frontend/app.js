@@ -74,6 +74,9 @@ let feedbacks = JSON.parse(localStorage.getItem(clinicStorageKey('feedbacks')) |
 let patientDocuments = [];
 let patientConsents = [];
 let patientImportFeedback = null;
+let patientStatusFilter = 'active';
+let patientPage = 1;
+const patientPageSize = 20;
 let auditLogs = [];
 let users = clinicUsers[activeClinicId] || [];
 let selectedReportCompetence = '';
@@ -520,6 +523,7 @@ function notificationItems() {
     const days = daysUntil(item.validUntil);
     if (days <= 30) items.push({ level: days < 0 ? 'critical' : 'warning', title: days < 0 ? 'Documento vencido' : `Documento vence em ${days} dia(s)`, detail: `${item.patient || item.patientId} · ${item.originalName}`, view: 'patients' });
   });
+  if (userCan('patients')) items.push(...planValidityAlertItems(patients, today));
   if (userCan('patients')) items.push(...consentAlertItems(patients, patientConsents, Number(clinicSettings.consentRenewalMonths || 0)));
   if (userCan('batches')) batches.filter(batch => !batch.readyForSending && ['draft', 'ready'].includes(batch.status)).forEach(batch => items.push({ level: 'warning', title: `Lote ${batch.id} com pendências`, detail: `${batch.insurer} · ${batch.missingSignedPdfs || 0} PDF(s) pendente(s)${batch.xmlPending ? ' · XML pendente' : ''}.`, view: 'batches' }));
   if (userCan('financeiro')) guides.filter(guide => guide.status === 'error').forEach(guide => items.push({ level: 'critical', title: `Guia ${guide.id} com glosa`, detail: `${guide.patient} · ${guide.insurer}`, view: 'guides' }));
@@ -608,15 +612,46 @@ function editPatient(patientId) {
   form.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
-function patientRowsHtml(term) {
-  const filtered = filterPatients(patients, term);
-  if (!filtered.length) return '<tr><td colspan="6">Nenhum paciente encontrado para essa busca.</td></tr>';
-  return filtered.map(patient => `<tr class="${isActivePatient(patient) ? '' : 'inactive-row'}"><td><strong>${patient.name}</strong><small>${new Date(`${patient.birthDate}T12:00:00`).toLocaleDateString('pt-BR')} · ${isActivePatient(patient) ? 'Ativo' : 'Inativo'}</small></td><td>${patient.insurer}</td><td>${patient.cardNumber}</td><td>${patient.plan}</td><td>${new Date(`${patient.planValidity}T12:00:00`).toLocaleDateString('pt-BR')}</td><td><button class="text-button" data-action="open-patient-folder" data-patient-id="${patient.id}">Abrir pasta →</button> <button class="text-button" data-action="edit-patient" data-patient-id="${patient.id}">Editar</button></td></tr>`).join('');
+function patientRowsHtml(term, status = patientStatusFilter) {
+  const filtered = filterPatients(filterPatientsByStatus(patients, status), term);
+  const paginated = paginateItems(filtered, patientPage, patientPageSize);
+  patientPage = paginated.page;
+  if (!paginated.items.length) return '<tr><td colspan="6">Nenhum paciente encontrado para essa busca.</td></tr>';
+  return paginated.items.map(patient => `<tr class="${isActivePatient(patient) ? '' : 'inactive-row'}"><td><strong>${patient.name}</strong><small>${new Date(`${patient.birthDate}T12:00:00`).toLocaleDateString('pt-BR')} · ${isActivePatient(patient) ? 'Ativo' : 'Inativo'}</small></td><td>${patient.insurer}</td><td>${patient.cardNumber}</td><td>${patient.plan}</td><td>${new Date(`${patient.planValidity}T12:00:00`).toLocaleDateString('pt-BR')}</td><td><button class="text-button" data-action="open-patient-folder" data-patient-id="${patient.id}">Abrir pasta →</button> <button class="text-button" data-action="edit-patient" data-patient-id="${patient.id}">Editar</button></td></tr>`).join('');
+}
+
+function refreshPatientTable(resetPage = false) {
+  if (resetPage) patientPage = 1;
+  const term = document.querySelector('#patient-search')?.value || '';
+  const filtered = filterPatients(filterPatientsByStatus(patients, patientStatusFilter), term);
+  const paginated = paginateItems(filtered, patientPage, patientPageSize);
+  patientPage = paginated.page;
+  const body = document.querySelector('#patient-table-body');
+  if (body) body.innerHTML = patientRowsHtml(term);
+  const label = document.querySelector('#patient-page-label');
+  if (label) label.textContent = `${paginated.total ? (paginated.page - 1) * patientPageSize + 1 : 0}–${Math.min(paginated.page * patientPageSize, paginated.total)} de ${paginated.total}`;
+  const previous = document.querySelector('[data-action="previous-patient-page"]');
+  const next = document.querySelector('[data-action="next-patient-page"]');
+  if (previous) previous.disabled = paginated.page <= 1;
+  if (next) next.disabled = paginated.page >= paginated.totalPages;
+}
+
+function ensurePatientPagination() {
+  const table = document.querySelector('#patient-table-body')?.closest('table');
+  if (!table || document.querySelector('.patient-pagination')) return;
+  const controls = document.createElement('div');
+  controls.className = 'patient-pagination';
+  controls.innerHTML = '<button class="secondary-button" data-action="previous-patient-page">Anterior</button><span id="patient-page-label"></span><button class="secondary-button" data-action="next-patient-page">Próxima</button>';
+  table.after(controls);
+  refreshPatientTable();
 }
 function patientsView() {
   const canImport = ['admin', 'recepcao'].includes(activeUser?.role || 'admin');
+  const activeCount = patients.filter(isActivePatient).length;
+  const inactiveCount = patients.length - activeCount;
+  queueMicrotask(ensurePatientPagination);
   const importFeedback = patientImportFeedback ? `<div class="panel import-feedback ${patientImportFeedback.type}"><div><strong>${patientImportFeedback.title}</strong><small>${patientImportFeedback.message}</small></div>${patientImportFeedback.errors?.length ? `<ol>${patientImportFeedback.errors.slice(0, 20).map(error => `<li>${error}</li>`).join('')}</ol>${patientImportFeedback.errors.length > 20 ? `<small>Mais ${patientImportFeedback.errors.length - 20} erro(s) não exibido(s).</small>` : ''}` : ''}<button class="text-button" data-action="dismiss-patient-import-feedback">Fechar</button></div>` : '';
-  return `<div class="page-heading"><div><p class="eyebrow">Cadastro da clínica</p><h1>Pacientes</h1><p class="heading-copy">Cada paciente possui uma pasta com seu histórico assistencial e de faturamento.</p></div><div class="folder-actions">${canImport ? '<button class="secondary-button" data-action="download-patient-template">Baixar modelo CSV</button><button class="secondary-button" data-action="export-patients">Exportar pacientes</button><button class="secondary-button" data-action="choose-patient-import">Importar CSV</button><input id="patient-import-file" type="file" accept=".csv,text/csv" hidden />' : ''}<button class="primary-button" data-action="new-patient">＋ Novo paciente</button></div></div>${importFeedback}<div class="panel"><div class="panel-header"><div><h2 class="panel-title">Pacientes cadastrados</h2><p class="panel-subtitle">${patients.length} registros com dados de convênio</p></div></div><div class="search-bar"><input type="search" id="patient-search" placeholder="Buscar por nome, convênio, carteira ou plano" /></div><table><thead><tr><th>Paciente</th><th>Convênio</th><th>Carteira</th><th>Plano</th><th>Validade</th><th></th></tr></thead><tbody id="patient-table-body">${patientRowsHtml('')}</tbody></table></div><form class="panel patient-form" id="patient-form"><div class="panel-header"><div><h2 class="panel-title">Cadastrar paciente</h2><p class="panel-subtitle">Dados do plano, responsável legal e consentimento.</p></div></div><div class="form-section"><div class="form-grid"><div class="field"><label for="new-patient-name">Nome completo *</label><input id="new-patient-name" name="name" required /></div><div class="field"><label for="new-patient-birth">Data de nascimento *</label><input id="new-patient-birth" name="birthDate" type="date" required /></div><div class="field"><label for="new-patient-insurer">Convênio *</label><select id="new-patient-insurer" name="insurer" required><option value="">Selecione</option>${insurers.map(insurer => `<option>${insurer.name}</option>`).join('')}</select></div><div class="field"><label for="new-patient-ans">Código ANS</label><input id="new-patient-ans" name="ansCode" placeholder="Ex.: 004701" /></div><div class="field"><label for="new-patient-card">Número da carteira *</label><input id="new-patient-card" name="cardNumber" required /></div><div class="field"><label for="new-patient-plan">Plano *</label><input id="new-patient-plan" name="plan" required placeholder="Nome do plano" /></div><div class="field"><label for="new-patient-validity">Validade do plano *</label><input id="new-patient-validity" name="planValidity" type="date" required /></div></div><h3 class="form-subtitle">Responsável legal e consentimento</h3><div class="form-grid"><div class="field"><label for="new-patient-guardian">Nome do responsável</label><input id="new-patient-guardian" name="guardianName" /></div><div class="field"><label for="new-patient-relationship">Parentesco/vínculo</label><input id="new-patient-relationship" name="guardianRelationship" placeholder="Ex.: mãe, pai, tutor" /></div><div class="field"><label for="new-patient-phone">Telefone</label><input id="new-patient-phone" name="guardianPhone" /></div><div class="field"><label for="new-patient-email">E-mail</label><input id="new-patient-email" name="guardianEmail" type="email" /></div><div class="field"><label for="new-patient-consent">Consentimento para tratamento dos dados</label><select id="new-patient-consent" name="consentStatus"><option value="pending">Pendente</option><option value="granted">Concedido</option><option value="revoked">Revogado</option></select></div><div class="field"><label for="new-patient-consent-date">Data do consentimento</label><input id="new-patient-consent-date" name="consentDate" type="date" /></div></div><div class="form-footer"><button class="primary-button" type="submit">Salvar paciente</button></div></div></form>`;
+  return `<div class="page-heading"><div><p class="eyebrow">Cadastro da clínica</p><h1>Pacientes</h1><p class="heading-copy">Cada paciente possui uma pasta com seu histórico assistencial e de faturamento.</p></div><div class="folder-actions">${canImport ? '<button class="secondary-button" data-action="download-patient-template">Baixar modelo CSV</button><button class="secondary-button" data-action="export-patients">Exportar pacientes</button><button class="secondary-button" data-action="choose-patient-import">Importar CSV</button><input id="patient-import-file" type="file" accept=".csv,text/csv" hidden />' : ''}<button class="primary-button" data-action="new-patient">＋ Novo paciente</button></div></div>${importFeedback}<div class="panel"><div class="panel-header"><div><h2 class="panel-title">Pacientes cadastrados</h2><p class="panel-subtitle">${activeCount} ativo(s) · ${inactiveCount} arquivado(s)</p></div></div><div class="search-bar patient-search-bar"><input type="search" id="patient-search" placeholder="Buscar por nome, convênio, carteira ou plano" /><select id="patient-status-filter" aria-label="Situação do paciente"><option value="active" ${patientStatusFilter === 'active' ? 'selected' : ''}>Ativos (${activeCount})</option><option value="inactive" ${patientStatusFilter === 'inactive' ? 'selected' : ''}>Arquivados (${inactiveCount})</option><option value="all" ${patientStatusFilter === 'all' ? 'selected' : ''}>Todos (${patients.length})</option></select></div><table><thead><tr><th>Paciente</th><th>Convênio</th><th>Carteira</th><th>Plano</th><th>Validade</th><th></th></tr></thead><tbody id="patient-table-body">${patientRowsHtml('')}</tbody></table></div><form class="panel patient-form" id="patient-form"><div class="panel-header"><div><h2 class="panel-title">Cadastrar paciente</h2><p class="panel-subtitle">Dados do plano, responsável legal e consentimento.</p></div></div><div class="form-section"><div class="form-grid"><div class="field"><label for="new-patient-name">Nome completo *</label><input id="new-patient-name" name="name" required /></div><div class="field"><label for="new-patient-birth">Data de nascimento *</label><input id="new-patient-birth" name="birthDate" type="date" required /></div><div class="field"><label for="new-patient-insurer">Convênio *</label><select id="new-patient-insurer" name="insurer" required><option value="">Selecione</option>${insurers.map(insurer => `<option>${insurer.name}</option>`).join('')}</select></div><div class="field"><label for="new-patient-ans">Código ANS</label><input id="new-patient-ans" name="ansCode" placeholder="Ex.: 004701" /></div><div class="field"><label for="new-patient-card">Número da carteira *</label><input id="new-patient-card" name="cardNumber" required /></div><div class="field"><label for="new-patient-plan">Plano *</label><input id="new-patient-plan" name="plan" required placeholder="Nome do plano" /></div><div class="field"><label for="new-patient-validity">Validade do plano *</label><input id="new-patient-validity" name="planValidity" type="date" required /></div></div><h3 class="form-subtitle">Responsável legal e consentimento</h3><div class="form-grid"><div class="field"><label for="new-patient-guardian">Nome do responsável</label><input id="new-patient-guardian" name="guardianName" /></div><div class="field"><label for="new-patient-relationship">Parentesco/vínculo</label><input id="new-patient-relationship" name="guardianRelationship" placeholder="Ex.: mãe, pai, tutor" /></div><div class="field"><label for="new-patient-phone">Telefone</label><input id="new-patient-phone" name="guardianPhone" /></div><div class="field"><label for="new-patient-email">E-mail</label><input id="new-patient-email" name="guardianEmail" type="email" /></div><div class="field"><label for="new-patient-consent">Consentimento para tratamento dos dados</label><select id="new-patient-consent" name="consentStatus"><option value="pending">Pendente</option><option value="granted">Concedido</option><option value="revoked">Revogado</option></select></div><div class="field"><label for="new-patient-consent-date">Data do consentimento</label><input id="new-patient-consent-date" name="consentDate" type="date" /></div></div><div class="form-footer"><button class="primary-button" type="submit">Salvar paciente</button></div></div></form>`;
 }
 function consentHistoryActions(item, documents) {
   const options = documents.map(document => `<option value="${document.id}" ${document.id === item.signedDocumentId ? 'selected' : ''}>${document.originalName}</option>`).join('');
@@ -1723,8 +1758,7 @@ document.addEventListener('input', event => {
     if (body) body.innerHTML = guideRowsHtml(event.target.value);
   }
   if (event.target.id === 'patient-search') {
-    const body = document.querySelector('#patient-table-body');
-    if (body) body.innerHTML = patientRowsHtml(event.target.value);
+    refreshPatientTable(true);
   }
   if (event.target.id === 'insurer-search') {
     const body = document.querySelector('#insurer-table-body');
@@ -1734,6 +1768,17 @@ document.addEventListener('input', event => {
     const body = document.querySelector('#feedback-table-body');
     if (body) body.innerHTML = feedbackRowsHtml(event.target.value);
   }
+});
+document.addEventListener('change', event => {
+  if (event.target.id !== 'patient-status-filter') return;
+  patientStatusFilter = event.target.value;
+  refreshPatientTable(true);
+});
+document.addEventListener('click', event => {
+  const action = event.target.closest('[data-action]')?.dataset.action;
+  if (!['previous-patient-page', 'next-patient-page'].includes(action)) return;
+  patientPage += action === 'next-patient-page' ? 1 : -1;
+  refreshPatientTable();
 });
 document.addEventListener('click', event => {
   const addContractRule = event.target.closest('[data-action="add-contract-rule"]');

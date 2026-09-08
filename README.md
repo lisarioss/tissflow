@@ -32,6 +32,12 @@ Protótipo de portfólio para operação de faturamento clínico. Demonstra o ci
 - **Relatório de erros da importação**: linhas inválidas são apresentadas na própria tela para correção, incluindo datas impossíveis, sem permitir cadastros parciais.
 - **Exportação de pacientes**: administradores e recepção podem baixar o cadastro no mesmo formato CSV da importação, facilitando conferência e migração com download registrado na auditoria.
 - **Arquivamento de pacientes**: pacientes podem ser inativados sem perder guias, documentos ou histórico; registros inativos deixam de aparecer em novas guias, autorizações e agendamentos e podem ser reativados pelo cadastro.
+- **Rastreabilidade do cadastro**: a auditoria identifica importações em massa, arquivamentos e reativações sem copiar nome, carteira ou conteúdo clínico para o log.
+- **Filtro de pacientes arquivados**: a listagem informa os totais de ativos e arquivados e permite consultar cada grupo ou todos os cadastros.
+- **Paginação de pacientes**: busca e filtros exibem até 20 registros por página, mantendo o cadastro organizado à medida que a clínica cresce.
+- **Alertas de validade do plano**: a central de notificações avisa 30 dias antes do vencimento da carteira e destaca planos já vencidos, com acesso ao paciente para atualização.
+- **Prevenção de duplicidades**: o cadastro, a edição e a importação impedem carteiras repetidas, inclusive quando o número foi digitado com pontos, espaços, barras ou hífens.
+- **Validação cadastral no servidor**: datas impossíveis, e-mails inválidos e convênios que não pertencem à clínica são recusados antes de gravar o paciente.
 - **Trilha de auditoria**: registra automaticamente criações, alterações, exclusões e downloads, identificando usuário, data, registro e origem sem duplicar conteúdo clínico sensível no log.
 - **Autenticação real** via JWT + bcrypt, com dados persistidos em SQLite e isolados por `clinic_id` em todas as consultas.
 - **RBAC no servidor**: cada papel (admin, faturamento, recepção, médico) só consulta ou altera os recursos necessários ao seu trabalho; dados financeiros, feedbacks, documentos e agenda possuem leitura protegida pela API, não apenas menus ocultos.

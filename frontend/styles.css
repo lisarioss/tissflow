@@ -276,3 +276,10 @@
 .import-feedback > button { position:absolute; top:16px; right:18px; }
 .inactive-row { opacity:.62; background:#fafafa; }
 .patient-active-toggle { margin:18px 21px 0; }
+.patient-search-bar { display:flex; gap:10px; }
+.patient-search-bar input[type="search"] { flex:1; }
+.patient-search-bar select { min-width:170px; border:1px solid #dfe7e1; border-radius:6px; padding:9px 12px; background:#fff; font:12px Manrope, sans-serif; color:var(--ink); }
+@media (max-width:700px) { .patient-search-bar { flex-direction:column; } .patient-search-bar select { width:100%; } }
+.patient-pagination { display:flex; justify-content:flex-end; align-items:center; gap:12px; padding:14px 21px 18px; border-top:1px solid #eef2ef; }
+.patient-pagination span { min-width:90px; text-align:center; color:var(--muted); font-size:11px; font-weight:700; }
+.patient-pagination button:disabled { opacity:.45; cursor:not-allowed; }

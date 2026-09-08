@@ -1,6 +1,14 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { nextSequentialId, timeToMinutes, hasScheduleConflictWith, escapeXml, findSessionOutsidePlanValidity, exceedsAuthorizedQuantity, findCidIncompatibility, filterGuides, filterPatients, filterInsurers, filterFeedbacks, consentAlertItems, clinicOnboardingChecklist } = require('./lib.js');
+const { nextSequentialId, timeToMinutes, hasScheduleConflictWith, escapeXml, findSessionOutsidePlanValidity, exceedsAuthorizedQuantity, findCidIncompatibility, filterGuides, filterPatients, filterInsurers, filterFeedbacks, isActivePatient, consentAlertItems, clinicOnboardingChecklist } = require('./lib.js');
+
+test('isActivePatient trata booleanos locais e inteiros vindos do SQLite', () => {
+  assert.equal(isActivePatient({ active: true }), true);
+  assert.equal(isActivePatient({ active: 1 }), true);
+  assert.equal(isActivePatient({}), true);
+  assert.equal(isActivePatient({ active: false }), false);
+  assert.equal(isActivePatient({ active: 0 }), false);
+});
 
 test('clinicOnboardingChecklist identifica uma clínica pronta para operar', () => {
   const settings = { tradeName: 'Clínica', cnpj: '1', cnes: '1234567', letterheadDataUrl: 'data:image/png;base64,x', owners: [{ name: 'Ana', active: true }], professionals: [{ name: 'Bia', councilType: 'CRP', councilNumber: '1', councilState: 'BA', cbo: '251510' }] };

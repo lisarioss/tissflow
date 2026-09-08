@@ -31,6 +31,7 @@ Protótipo de portfólio para operação de faturamento clínico. Demonstra o ci
 - **Importação de pacientes por CSV**: administradores e recepção podem baixar um modelo e cadastrar até 1.000 pacientes de uma vez, com validação integral de datas, convênios, carteiras, IDs e e-mails antes de gravar qualquer registro.
 - **Relatório de erros da importação**: linhas inválidas são apresentadas na própria tela para correção, incluindo datas impossíveis, sem permitir cadastros parciais.
 - **Exportação de pacientes**: administradores e recepção podem baixar o cadastro no mesmo formato CSV da importação, facilitando conferência e migração com download registrado na auditoria.
+- **Arquivamento de pacientes**: pacientes podem ser inativados sem perder guias, documentos ou histórico; registros inativos deixam de aparecer em novas guias, autorizações e agendamentos e podem ser reativados pelo cadastro.
 - **Trilha de auditoria**: registra automaticamente criações, alterações, exclusões e downloads, identificando usuário, data, registro e origem sem duplicar conteúdo clínico sensível no log.
 - **Autenticação real** via JWT + bcrypt, com dados persistidos em SQLite e isolados por `clinic_id` em todas as consultas.
 - **RBAC no servidor**: cada papel (admin, faturamento, recepção, médico) só consulta ou altera os recursos necessários ao seu trabalho; dados financeiros, feedbacks, documentos e agenda possuem leitura protegida pela API, não apenas menus ocultos.

@@ -95,8 +95,10 @@ function filterFeedbacks(feedbacks, term) {
   return feedbacks.filter(feedback => [feedback.patient, feedback.professional, feedback.guideId, feedback.attendanceType].some(field => String(field || '').toLowerCase().includes(query)));
 }
 
+function isActivePatient(patient) { return patient?.active !== false && patient?.active !== 0; }
+
 function consentAlertItems(patients, consentEvents, renewalMonths = 0, today = new Date()) {
-  return patients.filter(patient => patient.active !== false).flatMap(patient => {
+  return patients.filter(isActivePatient).flatMap(patient => {
     const currentConsent = consentEvents
       .filter(item => item.patientId === patient.id)
       .sort((first, second) => `${second.eventDate}${second.createdAt || ''}`.localeCompare(`${first.eventDate}${first.createdAt || ''}`))[0];
@@ -130,12 +132,12 @@ function clinicOnboardingChecklist(settings, insurers, users, patients) {
     { id: 'professionals', label: 'Profissionais com conselho e CBO', complete: completeProfessionals.length > 0, view: 'settings' },
     { id: 'insurers', label: 'Convênio com código do prestador e procedimentos', complete: configuredInsurers.length > 0, view: 'convenios' },
     { id: 'team', label: 'Equipe com acesso ao sistema', complete: activeUsers.length > 1, view: 'users' },
-    { id: 'patients', label: 'Primeiro paciente cadastrado', complete: (patients || []).some(patient => patient.active !== false), view: 'patients' }
+    { id: 'patients', label: 'Primeiro paciente cadastrado', complete: (patients || []).some(isActivePatient), view: 'patients' }
   ];
 }
 
 // Disponibiliza as funções tanto para <script> no navegador (globais em
 // `window`) quanto para `require()` em testes Node — sem precisar de bundler.
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { nextSequentialId, timeToMinutes, hasScheduleConflictWith, escapeXml, findSessionOutsidePlanValidity, exceedsAuthorizedQuantity, findCidIncompatibility, filterGuides, filterPatients, filterInsurers, filterFeedbacks, consentAlertItems, clinicOnboardingChecklist };
+  module.exports = { nextSequentialId, timeToMinutes, hasScheduleConflictWith, escapeXml, findSessionOutsidePlanValidity, exceedsAuthorizedQuantity, findCidIncompatibility, filterGuides, filterPatients, filterInsurers, filterFeedbacks, isActivePatient, consentAlertItems, clinicOnboardingChecklist };
 }

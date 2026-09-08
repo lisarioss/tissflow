@@ -424,6 +424,7 @@ app.get('/api/guides', auth, (req, res) => {
 app.post('/api/guides', auth, requireRole('admin', 'faturamento'), (req, res) => {
   const { id, patient, procedure, insurer, competence, ansCode, cardNumber, patientBirth, patientPlan, planValidity, authorizationNumber, operatorGuide, providerName, providerCnpj, professional, professionalRegister, attendanceType, serviceCode, quantity = 1, unitValue, status = 'sent', value, sessions = [], guideType = 'sp_sadt', cid, authorizedQuantity } = req.body;
   if (!id || !patient || !procedure || !insurer) return res.status(400).json({ error: 'Paciente, procedimento, convênio e identificador são obrigatórios.' });
+  if (!db.prepare('SELECT id FROM patients WHERE clinic_id = ? AND name = ? AND active = 1').get(req.session.clinicId, patient)) return res.status(400).json({ error: 'Selecione um paciente ativo da clínica.' });
   const insurerContract = db.prepare('SELECT procedure_rules FROM insurers WHERE clinic_id = ? AND name = ?').get(req.session.clinicId, insurer);
   const contractRules = insurerContract ? JSON.parse(insurerContract.procedure_rules || '[]') : [];
   const procedureCode = String(serviceCode || procedure).split(' - ')[0].trim();
@@ -754,9 +755,9 @@ app.post('/api/authorizations', auth, requireRole('admin', 'faturamento', 'recep
   if (!patientId || !insurerId || !authorizationNumber || !/^\d{4}-\d{2}-\d{2}$/.test(validFrom || '') || !/^\d{4}-\d{2}-\d{2}$/.test(validTo || '')) return res.status(400).json({ error: 'Preencha paciente, convênio, número e período de validade.' });
   if (validFrom > validTo) return res.status(400).json({ error: 'A data final não pode ser anterior à data inicial.' });
   if (!Number.isInteger(quantity) || quantity < 1 || !Number.isInteger(used) || used < 0) return res.status(400).json({ error: 'Informe quantidades válidas.' });
-  const patient = db.prepare('SELECT insurer FROM patients WHERE id = ? AND clinic_id = ?').get(patientId, req.session.clinicId);
+  const patient = db.prepare('SELECT insurer FROM patients WHERE id = ? AND clinic_id = ? AND active = 1').get(patientId, req.session.clinicId);
   const insurer = db.prepare('SELECT name FROM insurers WHERE id = ? AND clinic_id = ?').get(insurerId, req.session.clinicId);
-  if (!patient || !insurer) return res.status(404).json({ error: 'Paciente ou convênio não encontrado.' });
+  if (!patient || !insurer) return res.status(404).json({ error: 'Paciente ativo ou convênio não encontrado.' });
   if (patient.insurer !== insurer.name) return res.status(400).json({ error: 'O convênio selecionado é diferente do cadastro do paciente.' });
   const id = `AUT-${Date.now()}`;
   try {

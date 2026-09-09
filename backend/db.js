@@ -104,6 +104,44 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(clinic_id, name)
   );
+  CREATE TABLE IF NOT EXISTS platform_admins (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    email TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1,
+    token_version INTEGER NOT NULL DEFAULT 0,
+    failed_login_attempts INTEGER NOT NULL DEFAULT 0,
+    locked_until TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE TABLE IF NOT EXISTS platform_audit_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    platform_admin_id TEXT NOT NULL REFERENCES platform_admins(id),
+    action TEXT NOT NULL,
+    clinic_id TEXT REFERENCES clinics(id),
+    details_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE TABLE IF NOT EXISTS clinic_subscriptions (
+    clinic_id TEXT PRIMARY KEY REFERENCES clinics(id) ON DELETE CASCADE,
+    plan_code TEXT NOT NULL DEFAULT 'professional' CHECK (plan_code IN ('essential', 'professional', 'network')),
+    status TEXT NOT NULL DEFAULT 'trialing' CHECK (status IN ('trialing', 'active', 'past_due', 'canceled')),
+    trial_end TEXT,
+    current_period_end TEXT,
+    external_customer_id TEXT,
+    external_subscription_id TEXT,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE TABLE IF NOT EXISTS billing_webhook_events (
+    provider TEXT NOT NULL,
+    event_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    external_subscription_id TEXT,
+    received_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(provider, event_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_billing_webhook_subscription ON billing_webhook_events(provider, external_subscription_id);
   CREATE TABLE IF NOT EXISTS billing_batches (
     id TEXT PRIMARY KEY,
     clinic_id TEXT NOT NULL REFERENCES clinics(id),
@@ -372,6 +410,10 @@ if (!userColumns.has('active')) db.exec('ALTER TABLE users ADD COLUMN active INT
 if (!userColumns.has('token_version')) db.exec('ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0');
 if (!userColumns.has('failed_login_attempts')) db.exec('ALTER TABLE users ADD COLUMN failed_login_attempts INTEGER NOT NULL DEFAULT 0');
 if (!userColumns.has('locked_until')) db.exec("ALTER TABLE users ADD COLUMN locked_until TEXT NOT NULL DEFAULT ''");
+const platformAdminColumns = new Set(db.prepare('PRAGMA table_info(platform_admins)').all().map(column => column.name));
+if (!platformAdminColumns.has('token_version')) db.exec('ALTER TABLE platform_admins ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0');
+if (!platformAdminColumns.has('failed_login_attempts')) db.exec('ALTER TABLE platform_admins ADD COLUMN failed_login_attempts INTEGER NOT NULL DEFAULT 0');
+if (!platformAdminColumns.has('locked_until')) db.exec("ALTER TABLE platform_admins ADD COLUMN locked_until TEXT NOT NULL DEFAULT ''");
 const settingsColumns = new Set(db.prepare('PRAGMA table_info(clinic_settings)').all().map(column => column.name));
 if (!settingsColumns.has('letterhead_data_url')) db.exec("ALTER TABLE clinic_settings ADD COLUMN letterhead_data_url TEXT NOT NULL DEFAULT ''");
 if (!settingsColumns.has('letterhead_header_mm')) db.exec('ALTER TABLE clinic_settings ADD COLUMN letterhead_header_mm INTEGER NOT NULL DEFAULT 35');
@@ -447,5 +489,14 @@ if (demoEnabled) db.transaction(() => {
   ];
   for (const u of demoUsers) insertDemoUser.run(u.id, u.clinicId, u.name, u.email, bcrypt.hashSync(demoPassword, 10), u.role);
 })();
+
+db.prepare(`INSERT OR IGNORE INTO clinic_subscriptions (clinic_id, plan_code, status)
+  SELECT id, 'professional', 'active' FROM clinics`).run();
+
+const platformAdminEmail = String(process.env.PLATFORM_ADMIN_EMAIL || '').trim().toLowerCase();
+const platformAdminPassword = String(process.env.PLATFORM_ADMIN_PASSWORD || '');
+if (platformAdminEmail && platformAdminPassword.length >= 12 && !db.prepare('SELECT 1 FROM platform_admins LIMIT 1').get()) {
+  db.prepare('INSERT INTO platform_admins (id, name, email, password_hash) VALUES (?, ?, ?, ?)').run('PLATFORM-OWNER', 'Administradora da plataforma', platformAdminEmail, bcrypt.hashSync(platformAdminPassword, 12));
+}
 
 module.exports = db;

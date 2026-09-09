@@ -207,6 +207,12 @@
 @media (max-width:620px) { .login-brand { top:22px; left:22px; } .login-panel { padding:27px 22px; } }
 .login-register-toggle { display:block; margin:16px auto 0; }
 .clinic-registration-form { margin-top:18px; padding-top:18px; border-top:1px solid var(--line); }
+.registration-plan { display:grid; grid-template-columns:1fr auto; gap:4px 18px; margin:14px 0 16px; padding:13px 14px; border:1px solid #cce5da; border-radius:9px; background:#f2faf6; }
+.registration-plan span small,.registration-plan span strong { display:block; }
+.registration-plan span small { margin-bottom:2px; color:var(--muted); font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:.07em; }
+.registration-plan span:last-of-type { text-align:right; }
+.registration-plan > small { grid-column:1 / -1; color:#557069; }
+.registration-trial-note { margin:2px 0 12px; color:var(--muted); font-size:10px; line-height:1.5; }
 .registration-heading { display:block; margin-bottom:15px; }
 .registration-heading strong, .registration-heading small { display:block; }
 .registration-heading strong { font-size:13px; }
@@ -367,6 +373,23 @@
 .privacy-status.denied { color:#a23124; background:#fde4df; }
 .privacy-request-form { display:grid; grid-template-columns:1fr 1.2fr 1.5fr auto; gap:10px; }
 .privacy-request-form select,.privacy-request-form input { min-height:40px; border:1px solid var(--line); border-radius:6px; padding:8px 10px; background:#fff; }
+.subscription-panel { margin-bottom:18px; }
+.subscription-status { padding:7px 10px; border-radius:999px; font-size:9px; font-weight:800; }
+.subscription-status.trialing { color:#315d87; background:#e6f1fb; }
+.subscription-status.active { color:var(--green); background:var(--mint); }
+.subscription-status.trial_expired,.subscription-status.past_due,.subscription-status.canceled { color:#a23124; background:#fde4df; }
+.trial-message { padding:12px; margin-bottom:12px; border-radius:7px; background:#f2f7fb; }
+.trial-message strong,.trial-message small { display:block; }
+.trial-message small { margin-top:3px; color:var(--muted); }
+.subscription-usage { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin-bottom:14px; }
+.subscription-usage > div { padding:12px; border-radius:7px; background:#f7faf8; }
+.subscription-usage span,.subscription-usage strong { display:block; }
+.subscription-usage span { margin-bottom:5px; color:var(--muted); font-size:10px; }
+.subscription-plan-form { display:flex; align-items:end; gap:10px; }
+.subscription-plan-form label { display:grid; flex:1; gap:5px; color:var(--muted); font-size:10px; font-weight:700; }
+.subscription-plan-form select { min-height:40px; border:1px solid var(--line); border-radius:6px; padding:8px; background:#fff; }
+.subscription-note { display:block; margin-top:10px; color:var(--muted); }
+@media (max-width:700px) { .subscription-usage { grid-template-columns:1fr; } .subscription-plan-form { align-items:stretch; flex-direction:column; } }
 @media (max-width:900px) { .privacy-request-list > div,.privacy-request-form { grid-template-columns:1fr; align-items:start; } }
 @media (max-width:900px) { .batch-financial-report { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 @media (max-width:700px) { .batch-reconciliation-grid { grid-template-columns:1fr; } .batch-reconciliation-heading { align-items:flex-start; flex-direction:column; } }
@@ -376,3 +399,11 @@
 .recovery-points-list small { margin-top:3px; color:var(--muted); }
 .recovery-points-overlay .backup-preview-card > button { display:block; margin-left:auto; }
 @media (max-width:600px) { .backup-preview-grid { grid-template-columns:repeat(2,1fr); } .backup-health-card,.backup-health-card > div { align-items:flex-start; flex-direction:column; } .backup-health-card span { text-align:left; } }
+.billing-provider-status { display: flex; justify-content: space-between; gap: 16px; align-items: center; padding: 12px 14px; border: 1px solid #d8e6e1; border-radius: 10px; background: #f7fbfa; }
+.billing-provider-status span { color: #61706b; font-size: .84rem; }
+.billing-provider-status strong { color: #185c4b; font-size: .9rem; text-align: right; }
+.subscription-checkout-form { display: grid; grid-template-columns: minmax(180px, 1fr) auto; gap: 12px; align-items: end; padding-top: 8px; }
+.subscription-checkout-form label { display: grid; gap: 6px; color: #52635e; font-size: .85rem; }
+.subscription-access-warning { display: grid; gap: 3px; padding: 12px 14px; border: 1px solid #f0c36a; border-radius: 10px; background: #fff9e9; color: #805f16; }
+.subscription-access-warning.blocked { border-color: #e4a9a9; background: #fff2f2; color: #8a3030; }
+.subscription-access-warning small { color: inherit; }

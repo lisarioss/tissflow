@@ -21,6 +21,7 @@ Protótipo de portfólio para operação de faturamento clínico. Demonstra o ci
 - **Importação do retorno TISS**: ao anexar o XML da operadora, identifica as guias do lote, valores liberados e glosados, atualiza a situação das guias e abre as glosas correspondentes com código e motivo, preservando o arquivo original para auditoria.
 - **Relatório financeiro dos convênios**: consolida por competência o valor faturado, liberado, recebido, glosado e ainda a receber, mantém as notas fiscais em visão separada e exporta os lotes em CSV para conferência no Excel.
 - **Direitos do titular**: registra pedidos de acesso, correção, portabilidade, anonimização ou eliminação na pasta do paciente, exige justificativa para a conclusão, permite exportar os dados em JSON e mantém as decisões na auditoria e no backup. O sistema não elimina prontuários automaticamente.
+- **Base comercial de assinaturas**: novas clínicas recebem 30 dias de teste no plano Profissional, podem comparar Essencial, Profissional e Rede, acompanham uso de pacientes e usuários e mantêm a situação da assinatura separada dos dados operacionais e dos backups.
 - **Controle de autorizações**: registra a guia/senha autorizada por paciente, período de validade, quantidade liberada e utilizada; destaca autorizações vigentes, próximas do vencimento ou vencidas e permite atualizar o saldo de sessões.
 - **Validação TISS oficial**: confere o XML com os schemas de Comunicação 04.03.00 publicados pela ANS, calcula o hash MD5 em ISO-8859-1 e mantém inválido qualquer lote que não passe no XSD.
 - **Feedback de atendimento**: profissionais registram evolução/observações por atendimento, com foto opcional e vínculo validado pelo paciente e pela data da guia faturada; geração do PDF individual e de um relatório consolidado por guia para auditoria.
@@ -135,11 +136,49 @@ npm test
 
 ## Preparação para produção
 
+A página pública fica em `/`, o acesso das clínicas em `/login` e a administração comercial em `/platform`. Os botões dos planos levam ao cadastro já identificando Essencial, Profissional ou Rede; a nova clínica recebe 30 dias de teste no plano escolhido.
+
 Em produção, configure `NODE_ENV=production`, gere um `JWT_SECRET` aleatório com pelo menos 32 caracteres, mantenha `ENABLE_DEMO_DATA=false`, informe somente origens HTTPS em `CORS_ORIGINS`, use `TRUST_PROXY=true` atrás do proxy que encerra o HTTPS e defina `DATA_DIR` com o caminho absoluto de um volume persistente. O servidor recusa a inicialização se alguma dessas proteções estiver ausente.
 
 O `DATA_DIR` reúne o banco `tiss-flow.db`, os documentos enviados e os pontos locais de recuperação. Assim, uma nova versão da aplicação pode substituir o código sem apagar os dados da clínica. O volume deve ter leitura e escrita permitidas somente para o processo da aplicação e precisa fazer parte da rotina externa de backup do provedor.
 
 Use `GET /api/health` para verificar se o processo está ativo e `GET /api/ready` para confirmar também o acesso ao banco e ao armazenamento de documentos. O encerramento por `SIGTERM` ou `SIGINT` aguarda as conexões abertas e fecha o banco antes de finalizar.
+
+### Implantação com Docker e HTTPS
+
+O projeto inclui `Dockerfile`, `compose.prod.yml` e `Caddyfile`. O Caddy atua como proxy reverso e solicita automaticamente o certificado HTTPS do domínio configurado.
+
+1. Copie `.env.production.example` para `.env.production` e substitua o domínio e o segredo.
+2. Aponte o DNS do domínio para o servidor.
+3. Libere as portas 80 e 443 no servidor.
+4. Execute `docker compose --env-file .env.production -f compose.prod.yml up -d --build`.
+5. Confirme `https://seu-dominio/api/health` e `https://seu-dominio/api/ready`.
+
+O volume `app_data` preserva banco, documentos e recuperações entre atualizações. Os volumes do Caddy preservam certificados. Configure no provedor uma cópia externa recorrente do `app_data`; os pontos de recuperação dentro do mesmo volume não substituem um backup externo.
+
+Em produção, cada requisição recebe um `X-Request-ID`. Os logs técnicos registram apenas método, status, duração e identificadores internos, sem URL, parâmetros ou corpo clínico. Respostas de erro interno devolvem o identificador para facilitar o suporte.
+
+### Cobrança recorrente
+
+A base da integração com o Asaas usa o sandbox por padrão. Configure `ASAAS_API_KEY` e um `ASAAS_WEBHOOK_TOKEN` exclusivo; enquanto ambos estiverem vazios, nenhuma cobrança é ativada. No painel do Asaas, cadastre `https://seu-dominio/api/billing/webhooks/asaas` como webhook e use o mesmo token no cabeçalho de autenticação.
+
+O endpoint persiste o identificador de cada evento para impedir processamento duplicado. Confirmações ativam a assinatura, atrasos marcam pendência e a inativação/cancelamento encerra o acesso comercial. A cobrança real só deve ser liberada depois da homologação completa no sandbox.
+
+Os valores iniciais aprovados são R$ 149/mês no Essencial, R$ 299/mês no Profissional e R$ 599/mês no Rede. Com o sandbox configurado, o administrador escolhe Pix ou boleto nas configurações. O backend reutiliza o cliente e a assinatura identificados pela referência interna da clínica, cria a recorrência mensal quando necessário e abre a primeira cobrança hospedada pelo Asaas.
+
+Os limites são aplicados somente a novos pacientes e usuários ativos; registros já existentes nunca são apagados. Pagamentos atrasados possuem sete dias de tolerância. Depois disso, ou quando o teste/assinatura termina, a clínica entra em modo somente leitura: consultas e exportações permanecem disponíveis, enquanto alterações são liberadas novamente após a regularização.
+
+### Administração da plataforma
+
+O painel da proprietária fica em `/platform` e possui autenticação separada das clínicas. Defina `PLATFORM_ADMIN_EMAIL` e `PLATFORM_ADMIN_PASSWORD` antes da primeira inicialização do banco; a senha precisa ter pelo menos 12 caracteres e é armazenada somente como hash. O painel apresenta clínicas, planos, status e contagens agregadas, sem exibir nomes de pacientes, guias ou prontuários.
+
+Administradores da plataforma podem trocar o plano de clínicas ainda não vinculadas ao Asaas e prorrogar testes por 7, 15 ou 30 dias. Alterações em assinaturas já vinculadas ao gateway são bloqueadas para evitar divergência de preço. Todas essas ações são gravadas em uma auditoria comercial separada.
+
+O painel calcula também MRR (receita recorrente mensal das assinaturas ativas), projeção anual, potencial mensal dos testes, distribuição por plano e testes que vencem nos próximos sete dias. Esses valores representam as assinaturas do TISSFlow e são mantidos separados do faturamento assistencial das clínicas.
+
+A proprietária pode trocar a própria senha em `/platform`. A operação incrementa a versão da sessão, invalida imediatamente os tokens emitidos anteriormente e registra o evento na auditoria. Cinco tentativas de login incorretas bloqueiam temporariamente a conta por 15 minutos.
+
+A carteira comercial exibe o CNPJ e o e-mail do administrador de cada clínica e pode ser exportada em CSV. O arquivo contém somente dados cadastrais, assinatura e contagens agregadas; nenhuma identificação de paciente ou informação assistencial é incluída. Células iniciadas por caracteres de fórmula são neutralizadas antes da exportação.
 
 ## Estrutura
 

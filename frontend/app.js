@@ -19,6 +19,12 @@ const roleLabels = { admin: 'Administradora', faturamento: 'Faturamento', recepc
 const activeUser = activeSession?.user || (activeSession ? (clinicUsers[activeClinicId] || []).find(user => user.id === activeSession.userId) : null);
 const clinicStorageKey = key => `tiss-${activeClinicId}-${key}`;
 const apiBase = '/api';
+const selectedLandingPlan = new URLSearchParams(window.location.search).get('plan');
+const registrationPlans = {
+  essential: { name: 'Essencial', price: 'R$ 149/mês', limits: 'Até 100 pacientes e 5 usuários' },
+  professional: { name: 'Profissional', price: 'R$ 299/mês', limits: 'Até 500 pacientes e 20 usuários' },
+  network: { name: 'Rede', price: 'R$ 599/mês', limits: 'Pacientes e usuários ilimitados' }
+};
 const moneyFormatter = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 const defaultGuides = [
   { id: 'G-2026-00481', patient: 'Helena Martins', procedure: 'Consulta ambulatorial', insurer: 'Unimed', competence: '2026-08', status: 'approved', label: 'Aprovada', date: '18 ago, 2026', value: 'R$ 180,00' },
@@ -85,6 +91,7 @@ let auditLogs = [];
 let users = clinicUsers[activeClinicId] || [];
 let loginEvents = [];
 let selectedReportCompetence = '';
+let subscription = null;
 function saveFeedbacks() { localStorage.setItem(clinicStorageKey('feedbacks'), JSON.stringify(feedbacks)); }
 let clinicSettings = JSON.parse(localStorage.getItem(clinicStorageKey('settings')) || 'null') || { tradeName: clinicProfiles[activeClinicId]?.name || '', legalName: '', cnpj: '', cnes: '', phone: '', instagram: '', address: '', city: '', state: '', postalCode: '', logoDataUrl: '', letterheadDataUrl: '', letterheadHeaderMm: 35, letterheadFooterMm: 25, owners: [], professionals: [], consentTitle: '', consentText: '', privacyContact: '', consentRenewalMonths: 0 };
 const views = { overview: 'Visão geral', alerts: 'Notificações', agenda: 'Agenda', guides: 'Guias TISS', authorizations: 'Controle de autorizações', batches: 'Lotes de faturamento', financeiro: 'Financeiro', users: 'Usuários', patients: 'Pacientes', convenios: 'Convênios', feedback: 'Feedbacks', reports: 'Relatórios', audit: 'Trilha de auditoria', settings: 'Configurações' };
@@ -154,6 +161,22 @@ async function loadClinicOptions() {
     select.replaceChildren(...clinics.map(clinic => { const option = document.createElement('option'); option.value = clinic.id; option.textContent = clinic.name; return option; }));
     if (clinics.some(clinic => clinic.id === selected)) select.value = selected;
   } catch { /* mantém as clínicas demonstrativas quando a API estiver indisponível */ }
+}
+function applyLandingRegistrationIntent() {
+  if (!['essential', 'professional', 'network'].includes(selectedLandingPlan)) return;
+  const registration = document.querySelector('#clinic-registration-form');
+  const planField = registration?.querySelector('[name="planCode"]');
+  if (registration) registration.classList.remove('hidden');
+  if (planField) planField.value = selectedLandingPlan;
+  const selectedPlan = registrationPlans[selectedLandingPlan];
+  const heading = registration?.querySelector('.registration-heading strong');
+  if (heading) heading.textContent = `Comece no plano ${selectedPlan.name}`;
+  const name = registration?.querySelector('[data-registration-plan-name]');
+  const price = registration?.querySelector('[data-registration-plan-price]');
+  const limits = registration?.querySelector('[data-registration-plan-limits]');
+  if (name) name.textContent = selectedPlan.name;
+  if (price) price.textContent = selectedPlan.price;
+  if (limits) limits.textContent = selectedPlan.limits;
 }
 function fileAsDataUrl(file) {
   return new Promise((resolve, reject) => {
@@ -308,7 +331,7 @@ async function loadApiData() {
     const permittedRequest = (allowed, path, fallback = []) => allowed ? apiRequest(path) : Promise.resolve(fallback);
     const canReadFinancial = userCan('financeiro');
     const canReadFeedbacks = userCan('feedback');
-    const [apiGuides, apiInvoices, apiPatients, apiGlosas, apiInsurers, apiFeedbacks, apiSettings, apiBatches, apiAuthorizations, apiPatientDocuments, apiAppointments, apiPatientConsents, apiPrivacyRequests] = await Promise.all([
+    const [apiGuides, apiInvoices, apiPatients, apiGlosas, apiInsurers, apiFeedbacks, apiSettings, apiBatches, apiAuthorizations, apiPatientDocuments, apiAppointments, apiPatientConsents, apiPrivacyRequests, apiSubscription] = await Promise.all([
       apiRequest('/guides'),
       permittedRequest(canReadFinancial, '/invoices'),
       apiRequest('/patients'),
@@ -321,7 +344,8 @@ async function loadApiData() {
       permittedRequest(userCan('patients'), '/patient-documents'),
       permittedRequest(userCan('agenda'), '/appointments'),
       permittedRequest(userCan('patients'), '/patient-consents'),
-      permittedRequest(['admin', 'recepcao'].includes(activeUser?.role), '/privacy-requests')
+      permittedRequest(['admin', 'recepcao'].includes(activeUser?.role), '/privacy-requests'),
+      permittedRequest(activeUser?.role === 'admin', '/subscription', null)
     ]);
     guides = apiGuides.map(normalizeGuide);
     invoices = apiInvoices.map(normalizeInvoice);
@@ -335,6 +359,7 @@ async function loadApiData() {
     patientDocuments = apiPatientDocuments;
     patientConsents = apiPatientConsents;
     privacyRequests = apiPrivacyRequests;
+    subscription = apiSubscription;
     if (userCan('agenda')) appointments = apiAppointments;
     if (userCan('audit')) auditLogs = await apiRequest('/audit-logs');
     if (userCan('users')) { users = await apiRequest('/users'); loginEvents = await apiRequest('/security/login-events'); }
@@ -944,12 +969,24 @@ function ensureBackupValidationControls() {
   encryptedInput.id = 'encrypted-backup-file'; encryptedInput.type = 'file'; encryptedInput.accept = '.tissbackup,application/json'; encryptedInput.hidden = true;
   downloadButton.before(recoveryButton, validateButton, encryptedButton, encryptedRestoreButton, input, encryptedInput);
 }
+const subscriptionStatusLabels = { trialing: 'Período de teste', trial_expired: 'Teste encerrado', active: 'Assinatura ativa', past_due: 'Pagamento pendente', canceled: 'Cancelada' };
+function subscriptionPanelHtml() {
+  if (!subscription || activeUser?.role !== 'admin') return '';
+  const plan = subscription.plan || {};
+  const usageText = (used, limit, label) => `${used} ${label}${limit ? ` de ${limit}` : ' · ilimitado'}`;
+  const canChange = subscription.status === 'trialing';
+  const accessNotice = subscription.writeAccess?.effectiveStatus === 'past_due' && subscription.writeAccess.allowed
+    ? `<div class="subscription-access-warning"><strong>Pagamento pendente</strong><small>${subscription.writeAccess.graceDaysRemaining} dia(s) de tolerância restantes. O sistema continua funcionando durante esse prazo.</small></div>`
+    : subscription.writeAccess?.allowed === false ? '<div class="subscription-access-warning blocked"><strong>Modo somente leitura</strong><small>Os dados e exportações continuam disponíveis. Regularize a assinatura para voltar a incluir ou alterar informações.</small></div>' : '';
+  return `<section class="panel subscription-panel"><div class="panel-header"><div><p class="eyebrow">Plano da plataforma</p><h2 class="panel-title">${plan.name || subscription.planCode}</h2><p class="panel-subtitle">${plan.description || ''}</p></div><span class="subscription-status ${subscription.effectiveStatus}">${subscriptionStatusLabels[subscription.effectiveStatus] || subscription.effectiveStatus}</span></div>${accessNotice}${subscription.status === 'trialing' ? `<div class="trial-message"><strong>${subscription.remainingTrialDays} dia(s) restantes no teste</strong><small>Escolha o plano durante o teste; a cobrança só será ativada após a configuração comercial.</small></div>` : ''}<div class="subscription-usage"><div><span>Mensalidade</span><strong>${formatMoney((plan.monthlyPriceCents || 0) / 100)}</strong></div><div><span>Pacientes ativos</span><strong>${usageText(subscription.usage?.patients || 0, plan.patientLimit, 'paciente(s)')}</strong></div><div><span>Usuários ativos</span><strong>${usageText(subscription.usage?.users || 0, plan.userLimit, 'usuário(s)')}</strong></div></div><div class="billing-provider-status"><span>Gateway de cobrança</span><strong>Asaas · ${subscription.billing?.configured ? (subscription.billing.environment === 'sandbox' ? 'Sandbox configurado' : 'Produção configurada') : 'Aguardando credenciais'}</strong></div><form class="subscription-plan-form"><label>Plano pretendido<select name="planCode" ${canChange ? '' : 'disabled'}>${(subscription.plans || []).map(item => `<option value="${item.code}" ${item.code === subscription.planCode ? 'selected' : ''}>${item.name} · ${formatMoney(item.monthlyPriceCents / 100)}/mês · ${item.patientLimit || 'Ilimitado'} pacientes · ${item.userLimit || 'Ilimitado'} usuários</option>`).join('')}</select></label><button class="secondary-button" type="submit" ${canChange ? '' : 'disabled'}>Atualizar plano do teste</button></form>${subscription.billing?.configured && !subscription.hasExternalSubscription ? `<form class="subscription-checkout-form"><label>Forma de pagamento<select name="billingType"><option value="PIX">Pix mensal</option><option value="BOLETO">Boleto mensal</option></select></label><button class="primary-button" type="submit">Gerar primeira cobrança no ${subscription.billing.environment === 'sandbox' ? 'sandbox' : 'Asaas'}</button></form>` : ''}${subscription.hasExternalSubscription ? '<small class="subscription-note">Assinatura vinculada ao Asaas. Os pagamentos atualizarão o status automaticamente.</small>' : ''}${canChange ? '' : '<small class="subscription-note">Mudanças após o teste serão processadas pela cobrança.</small>'}</section>`;
+}
 function settingsView() {
   const logo = clinicSettings.letterheadDataUrl ? '<p class="panel-subtitle">Papel timbrado A4 cadastrado.</p>' : clinicSettings.logoDataUrl ? `<img src="${clinicSettings.logoDataUrl}" alt="Logotipo atual" style="max-width:180px;max-height:90px;object-fit:contain" />` : '<p class="panel-subtitle">Nenhum timbrado cadastrado.</p>';
   const owners = clinicSettings.owners?.length ? clinicSettings.owners : [{}];
   const professionals = clinicSettings.professionals?.length ? clinicSettings.professionals : [{}];
   queueMicrotask(() => { ensureBackupValidationControls(); loadBackupHealth(); });
   return `<div class="page-heading"><div><p class="eyebrow">Identidade dos documentos</p><h1>Configurações da clínica</h1><p class="heading-copy">Estes dados serão usados na capa e na guia impressa.</p></div><button class="secondary-button" data-action="download-backup">Baixar backup da clínica</button></div>
+    ${subscriptionPanelHtml()}
     <div class="backup-health-card" id="backup-health"><strong>Proteção dos dados</strong><div><span>Verificando a cópia diária…</span><button type="button" class="text-button" data-action="refresh-daily-backup">Criar cópia agora</button></div></div>
     <form class="panel patient-form" id="settings-form">
       <div class="panel-header"><div><h2 class="panel-title">Timbrado e responsáveis</h2><p class="panel-subtitle">Somente administradores podem alterar estas informações.</p></div>${logo}</div>
@@ -1200,6 +1237,27 @@ document.addEventListener('click', async event => {
 });
 
 document.addEventListener('submit', async event => {
+  if (event.target.classList.contains('subscription-plan-form')) {
+    event.preventDefault(); event.stopImmediatePropagation();
+    const planCode = new FormData(event.target).get('planCode');
+    try {
+      await apiRequest('/subscription/plan', { method: 'PATCH', body: JSON.stringify({ planCode }) });
+      subscription = await apiRequest('/subscription'); render('settings'); showToast('Plano do período de teste atualizado.');
+    } catch (error) { showToast(error.message); }
+    return;
+  }
+  if (event.target.classList.contains('subscription-checkout-form')) {
+    event.preventDefault();
+    const button = event.target.querySelector('button');
+    button.disabled = true; button.textContent = 'Gerando cobrança...';
+    try {
+      const result = await apiRequest('/subscription/checkout', { method: 'POST', body: JSON.stringify({ billingType: new FormData(event.target).get('billingType') }) });
+      subscription = await apiRequest('/subscription'); render('settings');
+      if (result.paymentUrl) window.open(result.paymentUrl, '_blank', 'noopener');
+      showToast(result.paymentUrl ? 'Cobrança criada. O link foi aberto em uma nova aba.' : 'Assinatura criada. Aguarde a geração da primeira cobrança.');
+    } catch (error) { showToast(error.message, 'error'); button.disabled = false; button.textContent = 'Tentar novamente'; }
+    return;
+  }
   if (event.target.id !== 'settings-form') return;
   event.preventDefault(); event.stopImmediatePropagation();
   const data = Object.fromEntries(new FormData(event.target));
@@ -2480,12 +2538,19 @@ document.addEventListener('submit', async event => {
     event.preventDefault();
     event.stopImmediatePropagation();
     const data = Object.fromEntries(new FormData(event.target));
+    const button = event.target.querySelector('button[type="submit"]');
+    button.disabled = true;
+    button.textContent = 'Criando espaço seguro…';
     try {
       const session = await apiRequest('/auth/register-clinic', { method: 'POST', body: JSON.stringify(data) });
       session.user.roleLabel = roleLabels.admin;
       localStorage.setItem('tiss-session', JSON.stringify({ ...session, userId: session.user.id }));
       window.location.reload();
-    } catch (error) { showToast(error.message); }
+    } catch (error) {
+      showToast(error.message);
+      button.disabled = false;
+      button.textContent = 'Criar espaço e iniciar teste →';
+    }
     return;
   }
   if (event.target.id !== 'user-form') return;
@@ -2502,4 +2567,4 @@ document.addEventListener('submit', async event => {
   } catch (error) { showToast(error.message); }
 });
 
-if (activeSession) { document.querySelector('#login-screen').classList.add('hidden'); applySession(); render(); loadApiData(); } else { document.querySelector('.app-shell').classList.add('hidden'); loadClinicOptions(); }
+if (activeSession) { document.querySelector('#login-screen').classList.add('hidden'); applySession(); render(); loadApiData(); } else { document.querySelector('.app-shell').classList.add('hidden'); loadClinicOptions(); applyLandingRegistrationIntent(); }

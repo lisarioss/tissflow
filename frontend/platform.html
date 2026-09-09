@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex,nofollow" />
+    <title>TISS Flow | Administração da plataforma</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="platform.css" />
+  </head>
+  <body>
+    <main class="platform-shell">
+      <section class="platform-login" id="platform-login">
+        <div class="platform-brand"><span>+</span> TISS <em>flow</em></div>
+        <p class="eyebrow">Administração da plataforma</p>
+        <h1>Visão comercial das clínicas.</h1>
+        <p>Acesso exclusivo da proprietária do TISSFlow. Nenhum dado clínico de pacientes é exibido aqui.</p>
+        <form id="platform-login-form">
+          <label>E-mail<input name="email" type="email" autocomplete="username" required /></label>
+          <label>Senha<input name="password" type="password" minlength="12" autocomplete="current-password" required /></label>
+          <button type="submit">Entrar no painel</button>
+        </form>
+        <small id="platform-login-message"></small>
+        <a href="/">Voltar para o acesso das clínicas</a>
+      </section>
+
+      <section class="platform-dashboard" id="platform-dashboard" hidden>
+        <header><div><div class="platform-brand"><span>+</span> TISS <em>flow</em></div><p id="platform-admin-name"></p></div><div class="header-actions"><button class="outline" id="platform-password-toggle">Trocar senha</button><button class="outline" id="platform-logout">Sair</button></div></header>
+        <section class="platform-card password-card" id="platform-password-card" hidden><div><h2>Trocar senha da plataforma</h2><p>A alteração encerra imediatamente todas as sessões abertas anteriormente.</p></div><form id="platform-password-form"><label>Senha atual<input name="currentPassword" type="password" autocomplete="current-password" required /></label><label>Nova senha<input name="newPassword" type="password" minlength="12" autocomplete="new-password" required /></label><label>Confirmar nova senha<input name="confirmation" type="password" minlength="12" autocomplete="new-password" required /></label><button type="submit">Atualizar senha</button></form><small id="platform-password-message"></small></section>
+        <div class="heading"><div><p class="eyebrow">Painel da proprietária</p><h1>Clínicas e assinaturas</h1><p>Indicadores comerciais, sem prontuários ou informações assistenciais.</p></div><div class="header-actions"><button class="outline" id="platform-export">Exportar CSV</button><button id="platform-refresh">Atualizar</button></div></div>
+        <div class="platform-stats" id="platform-stats"></div>
+        <div class="commercial-stats" id="commercial-stats"></div>
+        <section class="platform-card trial-alert-card" id="trial-alert-card" hidden><div class="table-heading"><div><h2>Testes próximos do vencimento</h2><p>Clínicas que precisam de contato comercial nos próximos sete dias.</p></div></div><div id="trial-alerts" class="trial-alerts"></div></section>
+        <section class="platform-card">
+          <div class="table-heading"><div><h2>Clínicas cadastradas</h2><p id="platform-generated-at"></p></div><input id="platform-search" type="search" placeholder="Buscar clínica ou unidade" /></div>
+          <div class="platform-table-wrap"><table><thead><tr><th>Clínica</th><th>Contato</th><th>Plano</th><th>Status</th><th>Pacientes</th><th>Usuários</th><th>Próxima data</th><th>Ações</th></tr></thead><tbody id="platform-clinics"></tbody></table></div>
+        </section>
+        <section class="platform-card audit-card"><div class="table-heading"><div><h2>Auditoria comercial</h2><p>Últimas alterações realizadas por administradores da plataforma.</p></div></div><div id="platform-audit" class="platform-audit"></div></section>
+      </section>
+    </main>
+    <script src="platform.js"></script>
+  </body>
+</html>

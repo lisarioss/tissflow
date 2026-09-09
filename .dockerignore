@@ -1,0 +1,11 @@
+.git
+.gitignore
+backend/node_modules
+backend/.env
+backend/tiss-flow.db*
+backend/uploads
+backend/recovery-backups
+output
+tmp
+references
+*.log

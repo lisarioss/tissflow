@@ -29,14 +29,26 @@ const { decodeBatchDocument } = require('./batchDocumentService');
 const { parseReceivedAmount, reconciliationStatus } = require('./batchReconciliationService');
 const { parseTissOperatorReturn } = require('./tissReturnService');
 const { validatePrivacyRequest, validatePrivacyResolution } = require('./privacyRequestService');
+const { shouldRedirectToHttps, requestLog } = require('./httpOperationsService');
+const { plans: subscriptionPlans, validPlan, subscriptionState, remainingTrialDays, planCapacityAvailable, subscriptionWriteAccess, extendedTrialEnd } = require('./subscriptionService');
+const { asaasConfig, secureTokenMatches, subscriptionStatusForAsaasEvent, externalSubscriptionId, periodEndForPayload, createClinicSubscription } = require('./asaasBillingService');
+const { commercialMetrics, commercialCsv } = require('./platformCommercialService');
 
 const app = express();
 const port = runtimeConfig.port;
 const jwtSecret = runtimeConfig.jwtSecret;
 const allowedOrigins = new Set(runtimeConfig.origins.length ? runtimeConfig.origins : [`http://localhost:${port}`, `http://127.0.0.1:${port}`]);
+const billingConfig = asaasConfig(process.env);
 
 app.disable('x-powered-by');
 if (runtimeConfig.trustProxy) app.set('trust proxy', 1);
+app.use((req, res, next) => {
+  const requestId = /^[a-zA-Z0-9._-]{8,80}$/.test(req.get('X-Request-ID') || '') ? req.get('X-Request-ID') : crypto.randomUUID();
+  req.requestId = requestId; res.setHeader('X-Request-ID', requestId);
+  const startedAt = Date.now();
+  res.on('finish', () => { if (runtimeConfig.production) console.log(requestLog({ requestId, method: req.method, statusCode: res.statusCode, durationMs: Date.now() - startedAt, clinicId: req.session?.clinicId, userId: req.session?.userId })); });
+  next();
+});
 app.use(cors({ origin(origin, callback) { if (!origin || allowedOrigins.has(origin)) return callback(null, true); callback(new Error('Origem não autorizada.')); } }));
 // Um arquivo binario de 6 MB ocupa cerca de 8 MB quando convertido para base64.
 // A margem adicional comporta o restante do JSON sem rejeitar um arquivo valido.
@@ -47,12 +59,19 @@ app.use((req, res, next) => {
   res.setHeader('Referrer-Policy', 'no-referrer');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
   res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+  if (runtimeConfig.production) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
   if (req.path.startsWith('/api/')) res.setHeader('Cache-Control', 'no-store');
   next();
 });
-app.use(express.static(path.join(__dirname, '..', 'frontend')));
-app.get('/login', (req, res) => res.redirect('/'));
+app.use((req, res, next) => {
+  if (shouldRedirectToHttps({ production: runtimeConfig.production, secure: req.secure, path: req.path })) return res.redirect(308, `https://${req.get('host')}${req.originalUrl}`);
+  next();
+});
+app.use(express.static(path.join(__dirname, '..', 'frontend'), { index: false }));
+app.get('/', (req, res) => res.sendFile(path.join(__dirname, '..', 'frontend', 'landing.html')));
+app.get(['/login', '/app'], (req, res) => res.sendFile(path.join(__dirname, '..', 'frontend', 'index.html')));
+app.get('/platform', (req, res) => res.sendFile(path.join(__dirname, '..', 'frontend', 'platform.html')));
 
 function auth(req, res, next) {
   const token = req.headers.authorization?.replace('Bearer ', '');
@@ -94,8 +113,49 @@ app.get('/api/ready', (req, res) => {
   }
 });
 
+// O endpoint e publico porque e chamado pelo Asaas, mas exige um token secreto
+// exclusivo e registra o ID do evento antes de aplicar qualquer mudanca.
+app.post('/api/billing/webhooks/asaas', (req, res) => {
+  if (!billingConfig.enabled) return res.status(503).json({ error: 'Integração de cobrança não configurada.' });
+  if (!secureTokenMatches(req.get('asaas-access-token'), billingConfig.webhookToken)) return res.status(401).json({ error: 'Webhook não autorizado.' });
+  const eventId = String(req.body?.id || '').trim();
+  const eventType = String(req.body?.event || '').trim();
+  if (!eventId || !eventType) return res.status(400).json({ error: 'Evento de cobrança inválido.' });
+  const externalId = externalSubscriptionId(req.body);
+  try {
+    const result = db.transaction(() => {
+      const inserted = db.prepare('INSERT OR IGNORE INTO billing_webhook_events (provider, event_id, event_type, external_subscription_id) VALUES (?, ?, ?, ?)').run('asaas', eventId, eventType, externalId);
+      if (!inserted.changes) return { duplicate: true, updated: false };
+      const status = subscriptionStatusForAsaasEvent(eventType);
+      if (!status || !externalId) return { duplicate: false, updated: false };
+      const periodEnd = periodEndForPayload(req.body);
+      const updated = db.prepare(`UPDATE clinic_subscriptions SET status = ?, current_period_end = COALESCE(?, current_period_end), updated_at = CURRENT_TIMESTAMP
+        WHERE external_subscription_id = ?`).run(status, periodEnd, externalId);
+      return { duplicate: false, updated: Boolean(updated.changes) };
+    })();
+    res.json({ received: true, ...result });
+  } catch (error) {
+    console.error('Falha ao processar webhook de cobrança:', error.message);
+    res.status(500).json({ error: 'Não foi possível registrar o evento de cobrança.', requestId: req.requestId });
+  }
+});
+
 function parseJsonArray(value) {
   try { const parsed = JSON.parse(value || '[]'); return Array.isArray(parsed) ? parsed : []; } catch { return []; }
+}
+
+function platformAuth(req, res, next) {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!token) return res.status(401).json({ error: 'Token da plataforma não informado.' });
+  try {
+    const session = jwt.verify(token, jwtSecret);
+    if (session.scope !== 'platform-admin') throw new Error('Escopo inválido');
+    const admin = db.prepare('SELECT id, name, email, active, token_version AS tokenVersion FROM platform_admins WHERE id = ?').get(session.platformAdminId);
+    if (!admin?.active) return res.status(401).json({ error: 'Administrador da plataforma inativo.' });
+    if (!sessionVersionMatches(session.tokenVersion, admin.tokenVersion)) return res.status(401).json({ error: 'Sua senha foi alterada. Entre novamente.' });
+    req.platformAdmin = admin;
+    next();
+  } catch { res.status(401).json({ error: 'Sessão da plataforma inválida ou expirada.' }); }
 }
 
 function rateLimit({ windowMs, max, message, resetOnSuccess = false }) {
@@ -120,6 +180,7 @@ function rateLimit({ windowMs, max, message, resetOnSuccess = false }) {
 
 const loginRateLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 15, resetOnSuccess: true, message: 'Muitas tentativas de acesso. Aguarde 15 minutos e tente novamente.' });
 const registrationRateLimit = rateLimit({ windowMs: 60 * 60 * 1000, max: 5, message: 'Limite de cadastros atingido. Aguarde uma hora e tente novamente.' });
+const platformLoginRateLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, resetOnSuccess: true, message: 'Muitas tentativas de acesso. Aguarde 15 minutos.' });
 
 function recordLoginEvent(clinicId, userId, email, outcome, ipAddress) {
   if (!db.prepare('SELECT 1 FROM clinics WHERE id = ?').get(clinicId)) return;
@@ -169,6 +230,8 @@ app.get('/api/clinics', (req, res) => {
 
 app.post('/api/auth/register-clinic', registrationRateLimit, (req, res) => {
   const { clinicName, unit, cnpj, cnes, adminName, email, password } = req.body;
+  let selectedPlan;
+  try { selectedPlan = validPlan(req.body?.planCode || 'professional'); } catch (error) { return res.status(400).json({ error: error.message }); }
   if (String(clinicName || '').trim().length < 3 || String(adminName || '').trim().length < 3 || !/^\S+@\S+\.\S+$/.test(String(email || '')) || String(password || '').length < 12) return res.status(400).json({ error: 'Informe clínica, responsável, e-mail válido e senha de pelo menos 12 caracteres.' });
   if (cnes && !/^\d{7}$/.test(String(cnes))) return res.status(400).json({ error: 'O CNES deve possuir 7 dígitos.' });
   const baseSlug = String(clinicName).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 32) || 'clinica';
@@ -181,7 +244,8 @@ app.post('/api/auth/register-clinic', registrationRateLimit, (req, res) => {
       db.prepare('INSERT INTO clinics (id, name, unit) VALUES (?, ?, ?)').run(clinicId, String(clinicName).trim(), String(unit || 'Unidade principal').trim());
       db.prepare('INSERT INTO users (id, clinic_id, name, email, password_hash, role, active) VALUES (?, ?, ?, ?, ?, ?, 1)').run(userId, clinicId, String(adminName).trim(), String(email).trim().toLowerCase(), bcrypt.hashSync(password, 10), 'admin');
       db.prepare('INSERT INTO clinic_settings (clinic_id, legal_name, trade_name, cnpj, cnes) VALUES (?, ?, ?, ?, ?)').run(clinicId, String(clinicName).trim(), String(clinicName).trim(), String(cnpj || '').trim(), String(cnes || '').trim());
-      db.prepare('INSERT INTO audit_logs (clinic_id, user_id, action, entity_type, entity_id, route, details_json, ip_address) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(clinicId, userId, 'create', 'clinics', clinicId, '/api/auth/register-clinic', JSON.stringify({ fields: ['clinicName', 'unit', 'cnpj', 'cnes', 'adminName', 'email'] }), req.ip || '');
+      db.prepare("INSERT INTO clinic_subscriptions (clinic_id, plan_code, status, trial_end) VALUES (?, ?, 'trialing', date('now', '+30 days'))").run(clinicId, selectedPlan.code);
+      db.prepare('INSERT INTO audit_logs (clinic_id, user_id, action, entity_type, entity_id, route, details_json, ip_address) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(clinicId, userId, 'create', 'clinics', clinicId, '/api/auth/register-clinic', JSON.stringify({ fields: ['clinicName', 'unit', 'cnpj', 'cnes', 'adminName', 'email', 'planCode'], planCode: selectedPlan.code }), req.ip || '');
     })();
     const clinic = { id: clinicId, name: String(clinicName).trim(), unit: String(unit || 'Unidade principal').trim() };
     const user = { id: userId, name: String(adminName).trim(), email: String(email).trim().toLowerCase(), role: 'admin' };
@@ -234,6 +298,178 @@ app.get('/api/settings', auth, (req, res) => {
   res.json(mapClinicSettings(settings, clinic));
 });
 
+app.get('/api/subscription', auth, requireRole('admin'), (req, res) => {
+  const subscription = db.prepare(`SELECT plan_code AS planCode, status, trial_end AS trialEnd, current_period_end AS currentPeriodEnd,
+    external_subscription_id AS externalSubscriptionId, updated_at AS updatedAt FROM clinic_subscriptions WHERE clinic_id = ?`).get(req.session.clinicId);
+  if (!subscription) return res.status(404).json({ error: 'Assinatura da clínica não encontrada.' });
+  const usage = {
+    patients: db.prepare('SELECT COUNT(*) AS count FROM patients WHERE clinic_id = ? AND active = 1').get(req.session.clinicId).count,
+    users: db.prepare('SELECT COUNT(*) AS count FROM users WHERE clinic_id = ? AND active = 1').get(req.session.clinicId).count
+  };
+  const hasExternalSubscription = Boolean(subscription.externalSubscriptionId);
+  delete subscription.externalSubscriptionId;
+  const writeAccess = subscriptionWriteAccess(subscription);
+  res.json({ ...subscription, hasExternalSubscription, effectiveStatus: subscriptionState(subscription), remainingTrialDays: remainingTrialDays(subscription.trialEnd), plan: subscriptionPlans[subscription.planCode], plans: Object.values(subscriptionPlans), usage,
+    writeAccess, billing: { provider: 'asaas', configured: billingConfig.enabled, environment: billingConfig.environment } });
+});
+
+app.patch('/api/subscription/plan', auth, requireRole('admin'), (req, res) => {
+  let plan;
+  try { plan = validPlan(req.body?.planCode); } catch (error) { return res.status(400).json({ error: error.message }); }
+  const subscription = db.prepare('SELECT status FROM clinic_subscriptions WHERE clinic_id = ?').get(req.session.clinicId);
+  if (!subscription) return res.status(404).json({ error: 'Assinatura da clínica não encontrada.' });
+  if (subscription.status !== 'trialing') return res.status(409).json({ error: 'Após o período de teste, alterações de plano devem ser processadas pela cobrança.' });
+  db.prepare('UPDATE clinic_subscriptions SET plan_code = ?, updated_at = CURRENT_TIMESTAMP WHERE clinic_id = ?').run(plan.code, req.session.clinicId);
+  res.json({ planCode: plan.code });
+});
+
+app.post('/api/subscription/checkout', auth, requireRole('admin'), async (req, res) => {
+  if (!billingConfig.enabled) return res.status(503).json({ error: 'Configure primeiro as credenciais do sandbox Asaas.' });
+  const subscription = db.prepare(`SELECT plan_code AS planCode, external_customer_id AS externalCustomerId,
+    external_subscription_id AS externalSubscriptionId FROM clinic_subscriptions WHERE clinic_id = ?`).get(req.session.clinicId);
+  if (!subscription) return res.status(404).json({ error: 'Assinatura da clínica não encontrada.' });
+  if (subscription.externalSubscriptionId) return res.status(409).json({ error: 'Esta clínica já possui uma assinatura vinculada ao Asaas.' });
+  const clinic = db.prepare(`SELECT clinics.id, COALESCE(NULLIF(clinic_settings.legal_name, ''), clinics.name) AS name,
+    clinic_settings.cnpj, users.email FROM clinics JOIN clinic_settings ON clinic_settings.clinic_id = clinics.id
+    JOIN users ON users.id = ? AND users.clinic_id = clinics.id WHERE clinics.id = ?`).get(req.session.userId, req.session.clinicId);
+  try {
+    const checkout = await createClinicSubscription(billingConfig, { ...clinic, externalCustomerId: subscription.externalCustomerId }, subscriptionPlans[subscription.planCode], String(req.body?.billingType || ''));
+    db.prepare(`UPDATE clinic_subscriptions SET external_customer_id = ?, external_subscription_id = ?, current_period_end = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE clinic_id = ?`).run(checkout.customerId, checkout.subscriptionId, checkout.dueDate, req.session.clinicId);
+    req.auditDetails = { provider: 'asaas', planCode: subscription.planCode, billingType: req.body?.billingType };
+    res.status(201).json({ paymentUrl: checkout.paymentUrl, dueDate: checkout.dueDate, environment: billingConfig.environment });
+  } catch (error) {
+    const status = error.statusCode >= 400 && error.statusCode < 500 ? 422 : 502;
+    res.status(status).json({ error: error.message || 'Não foi possível iniciar a assinatura no Asaas.' });
+  }
+});
+
+app.post('/api/platform/auth/login', platformLoginRateLimit, (req, res) => {
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  const admin = db.prepare('SELECT * FROM platform_admins WHERE email = ? AND active = 1').get(email);
+  if (admin && accountIsLocked(admin.locked_until)) return res.status(429).json({ error: 'Conta temporariamente bloqueada. Aguarde 15 minutos e tente novamente.' });
+  if (!admin || !bcrypt.compareSync(String(req.body?.password || ''), admin.password_hash)) {
+    if (admin) {
+      const currentAttempts = admin.locked_until && !accountIsLocked(admin.locked_until) ? 0 : admin.failed_login_attempts;
+      const failure = loginFailureState(currentAttempts);
+      db.prepare('UPDATE platform_admins SET failed_login_attempts = ?, locked_until = ? WHERE id = ?').run(failure.attempts, failure.lockedUntil || '', admin.id);
+    }
+    return res.status(401).json({ error: 'Credenciais da plataforma inválidas.' });
+  }
+  db.prepare("UPDATE platform_admins SET failed_login_attempts = 0, locked_until = '' WHERE id = ?").run(admin.id);
+  const token = jwt.sign({ platformAdminId: admin.id, scope: 'platform-admin', tokenVersion: Number(admin.token_version || 0) }, jwtSecret, { expiresIn: '4h' });
+  res.json({ token, admin: { name: admin.name, email: admin.email } });
+});
+
+app.post('/api/platform/auth/change-password', platformAuth, (req, res) => {
+  const passwordError = validateNewPassword(req.body?.newPassword);
+  if (passwordError) return res.status(400).json({ error: passwordError });
+  const admin = db.prepare('SELECT * FROM platform_admins WHERE id = ?').get(req.platformAdmin.id);
+  if (!bcrypt.compareSync(String(req.body?.currentPassword || ''), admin.password_hash)) return res.status(401).json({ error: 'A senha atual não confere.' });
+  if (bcrypt.compareSync(String(req.body.newPassword), admin.password_hash)) return res.status(400).json({ error: 'Escolha uma senha diferente da atual.' });
+  const tokenVersion = Number(admin.token_version || 0) + 1;
+  db.prepare('UPDATE platform_admins SET password_hash = ?, token_version = ? WHERE id = ?').run(bcrypt.hashSync(String(req.body.newPassword), 12), tokenVersion, admin.id);
+  recordPlatformAudit(req, 'change_platform_password', null, { sessionsRevoked: true });
+  const token = jwt.sign({ platformAdminId: admin.id, scope: 'platform-admin', tokenVersion }, jwtSecret, { expiresIn: '4h' });
+  res.json({ token });
+});
+
+app.get('/api/platform/overview', platformAuth, (req, res) => {
+  const clinics = db.prepare(`SELECT clinics.id, clinics.name, clinics.unit, COALESCE(clinic_settings.cnpj, '') AS cnpj,
+    (SELECT email FROM users WHERE users.clinic_id = clinics.id AND users.role = 'admin' AND users.active = 1 ORDER BY users.id LIMIT 1) AS adminEmail,
+    clinic_subscriptions.plan_code AS planCode,
+    clinic_subscriptions.status, clinic_subscriptions.trial_end AS trialEnd, clinic_subscriptions.current_period_end AS currentPeriodEnd,
+    clinic_subscriptions.updated_at AS updatedAt,
+    (SELECT COUNT(*) FROM patients WHERE patients.clinic_id = clinics.id AND patients.active = 1) AS patients,
+    (SELECT COUNT(*) FROM users WHERE users.clinic_id = clinics.id AND users.active = 1) AS users
+    FROM clinics JOIN clinic_subscriptions ON clinic_subscriptions.clinic_id = clinics.id
+    LEFT JOIN clinic_settings ON clinic_settings.clinic_id = clinics.id ORDER BY clinics.name`).all();
+  const items = clinics.map(clinic => ({ ...clinic, effectiveStatus: subscriptionState(clinic), plan: subscriptionPlans[clinic.planCode] }));
+  res.json({ generatedAt: new Date().toISOString(), totals: {
+    clinics: items.length,
+    trials: items.filter(item => item.effectiveStatus === 'trialing').length,
+    active: items.filter(item => item.effectiveStatus === 'active').length,
+    attention: items.filter(item => ['past_due', 'trial_expired', 'canceled'].includes(item.effectiveStatus)).length
+  }, commercial: commercialMetrics(items, subscriptionPlans), clinics: items });
+});
+
+app.get('/api/platform/clinics.csv', platformAuth, (req, res) => {
+  const clinics = db.prepare(`SELECT clinics.name, clinics.unit, COALESCE(clinic_settings.cnpj, '') AS cnpj,
+    (SELECT email FROM users WHERE users.clinic_id = clinics.id AND users.role = 'admin' AND users.active = 1 ORDER BY users.id LIMIT 1) AS adminEmail,
+    clinic_subscriptions.plan_code AS planCode, clinic_subscriptions.status, clinic_subscriptions.trial_end AS trialEnd,
+    clinic_subscriptions.current_period_end AS currentPeriodEnd,
+    (SELECT COUNT(*) FROM patients WHERE patients.clinic_id = clinics.id AND patients.active = 1) AS patients,
+    (SELECT COUNT(*) FROM users WHERE users.clinic_id = clinics.id AND users.active = 1) AS users
+    FROM clinics JOIN clinic_subscriptions ON clinic_subscriptions.clinic_id = clinics.id
+    LEFT JOIN clinic_settings ON clinic_settings.clinic_id = clinics.id ORDER BY clinics.name`).all();
+  const items = clinics.map(clinic => ({ ...clinic, effectiveStatus: subscriptionState(clinic), plan: subscriptionPlans[clinic.planCode] }));
+  recordPlatformAudit(req, 'export_commercial_csv', null, { clinicCount: items.length });
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="tissflow-clinicas-${new Date().toISOString().slice(0, 10)}.csv"`);
+  res.send(commercialCsv(items));
+});
+
+function recordPlatformAudit(req, action, clinicId, details = {}) {
+  db.prepare('INSERT INTO platform_audit_logs (platform_admin_id, action, clinic_id, details_json) VALUES (?, ?, ?, ?)').run(req.platformAdmin.id, action, clinicId, JSON.stringify(details));
+}
+
+app.patch('/api/platform/clinics/:id/plan', platformAuth, (req, res) => {
+  let plan;
+  try { plan = validPlan(req.body?.planCode); } catch (error) { return res.status(400).json({ error: error.message }); }
+  const current = db.prepare('SELECT plan_code AS planCode, external_subscription_id AS externalSubscriptionId FROM clinic_subscriptions WHERE clinic_id = ?').get(req.params.id);
+  if (!current) return res.status(404).json({ error: 'Clínica ou assinatura não encontrada.' });
+  if (current.externalSubscriptionId) return res.status(409).json({ error: 'Esta assinatura já está vinculada ao Asaas. A troca deve atualizar também a cobrança recorrente.' });
+  db.prepare('UPDATE clinic_subscriptions SET plan_code = ?, updated_at = CURRENT_TIMESTAMP WHERE clinic_id = ?').run(plan.code, req.params.id);
+  recordPlatformAudit(req, 'change_plan', req.params.id, { from: current.planCode, to: plan.code });
+  res.json({ clinicId: req.params.id, planCode: plan.code });
+});
+
+app.post('/api/platform/clinics/:id/extend-trial', platformAuth, (req, res) => {
+  const current = db.prepare('SELECT status, trial_end AS trialEnd, external_subscription_id AS externalSubscriptionId FROM clinic_subscriptions WHERE clinic_id = ?').get(req.params.id);
+  if (!current) return res.status(404).json({ error: 'Clínica ou assinatura não encontrada.' });
+  if (current.externalSubscriptionId) return res.status(409).json({ error: 'A clínica já possui uma assinatura vinculada ao Asaas.' });
+  let trialEnd;
+  try { trialEnd = extendedTrialEnd(req.body?.days); } catch (error) { return res.status(400).json({ error: error.message }); }
+  db.prepare("UPDATE clinic_subscriptions SET status = 'trialing', trial_end = ?, updated_at = CURRENT_TIMESTAMP WHERE clinic_id = ?").run(trialEnd, req.params.id);
+  recordPlatformAudit(req, 'extend_trial', req.params.id, { previousStatus: current.status, previousTrialEnd: current.trialEnd, trialEnd, days: Number(req.body.days) });
+  res.json({ clinicId: req.params.id, status: 'trialing', trialEnd });
+});
+
+app.get('/api/platform/audit', platformAuth, (req, res) => {
+  const logs = db.prepare(`SELECT platform_audit_logs.id, platform_audit_logs.action, platform_audit_logs.clinic_id AS clinicId,
+    clinics.name AS clinicName, platform_audit_logs.details_json AS detailsJson, platform_audit_logs.created_at AS createdAt
+    FROM platform_audit_logs LEFT JOIN clinics ON clinics.id = platform_audit_logs.clinic_id ORDER BY platform_audit_logs.id DESC LIMIT 100`).all();
+  res.json(logs.map(log => ({ ...log, details: JSON.parse(log.detailsJson || '{}'), detailsJson: undefined })));
+});
+
+// Depois do período de tolerância os dados continuam disponíveis para consulta
+// e exportação, mas novas alterações ficam bloqueadas até a regularização.
+app.use('/api', (req, res, next) => {
+  if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) return next();
+  auth(req, res, () => {
+    const subscription = db.prepare(`SELECT status, trial_end AS trialEnd, updated_at AS updatedAt
+      FROM clinic_subscriptions WHERE clinic_id = ?`).get(req.session.clinicId);
+    if (!subscription) return res.status(403).json({ error: 'A clínica não possui uma assinatura válida.' });
+    const access = subscriptionWriteAccess(subscription);
+    if (!access.allowed) return res.status(402).json({ error: access.effectiveStatus === 'trial_expired'
+      ? 'O período de teste terminou. A consulta continua disponível; escolha um plano para voltar a alterar dados.'
+      : 'A assinatura precisa ser regularizada. Os dados permanecem disponíveis em modo somente leitura.' });
+    if (access.effectiveStatus === 'past_due') res.setHeader('X-Subscription-Grace-Days', access.graceDaysRemaining);
+    next();
+  });
+});
+
+function clinicPlanCapacity(clinicId, resource, additional = 1) {
+  const subscription = db.prepare('SELECT plan_code AS planCode FROM clinic_subscriptions WHERE clinic_id = ?').get(clinicId);
+  const plan = subscriptionPlans[subscription?.planCode];
+  if (!plan) return { available: false, limit: 0 };
+  const table = resource === 'patients' ? 'patients' : 'users';
+  const current = db.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE clinic_id = ? AND active = 1`).get(clinicId).count;
+  const limit = resource === 'patients' ? plan.patientLimit : plan.userLimit;
+  return { available: planCapacityAvailable(current, limit, additional), current, limit, planName: plan.name };
+}
+
 app.get('/api/users', auth, requireRole('admin'), (req, res) => {
   const users = db.prepare('SELECT id, name, email, role, active, failed_login_attempts AS failedLoginAttempts, locked_until AS lockedUntil FROM users WHERE clinic_id = ? ORDER BY active DESC, name').all(req.session.clinicId);
   res.json(users.map(user => ({ ...user, active: Boolean(user.active), locked: accountIsLocked(user.lockedUntil) })));
@@ -250,6 +486,8 @@ app.post('/api/users', auth, requireRole('admin'), (req, res) => {
   const { name, email, password, role } = req.body;
   const allowedRoles = ['admin', 'faturamento', 'recepcao', 'medico'];
   if (!String(name || '').trim() || !/^\S+@\S+\.\S+$/.test(String(email || '')) || String(password || '').length < 12 || !allowedRoles.includes(role)) return res.status(400).json({ error: 'Informe nome, e-mail válido, perfil e uma senha de pelo menos 12 caracteres.' });
+  const capacity = clinicPlanCapacity(req.session.clinicId, 'users');
+  if (!capacity.available) return res.status(409).json({ error: `O plano ${capacity.planName} permite até ${capacity.limit} usuários ativos. Arquive um usuário ou altere o plano.` });
   const id = `USR-${req.session.clinicId}-${Date.now()}`;
   try {
     db.prepare('INSERT INTO users (id, clinic_id, name, email, password_hash, role, active) VALUES (?, ?, ?, ?, ?, ?, 1)').run(id, req.session.clinicId, String(name).trim(), String(email).trim().toLowerCase(), bcrypt.hashSync(password, 10), role);
@@ -265,6 +503,10 @@ app.put('/api/users/:id', auth, requireRole('admin'), (req, res) => {
   if (!String(name || '').trim() || !/^\S+@\S+\.\S+$/.test(String(email || '')) || !allowedRoles.includes(role) || (password && String(password).length < 12)) return res.status(400).json({ error: 'Revise nome, e-mail, perfil e a nova senha (mínimo de 12 caracteres).' });
   if (current.id === req.session.userId && !active) return res.status(409).json({ error: 'Você não pode desativar o próprio acesso.' });
   if (current.id === req.session.userId && password) return res.status(409).json({ error: 'Altere sua própria senha na seção Segurança da conta.' });
+  if (!current.active && active) {
+    const capacity = clinicPlanCapacity(req.session.clinicId, 'users');
+    if (!capacity.available) return res.status(409).json({ error: `O plano ${capacity.planName} permite até ${capacity.limit} usuários ativos. Altere o plano para reativar este usuário.` });
+  }
   const removesAdmin = current.role === 'admin' && current.active && (role !== 'admin' || !active);
   const activeAdmins = db.prepare("SELECT count(*) AS total FROM users WHERE clinic_id = ? AND role = 'admin' AND active = 1").get(req.session.clinicId).total;
   if (removesAdmin && activeAdmins <= 1) return res.status(409).json({ error: 'A clínica precisa manter pelo menos um administrador ativo.' });
@@ -649,6 +891,9 @@ app.post('/api/patients/import', auth, requireRole('admin', 'recepcao'), (req, r
   const existingPatients = db.prepare('SELECT id, insurer, card_number AS cardNumber FROM patients WHERE clinic_id = ?').all(req.session.clinicId);
   const validation = validatePatientImport(parsed.rows, insurers, existingPatients);
   if (validation.errors.length) return res.status(400).json({ error: `A importação possui ${validation.errors.length} linha(s) inválida(s). Nenhum paciente foi cadastrado.`, errors: validation.errors.slice(0, 50) });
+  const activeToImport = validation.validRows.filter(patient => patient.active).length;
+  const capacity = clinicPlanCapacity(req.session.clinicId, 'patients', activeToImport);
+  if (!capacity.available) return res.status(409).json({ error: `A importação ultrapassa o limite de ${capacity.limit} pacientes ativos do plano ${capacity.planName}. Reduza o arquivo ou altere o plano.` });
   const insert = db.prepare('INSERT INTO patients (id, clinic_id, name, birth_date, insurer, ans_code, card_number, plan, plan_validity, guardian_name, guardian_relationship, guardian_phone, guardian_email, consent_status, consent_date, active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
   db.transaction(rows => rows.forEach(patient => insert.run(patient.id, req.session.clinicId, patient.name, patient.birthDate, patient.insurer, patient.ansCode, patient.cardNumber, patient.plan, patient.planValidity, patient.guardianName, patient.guardianRelationship, patient.guardianPhone, patient.guardianEmail, 'pending', '', patient.active ? 1 : 0)))(validation.validRows);
   req.auditDetails = { importedCount: validation.validRows.length };
@@ -658,6 +903,8 @@ app.post('/api/patients/import', auth, requireRole('admin', 'recepcao'), (req, r
 app.post('/api/patients', auth, requireRole('admin', 'recepcao', 'medico'), (req, res) => {
   const { id, name, birthDate, insurer, ansCode, cardNumber, plan, planValidity, guardianName = '', guardianRelationship = '', guardianPhone = '', guardianEmail = '', consentStatus = 'pending', consentDate = '' } = req.body;
   if (!id || !name || !birthDate || !insurer || !cardNumber || !plan || !planValidity) return res.status(400).json({ error: 'Nome, nascimento, convênio, carteira, plano e validade são obrigatórios.' });
+  const capacity = clinicPlanCapacity(req.session.clinicId, 'patients');
+  if (!capacity.available) return res.status(409).json({ error: `O plano ${capacity.planName} permite até ${capacity.limit} pacientes ativos. Arquive um paciente ou altere o plano.` });
   const clinicInsurers = db.prepare('SELECT name FROM insurers WHERE clinic_id = ?').all(req.session.clinicId);
   const validationError = validatePatientData(req.body, clinicInsurers);
   if (validationError) return res.status(400).json({ error: validationError });
@@ -681,6 +928,10 @@ app.patch('/api/patients/:id', auth, requireRole('admin', 'recepcao', 'medico'),
   if (findDuplicatePatient(clinicPatients, cardNumber, req.params.id)) return res.status(409).json({ error: 'Já existe outro paciente com esta carteira.' });
   const currentPatient = clinicPatients.find(patient => patient.id === req.params.id);
   if (!currentPatient) return res.status(404).json({ error: 'Paciente não encontrado.' });
+  if (!currentPatient.active && active) {
+    const capacity = clinicPlanCapacity(req.session.clinicId, 'patients');
+    if (!capacity.available) return res.status(409).json({ error: `O plano ${capacity.planName} permite até ${capacity.limit} pacientes ativos. Altere o plano para reativar este paciente.` });
+  }
   req.auditDetails = patientStatusAuditDetails(currentPatient.active, active);
   const result = db.prepare('UPDATE patients SET name = ?, birth_date = ?, insurer = ?, ans_code = ?, card_number = ?, plan = ?, plan_validity = ?, guardian_name = ?, guardian_relationship = ?, guardian_phone = ?, guardian_email = ?, consent_status = ?, consent_date = ?, active = ? WHERE id = ? AND clinic_id = ?').run(name, birthDate, insurer, ansCode || '', cardNumber, plan, planValidity, guardianName, guardianRelationship, guardianPhone, guardianEmail, ['pending', 'granted', 'revoked'].includes(consentStatus) ? consentStatus : 'pending', consentDate, active ? 1 : 0, req.params.id, req.session.clinicId);
   if (!result.changes) return res.status(404).json({ error: 'Paciente não encontrado.' });
@@ -1470,7 +1721,7 @@ app.post('/api/glosas/:id/resolve', auth, requireRole('admin', 'faturamento'), (
 app.use((error, req, res, next) => {
   if (error.message === 'Origem não autorizada.') return res.status(403).json({ error: error.message });
   console.error(error);
-  res.status(500).json({ error: 'Erro interno do servidor.' });
+  res.status(500).json({ error: 'Erro interno do servidor.', requestId: req.requestId });
 });
 
 const server = app.listen(port, () => {

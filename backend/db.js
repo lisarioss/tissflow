@@ -113,6 +113,10 @@ db.exec(`
     xml_valid INTEGER NOT NULL DEFAULT 0,
     xml_validation_errors TEXT NOT NULL DEFAULT '[]',
     tiss_version TEXT NOT NULL DEFAULT '4.03.00',
+    expected_payment_date TEXT,
+    received_cents INTEGER NOT NULL DEFAULT 0,
+    received_at TEXT,
+    reconciliation_notes TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(clinic_id, insurer_id, competence)
   );
@@ -120,10 +124,48 @@ db.exec(`
     batch_id TEXT NOT NULL REFERENCES billing_batches(id) ON DELETE CASCADE,
     guide_id TEXT NOT NULL REFERENCES guides(id),
     signed_pdf_received INTEGER NOT NULL DEFAULT 0,
+    signed_document_id TEXT REFERENCES patient_documents(id),
     PRIMARY KEY(batch_id, guide_id)
   );
   CREATE INDEX IF NOT EXISTS idx_billing_batches_clinic ON billing_batches(clinic_id, competence);
   CREATE INDEX IF NOT EXISTS idx_billing_batch_guides_guide ON billing_batch_guides(guide_id);
+  CREATE TABLE IF NOT EXISTS billing_batch_documents (
+    id TEXT PRIMARY KEY,
+    clinic_id TEXT NOT NULL REFERENCES clinics(id),
+    batch_id TEXT NOT NULL REFERENCES billing_batches(id) ON DELETE CASCADE,
+    category TEXT NOT NULL CHECK (category IN ('protocol_receipt', 'operator_return', 'payment_statement', 'other')),
+    original_name TEXT NOT NULL,
+    storage_name TEXT NOT NULL,
+    mime_type TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    uploaded_by TEXT NOT NULL REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE INDEX IF NOT EXISTS idx_batch_documents_batch ON billing_batch_documents(clinic_id, batch_id, created_at DESC);
+  CREATE TABLE IF NOT EXISTS billing_batch_status_history (
+    id TEXT PRIMARY KEY,
+    clinic_id TEXT NOT NULL REFERENCES clinics(id),
+    batch_id TEXT NOT NULL REFERENCES billing_batches(id) ON DELETE CASCADE,
+    previous_status TEXT,
+    new_status TEXT NOT NULL CHECK (new_status IN ('draft', 'ready', 'sent', 'processing', 'approved', 'error')),
+    changed_by TEXT NOT NULL REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE INDEX IF NOT EXISTS idx_batch_status_history ON billing_batch_status_history(clinic_id, batch_id, created_at DESC);
+  CREATE TABLE IF NOT EXISTS billing_batch_return_items (
+    id TEXT PRIMARY KEY,
+    clinic_id TEXT NOT NULL REFERENCES clinics(id),
+    batch_id TEXT NOT NULL REFERENCES billing_batches(id) ON DELETE CASCADE,
+    document_id TEXT NOT NULL REFERENCES billing_batch_documents(id),
+    guide_id TEXT NOT NULL REFERENCES guides(id),
+    released_cents INTEGER NOT NULL DEFAULT 0,
+    glosa_cents INTEGER NOT NULL DEFAULT 0,
+    glosa_code TEXT,
+    created_glosa_id TEXT REFERENCES glosas(id),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(document_id, guide_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_batch_return_items ON billing_batch_return_items(clinic_id, batch_id, guide_id);
   CREATE TABLE IF NOT EXISTS authorizations (
     id TEXT PRIMARY KEY,
     clinic_id TEXT NOT NULL REFERENCES clinics(id),
@@ -334,6 +376,12 @@ const batchColumns = new Set(db.prepare('PRAGMA table_info(billing_batches)').al
 if (!batchColumns.has('xml_valid')) db.exec('ALTER TABLE billing_batches ADD COLUMN xml_valid INTEGER NOT NULL DEFAULT 0');
 if (!batchColumns.has('xml_validation_errors')) db.exec("ALTER TABLE billing_batches ADD COLUMN xml_validation_errors TEXT NOT NULL DEFAULT '[]'");
 if (!batchColumns.has('tiss_version')) db.exec("ALTER TABLE billing_batches ADD COLUMN tiss_version TEXT NOT NULL DEFAULT '4.03.00'");
+if (!batchColumns.has('expected_payment_date')) db.exec('ALTER TABLE billing_batches ADD COLUMN expected_payment_date TEXT');
+if (!batchColumns.has('received_cents')) db.exec('ALTER TABLE billing_batches ADD COLUMN received_cents INTEGER NOT NULL DEFAULT 0');
+if (!batchColumns.has('received_at')) db.exec('ALTER TABLE billing_batches ADD COLUMN received_at TEXT');
+if (!batchColumns.has('reconciliation_notes')) db.exec('ALTER TABLE billing_batches ADD COLUMN reconciliation_notes TEXT');
+const batchGuideColumns = new Set(db.prepare('PRAGMA table_info(billing_batch_guides)').all().map(column => column.name));
+if (!batchGuideColumns.has('signed_document_id')) db.exec('ALTER TABLE billing_batch_guides ADD COLUMN signed_document_id TEXT REFERENCES patient_documents(id)');
 const appointmentColumns = new Set(db.prepare('PRAGMA table_info(appointments)').all().map(column => column.name));
 if (!appointmentColumns.has('authorization_id')) db.exec('ALTER TABLE appointments ADD COLUMN authorization_id TEXT REFERENCES authorizations(id)');
 if (!appointmentColumns.has('authorization_counted')) db.exec('ALTER TABLE appointments ADD COLUMN authorization_counted INTEGER NOT NULL DEFAULT 0');

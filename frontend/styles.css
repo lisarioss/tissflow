@@ -301,6 +301,62 @@
 .backup-health-card > div { display:flex; align-items:center; gap:14px; }
 .backup-health-card span { font-size:11px; text-align:right; }
 .backup-health-card.backup-health-warning { border-color:#efcf9d; color:#8a5410; background:#fff8eb; }
+.signed-pdf-control { display:flex; align-items:center; justify-content:flex-end; gap:8px; flex-wrap:wrap; }
+.signed-pdf-upload { display:inline-flex; align-items:center; margin:0; cursor:pointer; }
+.signed-pdf-upload.disabled { opacity:.55; pointer-events:none; }
+.signed-pdf-name { display:flex; flex-direction:column; align-items:flex-end; color:var(--green); }
+.signed-pdf-name small { max-width:220px; overflow:hidden; color:var(--muted); text-overflow:ellipsis; white-space:nowrap; }
+.batch-documents { display:grid; gap:10px; margin-top:16px; padding:14px; border:1px solid #e4ebe6; border-radius:8px; background:#fafcfb; }
+.batch-documents-heading,.batch-document-row { display:flex; align-items:center; justify-content:space-between; gap:14px; }
+.batch-documents-heading small,.batch-document-row span > * { display:block; }
+.batch-document-row { padding-top:9px; border-top:1px solid #e8eeea; }
+.batch-document-row > div,.batch-document-form { display:flex; align-items:center; gap:8px; }
+.batch-document-form { flex-wrap:wrap; padding-top:6px; }
+.batch-document-form select,.batch-document-form input { min-height:38px; border:1px solid #dfe7e1; border-radius:6px; padding:7px 9px; background:#fff; }
+.batch-return-results { display:grid; gap:12px; margin-top:16px; padding:14px; border:1px solid #cfe4d5; border-radius:8px; background:#f5fbf7; }
+.batch-return-heading,.batch-return-heading > div:last-child,.batch-return-list > div { display:flex; align-items:center; justify-content:space-between; gap:14px; }
+.batch-return-heading > div:first-child strong,.batch-return-heading > div:first-child small,.batch-return-list strong,.batch-return-list small { display:block; }
+.batch-return-heading small,.batch-return-list small { margin-top:3px; color:var(--muted); }
+.batch-return-heading > div:last-child { flex-wrap:wrap; justify-content:flex-end; color:var(--muted); font-size:10px; }
+.batch-return-heading > div:last-child strong { margin-left:4px; color:var(--ink); }
+.batch-return-list { display:grid; gap:0; }
+.batch-return-list > div { padding:9px 0; border-top:1px solid #deebe2; }
+.return-glosa { color:#a23124; font-size:10px; font-weight:800; }
+.return-approved { color:var(--green); font-size:10px; font-weight:800; }
+.batch-timeline { display:grid; gap:12px; margin-top:16px; padding:14px; border:1px solid #e4ebe6; border-radius:8px; background:#fff; }
+.batch-timeline-heading strong,.batch-timeline-heading small,.batch-timeline-entry strong,.batch-timeline-entry small { display:block; }
+.batch-timeline-heading small,.batch-timeline-entry small { margin-top:3px; color:var(--muted); }
+.batch-timeline-list { display:grid; gap:0; }
+.batch-timeline-entry { position:relative; display:flex; gap:11px; min-height:47px; padding:4px 0 12px 2px; }
+.batch-timeline-entry:not(:last-child)::after { content:''; position:absolute; top:16px; bottom:-3px; left:7px; width:1px; background:#cfe0d4; }
+.batch-timeline-dot { position:relative; z-index:1; flex:0 0 11px; width:11px; height:11px; margin-top:3px; border:2px solid #fff; border-radius:50%; background:var(--green); box-shadow:0 0 0 1px var(--green); }
+.batch-reconciliation { display:grid; gap:12px; margin-top:16px; padding:14px; border:1px solid #dce8df; border-radius:8px; background:#f8fbf9; }
+.batch-reconciliation-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+.batch-reconciliation-heading strong,.batch-reconciliation-heading small { display:block; }
+.batch-reconciliation-heading small { margin-top:3px; color:var(--muted); }
+.batch-reconciliation-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
+.batch-reconciliation label { display:grid; gap:5px; color:var(--muted); font-size:10px; font-weight:700; }
+.batch-reconciliation input,.batch-reconciliation textarea { width:100%; border:1px solid #dce6df; border-radius:6px; padding:9px; background:#fff; color:var(--ink); font:inherit; }
+.batch-reconciliation-summary { display:flex; flex-wrap:wrap; gap:18px; color:var(--muted); font-size:10px; }
+.batch-reconciliation-summary strong { margin-left:4px; color:var(--ink); }
+.reconciliation-status { padding:6px 9px; border-radius:999px; font-size:9px; font-weight:800; white-space:nowrap; }
+.reconciliation-status.pending { color:#8a5b00; background:#fff2c7; }
+.reconciliation-status.partial { color:#95521e; background:#ffe8d2; }
+.reconciliation-status.paid { color:var(--green); background:var(--mint); }
+.insurer-receivables { margin-bottom:20px; }
+.insurer-receivables .finance-summary { margin:0 0 14px; }
+.insurer-receivable-list { display:grid; }
+.insurer-receivable-list > div { display:flex; align-items:center; justify-content:space-between; gap:14px; padding:10px 0; border-top:1px solid var(--line); }
+.insurer-receivable-list span > * { display:block; }
+.insurer-receivable-list span:last-child { text-align:right; }
+.insurer-receivable-list small { margin-top:3px; color:var(--muted); }
+.batch-financial-report { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:12px; margin-bottom:20px; }
+.batch-financial-report article { padding:16px; border:1px solid var(--line); border-radius:8px; background:#fff; box-shadow:var(--shadow); }
+.batch-financial-report span,.batch-financial-report strong { display:block; }
+.batch-financial-report span { margin-bottom:8px; color:var(--muted); font-size:10px; }
+.batch-financial-report strong { font-size:16px; }
+@media (max-width:900px) { .batch-financial-report { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media (max-width:700px) { .batch-reconciliation-grid { grid-template-columns:1fr; } .batch-reconciliation-heading { align-items:flex-start; flex-direction:column; } }
 .recovery-points-list { display:grid; gap:8px; max-height:360px; margin:20px 0; overflow:auto; }
 .recovery-points-list > div { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px; border:1px solid #e5ece7; border-radius:8px; }
 .recovery-points-list span,.recovery-points-list strong,.recovery-points-list small { display:block; }

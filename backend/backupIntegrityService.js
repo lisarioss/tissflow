@@ -19,7 +19,9 @@ function backupSummary(backup) {
   const count = key => Array.isArray(data[key]) ? data[key].length : 0;
   return {
     patients: count('patients'), guides: count('guides'), patientDocuments: count('patientDocuments'),
-    feedbacks: count('feedbacks'), authorizations: count('authorizations'), billingBatches: count('billingBatches'),
+    feedbacks: count('feedbacks'), authorizations: count('authorizations'), billingBatches: count('billingBatches'), billingBatchDocuments: count('billingBatchDocuments'),
+    billingBatchStatusHistory: count('billingBatchStatusHistory'),
+    billingBatchReturnItems: count('billingBatchReturnItems'),
     appointments: count('appointments'), insurers: count('insurers')
   };
 }

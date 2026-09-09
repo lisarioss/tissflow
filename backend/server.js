@@ -17,6 +17,11 @@ const { signBackup, validateBackup } = require('./backupIntegrityService');
 const { encryptBackup, decryptBackup } = require('./backupEncryptionService');
 const { restoreBackupDatabase, recoveryPointBelongsToClinic, recoveryPointsToRemove, recoveryPointName, hasDailyRecoveryPoint, backupHealth, latestRecoveryPointName } = require('./backupRestoreService');
 const { sessionVersionMatches, validateNewPassword, loginFailureState, accountIsLocked } = require('./authSecurityService');
+const { decodeSignedPdf, signedPdfRequirementMet } = require('./signedPdfService');
+const { canTransitionBatch } = require('./batchWorkflowService');
+const { decodeBatchDocument } = require('./batchDocumentService');
+const { parseReceivedAmount, reconciliationStatus } = require('./batchReconciliationService');
+const { parseTissOperatorReturn } = require('./tissReturnService');
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
@@ -28,7 +33,9 @@ if (!jwtSecret) throw new Error('JWT_SECRET não configurado no arquivo backend/
 app.disable('x-powered-by');
 if (process.env.TRUST_PROXY === 'true') app.set('trust proxy', 1);
 app.use(cors({ origin(origin, callback) { if (!origin || allowedOrigins.has(origin)) return callback(null, true); callback(new Error('Origem não autorizada.')); } }));
-app.use(express.json({ limit: '8mb' })); // fotos de feedback em base64 podem passar do limite padrão de 100kb
+// Um arquivo binario de 6 MB ocupa cerca de 8 MB quando convertido para base64.
+// A margem adicional comporta o restante do JSON sem rejeitar um arquivo valido.
+app.use(express.json({ limit: '10mb' }));
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
@@ -317,12 +324,18 @@ function buildClinicBackup(clinicId) {
     const storagePath = path.join(__dirname, 'uploads', clinicId, path.basename(document.storage_name));
     return { ...document, content_base64: fs.existsSync(storagePath) ? fs.readFileSync(storagePath).toString('base64') : null };
   });
+  const batchDocuments = byClinic('billing_batch_documents').map(document => {
+    const storagePath = path.join(__dirname, 'uploads', clinicId, path.basename(document.storage_name));
+    return { ...document, content_base64: fs.existsSync(storagePath) ? fs.readFileSync(storagePath).toString('base64') : null };
+  });
   const batchGuides = db.prepare(`SELECT billing_batch_guides.* FROM billing_batch_guides JOIN billing_batches ON billing_batches.id = billing_batch_guides.batch_id WHERE billing_batches.clinic_id = ?`).all(clinicId);
+  const batchStatusHistory = byClinic('billing_batch_status_history');
+  const batchReturnItems = byClinic('billing_batch_return_items');
   return signBackup({ format: 'tiss-flow-backup', version: 1, exportedAt: new Date().toISOString(), clinic, data: {
     clinicSettings: db.prepare('SELECT * FROM clinic_settings WHERE clinic_id = ?').get(clinicId) || null,
     users, patients: byClinic('patients'), guides: byClinic('guides'), insurers: byClinic('insurers'), invoices: byClinic('invoices'),
     glosas: byClinic('glosas'), authorizations: byClinic('authorizations'), billingBatches: byClinic('billing_batches'),
-    billingBatchGuides: batchGuides, feedbacks: byClinic('feedbacks'), patientDocuments: documents,
+    billingBatchGuides: batchGuides, billingBatchDocuments: batchDocuments, billingBatchStatusHistory: batchStatusHistory, billingBatchReturnItems: batchReturnItems, feedbacks: byClinic('feedbacks'), patientDocuments: documents,
     patientConsents: byClinic('patient_consents'), appointments: byClinic('appointments'), auditLogs: byClinic('audit_logs')
   } });
 }
@@ -359,14 +372,20 @@ app.get('/api/backup', auth, requireRole('admin'), (req, res) => {
     const storagePath = path.join(documentUploadRoot, clinicId, path.basename(document.storage_name));
     return { ...document, content_base64: fs.existsSync(storagePath) ? fs.readFileSync(storagePath).toString('base64') : null };
   });
+  const batchDocuments = byClinic('billing_batch_documents').map(document => {
+    const storagePath = path.join(documentUploadRoot, clinicId, path.basename(document.storage_name));
+    return { ...document, content_base64: fs.existsSync(storagePath) ? fs.readFileSync(storagePath).toString('base64') : null };
+  });
   const batchGuides = db.prepare(`SELECT billing_batch_guides.* FROM billing_batch_guides JOIN billing_batches ON billing_batches.id = billing_batch_guides.batch_id WHERE billing_batches.clinic_id = ?`).all(clinicId);
+  const batchStatusHistory = byClinic('billing_batch_status_history');
+  const batchReturnItems = byClinic('billing_batch_return_items');
   const backup = signBackup({
     format: 'tiss-flow-backup', version: 1, exportedAt: new Date().toISOString(), clinic,
     data: {
       clinicSettings: db.prepare('SELECT * FROM clinic_settings WHERE clinic_id = ?').get(clinicId) || null,
       users, patients: byClinic('patients'), guides: byClinic('guides'), insurers: byClinic('insurers'),
       invoices: byClinic('invoices'), glosas: byClinic('glosas'), authorizations: byClinic('authorizations'),
-      billingBatches: byClinic('billing_batches'), billingBatchGuides: batchGuides, feedbacks: byClinic('feedbacks'),
+      billingBatches: byClinic('billing_batches'), billingBatchGuides: batchGuides, billingBatchDocuments: batchDocuments, billingBatchStatusHistory: batchStatusHistory, billingBatchReturnItems: batchReturnItems, feedbacks: byClinic('feedbacks'),
       patientDocuments: documents, patientConsents: byClinic('patient_consents'), appointments: byClinic('appointments'), auditLogs: byClinic('audit_logs')
     }
   });
@@ -414,7 +433,7 @@ app.post('/api/backup/encrypted/restore', auth, requireRole('admin'), (req, res)
     const restored = restoreBackupDatabase(db, backup, req.session.clinicId, req.session.userId);
     const clinicDirectory = path.join(__dirname, 'uploads', req.session.clinicId);
     fs.mkdirSync(clinicDirectory, { recursive: true });
-    (backup.data.patientDocuments || []).forEach(document => {
+    [...(backup.data.patientDocuments || []), ...(backup.data.billingBatchDocuments || [])].forEach(document => {
       if (document.content_base64 && document.storage_name) fs.writeFileSync(path.join(clinicDirectory, path.basename(document.storage_name)), Buffer.from(document.content_base64, 'base64'));
     });
     req.auditDetails = { encryptedBackupRestore: 'completed', recoveryFile: recoveryName, restored };
@@ -442,7 +461,7 @@ app.post('/api/backup/restore', auth, requireRole('admin'), (req, res) => {
     const restored = restoreBackupDatabase(db, backup, req.session.clinicId, req.session.userId);
     const clinicDirectory = path.join(__dirname, 'uploads', req.session.clinicId);
     fs.mkdirSync(clinicDirectory, { recursive: true });
-    (backup.data.patientDocuments || []).forEach(document => {
+    [...(backup.data.patientDocuments || []), ...(backup.data.billingBatchDocuments || [])].forEach(document => {
       if (document.content_base64 && document.storage_name) fs.writeFileSync(path.join(clinicDirectory, path.basename(document.storage_name)), Buffer.from(document.content_base64, 'base64'));
     });
     req.auditDetails = { backupRestore: 'completed', recoveryFile: recoveryName, restored };
@@ -519,6 +538,20 @@ app.get('/api/reports/:type.csv', auth, requireRole('admin', 'faturamento'), (re
   if (req.params.type === 'invoices') {
     const rows = db.prepare(`SELECT id, guide_id, provider, description, amount_cents, expected_date, status, created_at FROM invoices WHERE clinic_id = ?${competence ? " AND substr(expected_date, 1, 7) = ?" : ''} ORDER BY expected_date DESC`).all(...params);
     return sendCsvReport(req, res, 'financeiro', ['Nota', 'Guia', 'Prestador', 'Descrição', 'Valor', 'Previsão', 'Status', 'Criada em'], rows.map(row => [row.id, row.guide_id, row.provider, row.description, (row.amount_cents / 100).toFixed(2).replace('.', ','), row.expected_date, row.status, row.created_at]));
+  }
+  if (req.params.type === 'batches') {
+    const rows = db.prepare(`SELECT billing_batches.id, insurers.name AS insurer, billing_batches.competence,
+      billing_batches.status, billing_batches.protocol, billing_batches.expected_payment_date, billing_batches.received_cents,
+      billing_batches.received_at, billing_batches.reconciliation_notes,
+      COALESCE((SELECT SUM(guides.value_cents) FROM billing_batch_guides JOIN guides ON guides.id = billing_batch_guides.guide_id WHERE billing_batch_guides.batch_id = billing_batches.id), 0) AS billed_cents,
+      COALESCE((SELECT SUM(released_cents) FROM billing_batch_return_items WHERE billing_batch_return_items.batch_id = billing_batches.id), 0) AS released_cents,
+      COALESCE((SELECT SUM(glosa_cents) FROM billing_batch_return_items WHERE billing_batch_return_items.batch_id = billing_batches.id), 0) AS glosa_cents
+      FROM billing_batches JOIN insurers ON insurers.id = billing_batches.insurer_id
+      WHERE billing_batches.clinic_id = ?${suffix} ORDER BY billing_batches.competence DESC, billing_batches.created_at DESC`).all(...params);
+    return sendCsvReport(req, res, 'lotes-financeiros', ['Lote', 'Convênio', 'Competência', 'Status', 'Protocolo', 'Faturado', 'Liberado pela operadora', 'Glosado', 'Recebido', 'Conciliação', 'Previsão', 'Data do crédito', 'Observações'], rows.map(row => {
+      const paymentStatus = reconciliationStatus(row.billed_cents, row.received_cents);
+      return [row.id, row.insurer, row.competence, row.status, row.protocol, row.billed_cents, row.released_cents, row.glosa_cents, row.received_cents].map((value, index) => index >= 5 ? (Number(value) / 100).toFixed(2).replace('.', ',') : value).concat([paymentStatus, row.expected_payment_date, row.received_at, row.reconciliation_notes]);
+    }));
   }
   if (req.params.type === 'glosas') {
     const rows = db.prepare(`SELECT glosas.id, glosas.guide_id, guides.patient, guides.competence, glosas.code, glosas.reason, glosas.amount_cents, glosas.status, glosas.justification, glosas.created_at, glosas.resolved_at FROM glosas JOIN guides ON guides.id = glosas.guide_id AND guides.clinic_id = glosas.clinic_id WHERE glosas.clinic_id = ?${competence ? ' AND guides.competence = ?' : ''} ORDER BY glosas.created_at DESC`).all(...params);
@@ -847,6 +880,8 @@ app.delete('/api/patient-documents/:id', auth, requireRole('admin', 'recepcao', 
   const document = db.prepare('SELECT * FROM patient_documents WHERE id = ? AND clinic_id = ?').get(req.params.id, req.session.clinicId);
   if (!document) return res.status(404).json({ error: 'Documento não encontrado.' });
   if (db.prepare('SELECT 1 FROM patient_consents WHERE signed_document_id = ? AND clinic_id = ? LIMIT 1').get(document.id, req.session.clinicId)) return res.status(409).json({ error: 'Desvincule este comprovante do histórico de consentimento antes de excluí-lo.' });
+  if (db.prepare(`SELECT 1 FROM billing_batch_guides JOIN billing_batches ON billing_batches.id = billing_batch_guides.batch_id
+    WHERE billing_batch_guides.signed_document_id = ? AND billing_batches.clinic_id = ? LIMIT 1`).get(document.id, req.session.clinicId)) return res.status(409).json({ error: 'Este PDF comprova uma guia de lote e não pode ser excluído enquanto estiver vinculado.' });
   db.prepare('DELETE FROM patient_documents WHERE id = ? AND clinic_id = ?').run(req.params.id, req.session.clinicId);
   const storagePath = path.join(documentUploadRoot, req.session.clinicId, document.storage_name);
   if (fs.existsSync(storagePath)) fs.unlinkSync(storagePath);
@@ -1009,25 +1044,48 @@ app.delete('/api/authorizations/:id', auth, requireRole('admin', 'faturamento'),
 
 function batchDetails(batch) {
   const guides = db.prepare(`SELECT guides.id, guides.patient, guides.procedure, guides.insurer, guides.competence,
-      guides.value_cents AS valueCents, guides.status, billing_batch_guides.signed_pdf_received AS signedPdfReceived
+      guides.value_cents AS valueCents, guides.status, billing_batch_guides.signed_pdf_received AS signedPdfReceived,
+      billing_batch_guides.signed_document_id AS signedDocumentId, patient_documents.original_name AS signedDocumentName
     FROM billing_batch_guides
     JOIN guides ON guides.id = billing_batch_guides.guide_id
+    LEFT JOIN patient_documents ON patient_documents.id = billing_batch_guides.signed_document_id
     WHERE billing_batch_guides.batch_id = ?
     ORDER BY guides.patient, guides.id`).all(batch.id);
   const requiresPdf = batch.deliveryFormat === 'pdf' || batch.deliveryFormat === 'both';
   const requiresXml = batch.deliveryFormat === 'xml' || batch.deliveryFormat === 'both';
-  const missingSignedPdfs = requiresPdf ? guides.filter(guide => !guide.signedPdfReceived).length : 0;
+  const documents = db.prepare(`SELECT billing_batch_documents.id, billing_batch_documents.category, billing_batch_documents.original_name AS originalName,
+    billing_batch_documents.mime_type AS mimeType, billing_batch_documents.size_bytes AS sizeBytes, billing_batch_documents.created_at AS createdAt,
+    users.name AS uploadedBy FROM billing_batch_documents JOIN users ON users.id = billing_batch_documents.uploaded_by
+    WHERE billing_batch_documents.batch_id = ? AND billing_batch_documents.clinic_id = ? ORDER BY billing_batch_documents.created_at DESC`).all(batch.id, batch.clinicId);
+  const statusHistory = db.prepare(`SELECT billing_batch_status_history.id, billing_batch_status_history.previous_status AS previousStatus,
+      billing_batch_status_history.new_status AS newStatus, billing_batch_status_history.created_at AS createdAt,
+      users.name AS changedBy
+    FROM billing_batch_status_history JOIN users ON users.id = billing_batch_status_history.changed_by
+    WHERE billing_batch_status_history.batch_id = ? AND billing_batch_status_history.clinic_id = ?
+    ORDER BY billing_batch_status_history.created_at DESC, billing_batch_status_history.rowid DESC`).all(batch.id, batch.clinicId);
+  const returnItems = db.prepare(`SELECT billing_batch_return_items.id, billing_batch_return_items.guide_id AS guideId,
+      billing_batch_return_items.released_cents AS releasedCents, billing_batch_return_items.glosa_cents AS glosaCents,
+      billing_batch_return_items.glosa_code AS glosaCode, billing_batch_return_items.created_at AS createdAt,
+      billing_batch_return_items.document_id AS documentId
+    FROM billing_batch_return_items WHERE batch_id = ? AND clinic_id = ? ORDER BY created_at DESC`).all(batch.id, batch.clinicId);
+  const missingSignedPdfs = requiresPdf ? guides.filter(guide => !signedPdfRequirementMet(guide)).length : 0;
   const xmlPending = requiresXml && (!batch.xmlGenerated || !batch.xmlValid);
+  const totalValueCents = guides.reduce((sum, guide) => sum + Number(guide.valueCents || 0), 0);
   return {
     ...batch,
     guideCount: guides.length,
-    totalValueCents: guides.reduce((sum, guide) => sum + Number(guide.valueCents || 0), 0),
+    totalValueCents,
+    receivedCents: Number(batch.receivedCents || 0),
+    reconciliationStatus: reconciliationStatus(totalValueCents, batch.receivedCents),
     missingSignedPdfs,
     xmlPending,
     xmlValid: Boolean(batch.xmlValid),
     xmlValidationErrors: Array.isArray(batch.xmlValidationErrors) ? batch.xmlValidationErrors : JSON.parse(batch.xmlValidationErrors || '[]'),
     readyForSending: guides.length > 0 && missingSignedPdfs === 0 && !xmlPending,
-    guides: guides.map(guide => ({ ...guide, signedPdfReceived: Boolean(guide.signedPdfReceived) }))
+    documents,
+    statusHistory,
+    returnItems,
+    guides: guides.map(guide => ({ ...guide, signedPdfReceived: Boolean(guide.signedDocumentId) }))
   };
 }
 
@@ -1037,12 +1095,14 @@ app.get('/api/batches', auth, requireRole('admin', 'faturamento'), (req, res) =>
       billing_batches.protocol, billing_batches.sent_at AS sentAt, billing_batches.xml_generated AS xmlGenerated,
       billing_batches.xml_valid AS xmlValid, billing_batches.xml_validation_errors AS xmlValidationErrors,
       billing_batches.tiss_version AS tissVersion,
+      billing_batches.expected_payment_date AS expectedPaymentDate, billing_batches.received_cents AS receivedCents,
+      billing_batches.received_at AS receivedAt, billing_batches.reconciliation_notes AS reconciliationNotes,
       billing_batches.created_at AS createdAt
     FROM billing_batches
     JOIN insurers ON insurers.id = billing_batches.insurer_id
     WHERE billing_batches.clinic_id = ?
     ORDER BY billing_batches.competence DESC, billing_batches.created_at DESC`).all(req.session.clinicId);
-  res.json(batches.map(batch => batchDetails({ ...batch, xmlGenerated: Boolean(batch.xmlGenerated) })));
+  res.json(batches.map(batch => batchDetails({ ...batch, clinicId: req.session.clinicId, xmlGenerated: Boolean(batch.xmlGenerated) })));
 });
 
 app.post('/api/batches', auth, requireRole('admin', 'faturamento'), (req, res) => {
@@ -1068,6 +1128,8 @@ app.post('/api/batches', auth, requireRole('admin', 'faturamento'), (req, res) =
       db.prepare('INSERT INTO billing_batches (id, clinic_id, insurer_id, competence, delivery_format) VALUES (?, ?, ?, ?, ?)').run(id, req.session.clinicId, insurer.id, competence, insurer.deliveryFormat);
       const insertGuide = db.prepare('INSERT INTO billing_batch_guides (batch_id, guide_id) VALUES (?, ?)');
       uniqueGuideIds.forEach(guideId => insertGuide.run(id, guideId));
+      db.prepare(`INSERT INTO billing_batch_status_history (id, clinic_id, batch_id, previous_status, new_status, changed_by)
+        VALUES (?, ?, ?, NULL, 'draft', ?)`).run(crypto.randomUUID(), req.session.clinicId, id, req.session.userId);
     })();
     res.status(201).json({ id });
   } catch (error) {
@@ -1076,11 +1138,123 @@ app.post('/api/batches', auth, requireRole('admin', 'faturamento'), (req, res) =
 });
 
 app.patch('/api/batches/:id/guides/:guideId', auth, requireRole('admin', 'faturamento'), (req, res) => {
+  res.status(410).json({ error: 'A confirmação manual foi substituída pelo envio obrigatório do PDF assinado.' });
+});
+
+app.post('/api/batches/:id/guides/:guideId/signed-pdf', auth, requireRole('admin', 'faturamento'), (req, res) => {
+  const { originalName, contentDataUrl } = req.body || {};
+  let file;
+  try { file = decodeSignedPdf(contentDataUrl); } catch (error) { return res.status(400).json({ error: error.message }); }
+  const item = db.prepare(`SELECT billing_batches.id AS batchId, guides.id AS guideId, guides.patient,
+      billing_batch_guides.signed_document_id AS previousDocumentId
+    FROM billing_batch_guides JOIN billing_batches ON billing_batches.id = billing_batch_guides.batch_id
+    JOIN guides ON guides.id = billing_batch_guides.guide_id
+    WHERE billing_batches.id = ? AND guides.id = ? AND billing_batches.clinic_id = ?`).get(req.params.id, req.params.guideId, req.session.clinicId);
+  if (!item) return res.status(404).json({ error: 'Guia não encontrada neste lote.' });
+  const matchingPatients = db.prepare('SELECT id FROM patients WHERE clinic_id = ? AND name = ?').all(req.session.clinicId, item.patient);
+  if (matchingPatients.length !== 1) return res.status(409).json({ error: 'Não foi possível identificar unicamente o paciente da guia. Revise o cadastro antes de anexar.' });
+  const documentId = `DOC-SIGNED-${Date.now()}`;
+  const clinicDirectory = path.join(documentUploadRoot, req.session.clinicId);
+  fs.mkdirSync(clinicDirectory, { recursive: true });
+  const storageName = `${Date.now()}-${documentId}.pdf`;
+  const storagePath = path.join(clinicDirectory, storageName);
+  try {
+    fs.writeFileSync(storagePath, file, { flag: 'wx' });
+    db.transaction(() => {
+      if (item.previousDocumentId) db.prepare("UPDATE patient_documents SET description = 'Versão anterior do PDF assinado da guia' WHERE id = ? AND clinic_id = ?").run(item.previousDocumentId, req.session.clinicId);
+      db.prepare(`INSERT INTO patient_documents (id, clinic_id, patient_id, guide_id, category, description, original_name, storage_name, mime_type, size_bytes, uploaded_by)
+        VALUES (?, ?, ?, ?, 'Guia assinada', 'PDF assinado recebido para faturamento', ?, ?, 'application/pdf', ?, ?)`).run(documentId, req.session.clinicId, matchingPatients[0].id, item.guideId, String(originalName || `guia-assinada-${item.guideId}.pdf`).slice(0, 180), storageName, file.length, req.session.userId);
+      db.prepare('UPDATE billing_batch_guides SET signed_pdf_received = 1, signed_document_id = ? WHERE batch_id = ? AND guide_id = ?').run(documentId, item.batchId, item.guideId);
+    })();
+    req.auditDetails = { signedGuidePdf: true, replacement: Boolean(item.previousDocumentId), previousDocumentId: item.previousDocumentId || null, guideId: item.guideId, patientId: matchingPatients[0].id };
+    res.status(201).json({ documentId });
+  } catch (error) {
+    if (fs.existsSync(storagePath)) fs.unlinkSync(storagePath);
+    res.status(409).json({ error: 'Não foi possível armazenar o PDF assinado.' });
+  }
+});
+
+app.get('/api/batches/:id/guides/:guideId/signed-pdf', auth, requireRole('admin', 'faturamento'), (req, res) => {
+  const document = db.prepare(`SELECT patient_documents.* FROM billing_batch_guides
+    JOIN billing_batches ON billing_batches.id = billing_batch_guides.batch_id
+    JOIN patient_documents ON patient_documents.id = billing_batch_guides.signed_document_id
+    WHERE billing_batches.id = ? AND billing_batch_guides.guide_id = ? AND billing_batches.clinic_id = ?`).get(req.params.id, req.params.guideId, req.session.clinicId);
+  if (!document) return res.status(404).json({ error: 'PDF assinado não encontrado.' });
+  const storagePath = path.join(documentUploadRoot, req.session.clinicId, document.storage_name);
+  if (!fs.existsSync(storagePath)) return res.status(404).json({ error: 'Arquivo não encontrado no armazenamento.' });
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Length', document.size_bytes);
+  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(document.original_name)}`);
+  recordAudit(req, 'download', 'batches', req.params.id, { document: 'signed-guide-pdf', guideId: req.params.guideId });
+  res.sendFile(storagePath);
+});
+
+app.post('/api/batches/:id/documents', auth, requireRole('admin', 'faturamento'), (req, res) => {
   const batch = db.prepare('SELECT id FROM billing_batches WHERE id = ? AND clinic_id = ?').get(req.params.id, req.session.clinicId);
   if (!batch) return res.status(404).json({ error: 'Lote não encontrado.' });
-  const result = db.prepare('UPDATE billing_batch_guides SET signed_pdf_received = ? WHERE batch_id = ? AND guide_id = ?').run(req.body.signedPdfReceived ? 1 : 0, batch.id, req.params.guideId);
-  if (!result.changes) return res.status(404).json({ error: 'Guia não encontrada neste lote.' });
-  res.json({ batchId: batch.id, guideId: req.params.guideId, signedPdfReceived: Boolean(req.body.signedPdfReceived) });
+  const { category, originalName, mimeType, contentDataUrl } = req.body || {};
+  let file;
+  try { file = decodeBatchDocument({ category, mimeType, contentDataUrl }); } catch (error) { return res.status(400).json({ error: error.message }); }
+  let parsedReturn = null;
+  if (category === 'operator_return' && mimeType !== 'application/pdf') {
+    try { parsedReturn = parseTissOperatorReturn(file); } catch (error) { return res.status(400).json({ error: error.message }); }
+  }
+  const id = `BDOC-${Date.now()}`;
+  const extension = mimeType === 'application/pdf' ? '.pdf' : '.xml';
+  const clinicDirectory = path.join(documentUploadRoot, req.session.clinicId);
+  fs.mkdirSync(clinicDirectory, { recursive: true });
+  const storageName = `${Date.now()}-${id}${extension}`;
+  const storagePath = path.join(clinicDirectory, storageName);
+  try {
+    fs.writeFileSync(storagePath, file, { flag: 'wx' });
+    const processing = { matched: 0, unmatched: [], glosasCreated: 0 };
+    db.transaction(() => {
+      db.prepare(`INSERT INTO billing_batch_documents (id, clinic_id, batch_id, category, original_name, storage_name, mime_type, size_bytes, uploaded_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(id, req.session.clinicId, batch.id, category, String(originalName || `documento-${batch.id}${extension}`).slice(0, 180), storageName, mimeType, file.length, req.session.userId);
+      for (const entry of parsedReturn?.entries || []) {
+        const linked = db.prepare('SELECT guide_id AS guideId FROM billing_batch_guides WHERE batch_id = ? AND guide_id = ?').get(batch.id, entry.guideId);
+        if (!linked) { processing.unmatched.push(entry.guideId); continue; }
+        let glosaId = null;
+        if (entry.glosaCents > 0) {
+          glosaId = `GL-${crypto.randomUUID()}`;
+          db.prepare('INSERT INTO glosas (id, clinic_id, guide_id, code, reason, amount_cents) VALUES (?, ?, ?, ?, ?, ?)').run(glosaId, req.session.clinicId, entry.guideId, entry.glosaCode || '', entry.reason || 'Glosa informada no retorno XML da operadora.', entry.glosaCents);
+          db.prepare("UPDATE guides SET status = 'error' WHERE id = ? AND clinic_id = ?").run(entry.guideId, req.session.clinicId);
+          processing.glosasCreated += 1;
+        } else db.prepare("UPDATE guides SET status = 'approved' WHERE id = ? AND clinic_id = ?").run(entry.guideId, req.session.clinicId);
+        db.prepare(`INSERT INTO billing_batch_return_items (id, clinic_id, batch_id, document_id, guide_id, released_cents, glosa_cents, glosa_code, created_glosa_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(crypto.randomUUID(), req.session.clinicId, batch.id, id, entry.guideId, entry.releasedCents, entry.glosaCents, entry.glosaCode || null, glosaId);
+        processing.matched += 1;
+      }
+      if (parsedReturn?.protocol) db.prepare('UPDATE billing_batches SET protocol = COALESCE(NULLIF(protocol, \'\'), ?) WHERE id = ? AND clinic_id = ?').run(parsedReturn.protocol, batch.id, req.session.clinicId);
+    })();
+    req.auditDetails = { batchDocument: true, batchId: batch.id, category, returnProcessing: processing };
+    res.status(201).json({ id, processing });
+  } catch (error) {
+    if (fs.existsSync(storagePath)) fs.unlinkSync(storagePath);
+    res.status(409).json({ error: 'Não foi possível armazenar o documento do lote.' });
+  }
+});
+
+app.get('/api/batches/:id/documents/:documentId/download', auth, requireRole('admin', 'faturamento'), (req, res) => {
+  const document = db.prepare('SELECT * FROM billing_batch_documents WHERE id = ? AND batch_id = ? AND clinic_id = ?').get(req.params.documentId, req.params.id, req.session.clinicId);
+  if (!document) return res.status(404).json({ error: 'Documento do lote não encontrado.' });
+  const storagePath = path.join(documentUploadRoot, req.session.clinicId, document.storage_name);
+  if (!fs.existsSync(storagePath)) return res.status(404).json({ error: 'Arquivo não encontrado no armazenamento.' });
+  res.setHeader('Content-Type', document.mime_type); res.setHeader('Content-Length', document.size_bytes);
+  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(document.original_name)}`);
+  recordAudit(req, 'download', 'batches', req.params.id, { document: 'batch-document', documentId: document.id, category: document.category });
+  res.sendFile(storagePath);
+});
+
+app.delete('/api/batches/:id/documents/:documentId', auth, requireRole('admin', 'faturamento'), (req, res) => {
+  const document = db.prepare('SELECT * FROM billing_batch_documents WHERE id = ? AND batch_id = ? AND clinic_id = ?').get(req.params.documentId, req.params.id, req.session.clinicId);
+  if (!document) return res.status(404).json({ error: 'Documento do lote não encontrado.' });
+  if (db.prepare('SELECT 1 FROM billing_batch_return_items WHERE document_id = ? AND clinic_id = ? LIMIT 1').get(document.id, req.session.clinicId)) return res.status(409).json({ error: 'Este XML já gerou resultados e glosas. Ele deve permanecer vinculado para preservar a auditoria.' });
+  db.prepare('DELETE FROM billing_batch_documents WHERE id = ? AND clinic_id = ?').run(document.id, req.session.clinicId);
+  const storagePath = path.join(documentUploadRoot, req.session.clinicId, document.storage_name);
+  if (fs.existsSync(storagePath)) fs.unlinkSync(storagePath);
+  req.auditDetails = { batchDocument: true, batchId: req.params.id, category: document.category };
+  res.status(204).end();
 });
 
 function escapeXml(value) {
@@ -1114,13 +1288,28 @@ app.patch('/api/batches/:id', auth, requireRole('admin', 'faturamento'), (req, r
   const allowedStatuses = ['draft', 'ready', 'sent', 'processing', 'approved', 'error'];
   const status = allowedStatuses.includes(req.body.status) ? req.body.status : 'draft';
   const protocol = String(req.body.protocol || '').trim();
-  const batch = db.prepare(`SELECT id, delivery_format AS deliveryFormat, xml_generated AS xmlGenerated, xml_valid AS xmlValid, xml_validation_errors AS xmlValidationErrors FROM billing_batches WHERE id = ? AND clinic_id = ?`).get(req.params.id, req.session.clinicId);
+  const batch = db.prepare(`SELECT id, status, delivery_format AS deliveryFormat, xml_generated AS xmlGenerated, xml_valid AS xmlValid,
+    xml_validation_errors AS xmlValidationErrors, expected_payment_date AS expectedPaymentDate, received_cents AS receivedCents,
+    received_at AS receivedAt, reconciliation_notes AS reconciliationNotes FROM billing_batches WHERE id = ? AND clinic_id = ?`).get(req.params.id, req.session.clinicId);
   if (!batch) return res.status(404).json({ error: 'Lote não encontrado.' });
-  const readiness = batchDetails({ ...batch, xmlGenerated: Boolean(batch.xmlGenerated) });
+  let receivedCents;
+  try { receivedCents = Object.hasOwn(req.body, 'receivedAmount') ? parseReceivedAmount(req.body.receivedAmount) : Number(batch.receivedCents || 0); } catch (error) { return res.status(400).json({ error: error.message }); }
+  const expectedPaymentDate = Object.hasOwn(req.body, 'expectedPaymentDate') ? (/^\d{4}-\d{2}-\d{2}$/.test(req.body.expectedPaymentDate || '') ? req.body.expectedPaymentDate : null) : batch.expectedPaymentDate;
+  const receivedAt = Object.hasOwn(req.body, 'receivedAt') ? (/^\d{4}-\d{2}-\d{2}$/.test(req.body.receivedAt || '') ? req.body.receivedAt : null) : batch.receivedAt;
+  const reconciliationNotes = Object.hasOwn(req.body, 'reconciliationNotes') ? String(req.body.reconciliationNotes || '').trim().slice(0, 1000) : batch.reconciliationNotes;
+  const currentStatus = batch.status;
+  if (!canTransitionBatch(currentStatus, status)) return res.status(409).json({ error: `Transição inválida: altere o lote de ${currentStatus} para a próxima etapa do fluxo antes de usar ${status}.` });
+  const readiness = batchDetails({ ...batch, clinicId: req.session.clinicId, xmlGenerated: Boolean(batch.xmlGenerated) });
   if (['ready', 'sent', 'processing', 'approved'].includes(status) && !readiness.readyForSending) return res.status(409).json({ error: 'Conclua os PDFs assinados e/ou gere o XML antes de liberar o lote.' });
   if (['sent', 'processing', 'approved'].includes(status) && !protocol) return res.status(400).json({ error: 'Informe o protocolo da operadora para esse status.' });
-  db.prepare(`UPDATE billing_batches SET status = ?, protocol = ?, sent_at = CASE WHEN ? = 'sent' AND sent_at IS NULL THEN CURRENT_TIMESTAMP ELSE sent_at END WHERE id = ? AND clinic_id = ?`).run(status, protocol || null, status, batch.id, req.session.clinicId);
-  res.json({ id: batch.id, status, protocol });
+  db.transaction(() => {
+    db.prepare(`UPDATE billing_batches SET status = ?, protocol = ?, expected_payment_date = ?, received_cents = ?, received_at = ?, reconciliation_notes = ?,
+      sent_at = CASE WHEN ? = 'sent' AND sent_at IS NULL THEN CURRENT_TIMESTAMP ELSE sent_at END WHERE id = ? AND clinic_id = ?`)
+      .run(status, protocol || null, expectedPaymentDate, receivedCents, receivedAt, reconciliationNotes || null, status, batch.id, req.session.clinicId);
+    if (status !== currentStatus) db.prepare(`INSERT INTO billing_batch_status_history (id, clinic_id, batch_id, previous_status, new_status, changed_by)
+      VALUES (?, ?, ?, ?, ?, ?)`).run(crypto.randomUUID(), req.session.clinicId, batch.id, currentStatus, status, req.session.userId);
+  })();
+  res.json({ id: batch.id, status, protocol, receivedCents, reconciliationStatus: reconciliationStatus(readiness.totalValueCents, receivedCents) });
 });
 
 app.delete('/api/batches/:id', auth, requireRole('admin', 'faturamento'), (req, res) => {

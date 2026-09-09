@@ -1,7 +1,9 @@
 const restoreCollections = [
   ['clinic_settings', 'clinicSettings'], ['insurers', 'insurers'], ['patients', 'patients'], ['guides', 'guides'],
-  ['authorizations', 'authorizations'], ['billing_batches', 'billingBatches'], ['billing_batch_guides', 'billingBatchGuides'],
-  ['invoices', 'invoices'], ['glosas', 'glosas'], ['feedbacks', 'feedbacks'], ['patient_documents', 'patientDocuments'],
+  ['authorizations', 'authorizations'], ['billing_batches', 'billingBatches'], ['invoices', 'invoices'], ['glosas', 'glosas'],
+  ['feedbacks', 'feedbacks'], ['patient_documents', 'patientDocuments'], ['billing_batch_guides', 'billingBatchGuides'],
+  ['billing_batch_documents', 'billingBatchDocuments'], ['billing_batch_status_history', 'billingBatchStatusHistory'],
+  ['billing_batch_return_items', 'billingBatchReturnItems'],
   ['patient_consents', 'patientConsents'], ['appointments', 'appointments']
 ];
 const deletionOrder = [...restoreCollections].reverse();
@@ -19,6 +21,8 @@ function prepareRestorePlan(backup, clinicId, currentUserId) {
       delete row.content_base64;
       if ('clinic_id' in row || table !== 'billing_batch_guides') row.clinic_id = clinicId;
       if (table === 'patient_documents' && row.uploaded_by) row.uploaded_by = currentUserId;
+      if (table === 'billing_batch_documents' && row.uploaded_by) row.uploaded_by = currentUserId;
+      if (table === 'billing_batch_status_history' && row.changed_by) row.changed_by = currentUserId;
       if (table === 'patient_consents' && row.recorded_by) row.recorded_by = currentUserId;
       if (table === 'appointments' && row.created_by) row.created_by = currentUserId;
       return row;

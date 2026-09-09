@@ -12,6 +12,14 @@ Protótipo de portfólio para operação de faturamento clínico. Demonstra o ci
   - Compatibilidade demonstrativa entre CID-10 e procedimento (tabela simplificada, não substitui a tabela oficial da ANS)
 - **Convênios**: CRUD de operadoras (nome, código ANS, contato, forma de envio e procedimentos aceitos) que alimenta dinamicamente os seletores de guia e de paciente.
 - **Lotes de faturamento**: agrupa guias por convênio e competência, confere os PDFs assinados, gera o XML exigido, registra o protocolo e bloqueia o envio enquanto houver pendências.
+- **Comprovação do PDF assinado**: lotes que exigem impressão só ficam prontos após o arquivo PDF real ser enviado; o comprovante fica vinculado à guia e à pasta do paciente e pode ser baixado pelo faturamento.
+- **Substituição rastreável**: um PDF assinado incorreto pode ser substituído no lote; a versão anterior permanece na pasta do paciente identificada como histórica e a troca é registrada na auditoria.
+- **Fluxo obrigatório do lote**: o servidor impede saltos indevidos entre preparação, pronto, enviado, processamento e aprovado, além de exigir documentos, XML válido e protocolo conforme a etapa.
+- **Documentos de retorno do lote**: comprovante de protocolo, retorno XML, demonstrativo de pagamento e outros arquivos ficam armazenados no próprio lote, com validação, download, auditoria e inclusão no backup da clínica.
+- **Linha do tempo do lote**: cada mudança de etapa registra automaticamente data, hora e usuário responsável, aparece no acompanhamento do faturamento e também integra o backup da clínica.
+- **Conciliação financeira do lote**: registra previsão opcional, valor efetivamente recebido, data do crédito e observações, indicando automaticamente pagamento pendente, parcial ou quitado sem bloquear ajustes posteriores.
+- **Importação do retorno TISS**: ao anexar o XML da operadora, identifica as guias do lote, valores liberados e glosados, atualiza a situação das guias e abre as glosas correspondentes com código e motivo, preservando o arquivo original para auditoria.
+- **Relatório financeiro dos convênios**: consolida por competência o valor faturado, liberado, recebido, glosado e ainda a receber, mantém as notas fiscais em visão separada e exporta os lotes em CSV para conferência no Excel.
 - **Controle de autorizações**: registra a guia/senha autorizada por paciente, período de validade, quantidade liberada e utilizada; destaca autorizações vigentes, próximas do vencimento ou vencidas e permite atualizar o saldo de sessões.
 - **Validação TISS oficial**: confere o XML com os schemas de Comunicação 04.03.00 publicados pela ANS, calcula o hash MD5 em ISO-8859-1 e mantém inválido qualquer lote que não passe no XSD.
 - **Feedback de atendimento**: profissionais registram evolução/observações por atendimento, com foto opcional e vínculo validado pelo paciente e pela data da guia faturada; geração do PDF individual e de um relatório consolidado por guia para auditoria.

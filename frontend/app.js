@@ -300,7 +300,7 @@ document.addEventListener('submit', event => {
 function normalizeGuide(guide) { const sessions = guide.sessions || []; const competence = guide.competence || sessions[0]?.date?.slice(0, 7) || ''; return { ...guide, competence, sessions, status: guide.status, label: { sent: 'Enviada', review: 'Em análise', approved: 'Aprovada', error: 'Com glosa', recurso: 'Recurso enviado' }[guide.status] || guide.status, value: formatMoney((guide.valueCents || 0) / 100), unitValue: Number(guide.unitValueCents || 0) / 100, date: guide.createdAt ? new Date(guide.createdAt).toLocaleDateString('pt-BR') : '' }; }
 function normalizeInvoice(invoice) { return { ...invoice, amount: Number(invoice.amountCents || 0) / 100 }; }
 function normalizeGlosa(glosa) { return { ...glosa, amount: Number(glosa.amountCents || 0) / 100 }; }
-function normalizeBatch(batch) { return { ...batch, totalValue: Number(batch.totalValueCents || 0) / 100, guides: batch.guides || [] }; }
+function normalizeBatch(batch) { return { ...batch, totalValue: Number(batch.totalValueCents || 0) / 100, guides: batch.guides || [], documents: batch.documents || [], statusHistory: batch.statusHistory || [], returnItems: batch.returnItems || [] }; }
 async function loadApiData() {
   if (!activeSession?.token) return;
   try {
@@ -466,6 +466,36 @@ function guideRowsHtml(term) {
 function guideList() { return `<div class="page-heading"><div><p class="eyebrow">Operação de faturamento</p><h1>Guias TISS</h1><p class="heading-copy">Acompanhe o ciclo de cada guia, do preenchimento ao envio.</p></div><div class="folder-actions"><button class="secondary-button" data-action="new-guide" data-guide-type="consulta">＋ Nova guia de Consulta</button><button class="primary-button" data-action="new-guide" data-guide-type="sp_sadt">＋ Nova guia SP/SADT</button></div></div><div class="panel"><div class="panel-header"><div><h2 class="panel-title">Todas as guias</h2><p class="panel-subtitle">${guides.length} registros salvos neste navegador</p></div><button class="secondary-button" data-action="clear-guides">Limpar dados demo</button></div><div class="search-bar"><input type="search" id="guide-search" placeholder="Buscar por paciente, convênio, procedimento ou nº da guia" /></div><table><thead><tr><th>Guia</th><th>Paciente</th><th>Convênio</th><th>Tipo</th><th>Status</th><th>Valor</th><th></th></tr></thead><tbody id="guide-table-body">${guideRowsHtml('')}</tbody></table></div>${statusSimulator()}`; }
 
 const batchStatusLabels = { draft: 'Em preparação', ready: 'Pronto para envio', sent: 'Enviado', processing: 'Em processamento', approved: 'Aprovado', error: 'Com erro' };
+const batchStatusTransitions = { draft: ['draft', 'ready', 'error'], ready: ['draft', 'ready', 'sent', 'error'], sent: ['sent', 'processing', 'approved', 'error'], processing: ['processing', 'approved', 'error'], approved: ['approved', 'error'], error: ['error', 'draft'] };
+function batchStatusOptions(current) { return Object.entries(batchStatusLabels).map(([value, label]) => `<option value="${value}" ${(batchStatusTransitions[current] || []).includes(value) ? '' : 'disabled'}>${label}</option>`).join(''); }
+const batchDocumentLabels = { protocol_receipt: 'Comprovante de protocolo', operator_return: 'Retorno da operadora', payment_statement: 'Demonstrativo de pagamento', other: 'Outro documento' };
+function batchDocumentsHtml(batch) {
+  const processedDocuments = new Set((batch.returnItems || []).map(item => item.documentId));
+  const rows = (batch.documents || []).map(document => `<div class="batch-document-row"><span><strong>${batchDocumentLabels[document.category] || document.category}${processedDocuments.has(document.id) ? ' · Processado' : ''}</strong><small>${document.originalName} · ${(Number(document.sizeBytes || 0) / 1024).toFixed(1)} KB</small></span><div><button type="button" class="text-button" data-action="download-batch-document" data-batch-id="${batch.id}" data-document-id="${document.id}">Baixar</button>${processedDocuments.has(document.id) ? '' : `<button type="button" class="finance-delete" data-action="delete-batch-document" data-batch-id="${batch.id}" data-document-id="${document.id}">Excluir</button>`}</div></div>`).join('');
+  return `<div class="batch-documents"><div class="batch-documents-heading"><strong>Documentos de retorno</strong><small>Comprovantes recebidos após o envio à operadora.</small></div>${rows || '<small>Nenhum documento de retorno anexado.</small>'}<form class="batch-document-form" data-batch-id="${batch.id}"><select name="category" required><option value="protocol_receipt">Comprovante de protocolo</option><option value="operator_return">Retorno da operadora</option><option value="payment_statement">Demonstrativo de pagamento</option><option value="other">Outro documento</option></select><input name="file" type="file" accept="application/pdf,application/xml,text/xml,.xml" required /><button class="secondary-button" type="submit">Anexar documento</button></form></div>`;
+}
+function batchReturnResultsHtml(batch) {
+  const items = batch.returnItems || [];
+  if (!items.length) return '';
+  const released = items.reduce((sum, item) => sum + Number(item.releasedCents || 0), 0) / 100;
+  const glosa = items.reduce((sum, item) => sum + Number(item.glosaCents || 0), 0) / 100;
+  return `<div class="batch-return-results"><div class="batch-return-heading"><div><strong>Resultado importado da operadora</strong><small>${items.length} guia(s) identificada(s) automaticamente no XML.</small></div><div><span>Liberado <strong>${formatMoney(released)}</strong></span><span>Glosado <strong>${formatMoney(glosa)}</strong></span></div></div><div class="batch-return-list">${items.map(item => `<div><span><strong>${item.guideId}</strong><small>${item.glosaCode ? `Código de glosa ${item.glosaCode}` : 'Sem glosa informada'}</small></span><span class="${Number(item.glosaCents) > 0 ? 'return-glosa' : 'return-approved'}">${Number(item.glosaCents) > 0 ? `Glosa ${formatMoney(Number(item.glosaCents) / 100)}` : `Liberado ${formatMoney(Number(item.releasedCents) / 100)}`}</span></div>`).join('')}</div></div>`;
+}
+function batchTimelineHtml(batch) {
+  const entries = batch.statusHistory || [];
+  if (!entries.length) return '';
+  return `<div class="batch-timeline"><div class="batch-timeline-heading"><strong>Linha do tempo do lote</strong><small>Histórico automático das etapas e dos responsáveis.</small></div><div class="batch-timeline-list">${entries.map(entry => {
+    const timestamp = entry.createdAt ? new Date(`${entry.createdAt.replace(' ', 'T')}Z`).toLocaleString('pt-BR') : 'Data não informada';
+    const label = batchStatusLabels[entry.newStatus] || entry.newStatus;
+    return `<div class="batch-timeline-entry"><span class="batch-timeline-dot"></span><div><strong>${label}</strong><small>${timestamp} · ${entry.changedBy || 'Usuário não identificado'}</small></div></div>`;
+  }).join('')}</div></div>`;
+}
+const reconciliationLabels = { pending: 'Pagamento pendente', partial: 'Pagamento parcial', paid: 'Lote quitado' };
+function batchReconciliationHtml(batch) {
+  const received = Number(batch.receivedCents || 0) / 100;
+  const difference = Math.max(0, Number(batch.totalValue || 0) - received);
+  return `<div class="batch-reconciliation"><div class="batch-reconciliation-heading"><div><strong>Conciliação financeira</strong><small>Registre o crédito quando ele acontecer. A previsão é apenas informativa.</small></div><span class="reconciliation-status ${batch.reconciliationStatus || 'pending'}">${reconciliationLabels[batch.reconciliationStatus] || reconciliationLabels.pending}</span></div><div class="batch-reconciliation-grid"><label>Previsão de pagamento<input type="date" data-batch-expected-payment value="${batch.expectedPaymentDate || ''}" /></label><label>Valor recebido<input type="number" min="0" step="0.01" data-batch-received-amount value="${received ? received.toFixed(2) : ''}" placeholder="0,00" /></label><label>Data do crédito<input type="date" data-batch-received-at value="${batch.receivedAt || ''}" /></label></div><label class="batch-reconciliation-notes">Observações<textarea rows="2" maxlength="1000" data-batch-reconciliation-notes placeholder="Descontos, diferenças ou observações da operadora">${batch.reconciliationNotes || ''}</textarea></label><div class="batch-reconciliation-summary"><span>Faturado <strong>${formatMoney(batch.totalValue)}</strong></span><span>Recebido <strong>${formatMoney(received)}</strong></span><span>Diferença <strong>${formatMoney(difference)}</strong></span></div></div>`;
+}
 const deliveryFormatLabels = { pdf: 'PDF assinado', xml: 'XML', both: 'PDF assinado + XML' };
 function batchGuideOptions(insurerName = '', competence = '') {
   const assignedIds = new Set(batches.flatMap(batch => batch.guides.map(guide => guide.id)));
@@ -490,8 +520,12 @@ function batchCard(batch) {
     <div class="batch-summary"><div><span>Guias</span><strong>${batch.guideCount ?? batch.guides.length}</strong></div><div><span>Valor total</span><strong>${formatMoney(batch.totalValue)}</strong></div><div><span>Protocolo</span><strong>${batch.protocol || 'Não informado'}</strong></div></div>
     ${batchRequirementHtml(batch)}
     ${batch.xmlGenerated && !batch.xmlValid ? '<div class="batch-validation-alert"><strong>O schema oficial encontrou incompatibilidades.</strong><span>Revise os cadastros obrigatórios da clínica, do profissional e da guia antes do envio.</span></div>' : ''}
-    <div class="batch-guide-list">${batch.guides.map(guide => `<div class="batch-guide-row"><div><strong>${guide.id} · ${guide.patient}</strong><small>${guide.procedure} · ${formatMoney(Number(guide.valueCents || 0) / 100)}</small></div>${requiresPdf ? `<label><input type="checkbox" data-action="toggle-signed-pdf" data-batch-id="${batch.id}" data-guide-id="${guide.id}" ${guide.signedPdfReceived ? 'checked' : ''} /> PDF assinado conferido</label>` : ''}</div>`).join('')}</div>
-    <div class="batch-actions">${requiresXml ? `<button type="button" class="secondary-button" data-action="download-batch-xml" data-batch-id="${batch.id}">Gerar XML</button>` : ''}<select data-batch-status><option value="draft">Em preparação</option><option value="ready">Pronto para envio</option><option value="sent">Enviado</option><option value="processing">Em processamento</option><option value="approved">Aprovado</option><option value="error">Com erro</option></select><input data-batch-protocol placeholder="Protocolo da operadora" value="${batch.protocol || ''}" /><button type="button" class="primary-button" data-action="update-batch" data-batch-id="${batch.id}">Salvar acompanhamento</button>${batch.status === 'draft' ? `<button type="button" class="finance-delete" data-action="delete-batch" data-batch-id="${batch.id}">Excluir lote</button>` : ''}</div>
+    <div class="batch-guide-list">${batch.guides.map(guide => `<div class="batch-guide-row"><div><strong>${guide.id} · ${guide.patient}</strong><small>${guide.procedure} · ${formatMoney(Number(guide.valueCents || 0) / 100)}</small></div>${requiresPdf ? `<div class="signed-pdf-control">${guide.signedDocumentId ? `<span class="signed-pdf-name"><strong>PDF armazenado</strong><small>${guide.signedDocumentName || 'Guia assinada'}</small></span><button type="button" class="text-button" data-action="download-signed-pdf" data-batch-id="${batch.id}" data-guide-id="${guide.id}">Baixar</button><label class="text-button signed-pdf-upload">Substituir<input type="file" accept="application/pdf" data-action="upload-signed-pdf" data-batch-id="${batch.id}" data-guide-id="${guide.id}" hidden /></label>` : `<label class="secondary-button signed-pdf-upload">Anexar PDF assinado<input type="file" accept="application/pdf" data-action="upload-signed-pdf" data-batch-id="${batch.id}" data-guide-id="${guide.id}" hidden /></label>`}</div>` : ''}</div>`).join('')}</div>
+    ${batchDocumentsHtml(batch)}
+    ${batchReturnResultsHtml(batch)}
+    ${batchTimelineHtml(batch)}
+    ${batchReconciliationHtml(batch)}
+    <div class="batch-actions">${requiresXml ? `<button type="button" class="secondary-button" data-action="download-batch-xml" data-batch-id="${batch.id}">Gerar XML</button>` : ''}<select data-batch-status>${batchStatusOptions(batch.status)}</select><input data-batch-protocol placeholder="Protocolo da operadora" value="${batch.protocol || ''}" /><button type="button" class="primary-button" data-action="update-batch" data-batch-id="${batch.id}">Salvar acompanhamento</button>${batch.status === 'draft' ? `<button type="button" class="finance-delete" data-action="delete-batch" data-batch-id="${batch.id}">Excluir lote</button>` : ''}</div>
   </article>`;
 }
 function batchesView() {
@@ -546,10 +580,14 @@ function financeView() {
   const pendingCount = invoices.filter(invoice => invoice.status === 'pending').length;
   const receivedCount = invoices.filter(invoice => invoice.status === 'received').length;
   const totalExpected = invoices.reduce((sum, invoice) => sum + Number(invoice.amount || 0), 0);
+  const insurerBilled = batches.reduce((sum, batch) => sum + Number(batch.totalValue || 0), 0);
+  const insurerReceived = batches.reduce((sum, batch) => sum + Number(batch.receivedCents || 0) / 100, 0);
+  const insurerGlosa = batches.reduce((sum, batch) => sum + (batch.returnItems || []).reduce((itemSum, item) => itemSum + Number(item.glosaCents || 0), 0) / 100, 0);
 
   const billableGuides = guides.filter(guide => ['sent', 'approved'].includes(guide.status));
 
   return `<div class="page-heading"><div><p class="eyebrow">Fluxo de caixa</p><h1>Financeiro</h1><p class="heading-copy">Vincule notas fiscais às guias enviadas e acompanhe a previsão de pagamento.</p></div><button class="primary-button" data-action="new-invoice">＋ Nova nota</button></div>
+  <div class="panel insurer-receivables"><div class="panel-header"><div><h2 class="panel-title">Recebimentos dos convênios</h2><p class="panel-subtitle">Consolidado dos lotes TISS, separado das notas fiscais.</p></div></div><div class="finance-summary"><div class="finance-summary-card"><span>Faturado em lotes</span><strong>${formatMoney(insurerBilled)}</strong><small>${batches.length} lote(s)</small></div><div class="finance-summary-card"><span>Recebido</span><strong>${formatMoney(insurerReceived)}</strong><small>Créditos conciliados</small></div><div class="finance-summary-card"><span>Glosado nos retornos</span><strong>${formatMoney(insurerGlosa)}</strong><small>Importado das operadoras</small></div></div><div class="insurer-receivable-list">${batches.length ? batches.map(batch => `<div><span><strong>${batch.id} · ${batch.insurer}</strong><small>${batch.competence} · ${reconciliationLabels[batch.reconciliationStatus] || reconciliationLabels.pending}</small></span><span><strong>${formatMoney(Number(batch.receivedCents || 0) / 100)}</strong><small>de ${formatMoney(batch.totalValue)}</small></span></div>`).join('') : '<small>Nenhum lote de faturamento cadastrado.</small>'}</div></div>
   <div class="finance-summary"><div class="finance-summary-card"><span>Valor total previsto</span><strong>${formatMoney(totalExpected)}</strong><small>${invoices.length} notas cadastradas</small></div><div class="finance-summary-card"><span>Notas pendentes</span><strong>${pendingCount}</strong><small>Esperando entrada</small></div><div class="finance-summary-card"><span>Recebidas</span><strong>${receivedCount}</strong><small>Entradas confirmadas</small></div></div>
   <div class="panel"><div class="panel-header"><div><h2 class="panel-title">Notas fiscais</h2><p class="panel-subtitle">Acompanhamento das entradas previstas e guias relacionadas</p></div><select class="finance-filter" id="invoice-filter"><option value="all">Todas</option><option value="pending">Pendentes</option><option value="received">Recebidas</option></select></div><table><thead><tr><th>Nota</th><th>Guia TISS</th><th>Fornecedor</th><th>Valor</th><th>Previsão de pagamento</th><th>Status</th><th></th></tr></thead><tbody>${invoices.map(invoice => `<tr data-invoice-status="${invoice.status}"><td><strong>${invoice.id}</strong><small>${invoice.description}</small></td><td>${invoice.guideId || 'Sem vínculo'}</td><td>${invoice.provider}</td><td><strong>${formatMoney(invoice.amount)}</strong></td><td>${new Date(`${invoice.expectedDate}T12:00:00`).toLocaleDateString('pt-BR')}</td><td><button class="finance-status ${invoice.status}" data-action="mark-received" data-invoice-id="${invoice.id}">${invoice.status === 'received' ? 'Recebida' : 'Marcar recebimento'}</button></td><td><button class="finance-delete" data-delete-invoice-id="${invoice.id}" aria-label="Excluir ${invoice.id}">Excluir</button></td></tr>`).join('')}</tbody></table></div>
   <form class="panel invoice-form" id="invoice-form"><div class="panel-header"><div><h2 class="panel-title">Registrar nota fiscal</h2><p class="panel-subtitle">Associe a nota a uma guia enviada e informe a previsão de pagamento.</p></div></div><div class="form-section"><div class="form-grid"><div class="field"><label for="invoice-guide">Guia TISS enviada *</label><select id="invoice-guide" name="guideId" required><option value="">Selecione a guia</option>${billableGuides.map(guide => `<option value="${guide.id}">${guide.id} · ${guide.patient} · ${guide.label}</option>`).join('')}</select></div><div class="field"><label for="invoice-number">Número da nota *</label><input id="invoice-number" name="number" required placeholder="NF-2026-010" /></div><div class="field"><label for="invoice-provider">Fornecedor *</label><input id="invoice-provider" name="provider" required placeholder="Nome da empresa" /></div><div class="field"><label for="invoice-description">Descrição *</label><input id="invoice-description" name="description" required placeholder="Material ou serviço" /></div><div class="field"><label for="invoice-amount">Valor *</label><input id="invoice-amount" name="amount" type="number" min="0.01" step="0.01" required placeholder="0,00" /></div><div class="field"><label for="invoice-date">Previsão de pagamento *</label><input id="invoice-date" name="expectedDate" type="date" required /></div></div><div class="form-footer"><button type="button" class="secondary-button" data-view="financeiro">Cancelar</button><button class="primary-button" type="submit">Salvar nota vinculada</button></div></div></form>`;
@@ -788,6 +826,11 @@ function reportsView() {
   const reportInvoices = selectedReportCompetence ? invoices.filter(invoice => String(invoice.expectedDate || '').startsWith(selectedReportCompetence)) : invoices;
   const reportGuideIds = new Set(reportGuides.map(guide => guide.id));
   const reportGlosas = selectedReportCompetence ? glosas.filter(glosa => reportGuideIds.has(glosa.guideId)) : glosas;
+  const reportBatches = selectedReportCompetence ? batches.filter(batch => batch.competence === selectedReportCompetence) : batches;
+  const batchBilled = reportBatches.reduce((sum, batch) => sum + Number(batch.totalValue || 0), 0);
+  const batchReceived = reportBatches.reduce((sum, batch) => sum + Number(batch.receivedCents || 0) / 100, 0);
+  const batchReleased = reportBatches.reduce((sum, batch) => sum + (batch.returnItems || []).reduce((itemSum, item) => itemSum + Number(item.releasedCents || 0), 0) / 100, 0);
+  const batchGlosa = reportBatches.reduce((sum, batch) => sum + (batch.returnItems || []).reduce((itemSum, item) => itemSum + Number(item.glosaCents || 0), 0) / 100, 0);
   const guideCounts = reportGuides.reduce((summary, guide) => ({ ...summary, [guide.status]: (summary[guide.status] || 0) + 1 }), {});
   const pendingAmount = reportInvoices.filter(invoice => invoice.status === 'pending').reduce((sum, invoice) => sum + Number(invoice.amount || 0), 0);
   const receivedAmount = reportInvoices.filter(invoice => invoice.status === 'received').reduce((sum, invoice) => sum + Number(invoice.amount || 0), 0);
@@ -799,7 +842,8 @@ function reportsView() {
   const activePatients = patients.filter(isActivePatient);
   const regularConsents = activePatients.filter(patient => !patientsWithConsentIssues.has(patient.id)).length;
 
-  return `<div class="page-heading"><div><p class="eyebrow">Indicadores operacionais</p><h1>Relatórios</h1><p class="heading-copy">Acompanhe o desempenho das guias e exporte os dados para conferência.</p></div><label class="report-competence">Competência <input id="report-competence" type="month" value="${selectedReportCompetence}" /></label></div><div class="report-export-bar"><span>Exportar CSV compatível com Excel</span><button class="secondary-button" data-report-export="guides">Guias</button><button class="secondary-button" data-report-export="invoices">Financeiro</button><button class="secondary-button" data-report-export="glosas">Glosas</button><button class="secondary-button" data-report-export="authorizations">Autorizações</button>${activeUser?.role === 'admin' ? '<button class="secondary-button" data-report-export="consents">Consentimentos</button>' : ''}</div>
+  return `<div class="page-heading"><div><p class="eyebrow">Indicadores operacionais</p><h1>Relatórios</h1><p class="heading-copy">Acompanhe o desempenho das guias e exporte os dados para conferência.</p></div><label class="report-competence">Competência <input id="report-competence" type="month" value="${selectedReportCompetence}" /></label></div><div class="report-export-bar"><span>Exportar CSV compatível com Excel</span><button class="secondary-button" data-report-export="guides">Guias</button><button class="secondary-button" data-report-export="batches">Lotes e recebimentos</button><button class="secondary-button" data-report-export="invoices">Notas fiscais</button><button class="secondary-button" data-report-export="glosas">Glosas</button><button class="secondary-button" data-report-export="authorizations">Autorizações</button>${activeUser?.role === 'admin' ? '<button class="secondary-button" data-report-export="consents">Consentimentos</button>' : ''}</div>
+  <div class="batch-financial-report"><article><span>Faturado em lotes</span><strong>${formatMoney(batchBilled)}</strong></article><article><span>Liberado pela operadora</span><strong>${formatMoney(batchReleased)}</strong></article><article><span>Recebido</span><strong>${formatMoney(batchReceived)}</strong></article><article><span>Glosado</span><strong>${formatMoney(batchGlosa)}</strong></article><article><span>A receber</span><strong>${formatMoney(Math.max(0, batchBilled - batchReceived))}</strong></article></div>
   <div class="stats-grid"><article class="stat-card"><div class="stat-top"><span>Total de guias</span><span class="stat-icon">▣</span></div><div class="stat-value">${reportGuides.length}</div><div class="stat-note">Registros no filtro</div></article><article class="stat-card"><div class="stat-top"><span>Guias aprovadas</span><span class="stat-icon">◉</span></div><div class="stat-value">${guideCounts.approved || 0}</div><div class="stat-note">Processadas com sucesso</div></article><article class="stat-card"><div class="stat-top"><span>Valor pendente</span><span class="stat-icon">◷</span></div><div class="stat-value">${formatMoney(pendingAmount)}</div><div class="stat-note warn">${formatMoney(receivedAmount)} recebido(s)</div></article><article class="stat-card"><div class="stat-top"><span>Valor em glosa</span><span class="stat-icon">✕</span></div><div class="stat-value">${formatMoney(openGlosaAmount)}</div><div class="stat-note ${openGlosas.length ? 'warn' : ''}">${openGlosas.length} glosa(s) em aberto ou recurso</div></article></div>
   <div class="content-grid"><div class="panel"><div class="panel-header"><div><h2 class="panel-title">Status das guias</h2><p class="panel-subtitle">Distribuição atual do faturamento TISS</p></div></div><div class="report-status-list"><div><span>Enviadas</span><strong>${guideCounts.sent || 0}</strong></div><div><span>Em análise</span><strong>${guideCounts.review || 0}</strong></div><div><span>Aprovadas</span><strong>${guideCounts.approved || 0}</strong></div><div><span>Com glosa</span><strong>${guideCounts.error || 0}</strong></div><div><span>Recurso enviado</span><strong>${guideCounts.recurso || 0}</strong></div></div></div><div class="panel"><div class="panel-header"><div><h2 class="panel-title">Próximos pagamentos</h2><p class="panel-subtitle">Notas pendentes em ordem de vencimento</p></div></div><div class="report-payment-list">${upcomingInvoices.length ? upcomingInvoices.slice(0, 5).map(invoice => `<div class="report-payment-row"><div><strong>${invoice.id}</strong><small>${invoice.guideId || 'Sem guia vinculada'}</small></div><strong>${formatMoney(invoice.amount)}</strong><time>${new Date(`${invoice.expectedDate}T12:00:00`).toLocaleDateString('pt-BR')}</time></div>`).join('') : '<p class="panel-subtitle">Nenhum pagamento pendente.</p>'}</div></div>${userCan('patients') ? `<div class="panel"><div class="panel-header"><div><h2 class="panel-title">Conformidade dos consentimentos</h2><p class="panel-subtitle">Situação dos pacientes ativos e dos comprovantes assinados.</p></div></div><div class="report-status-list"><div><span>Pacientes ativos</span><strong>${activePatients.length}</strong></div><div><span>Regulares</span><strong>${regularConsents}</strong></div><div><span>Com pendências</span><strong>${patientsWithConsentIssues.size}</strong></div><div><span>Alertas urgentes</span><strong>${consentAlerts.filter(item => item.level === 'critical').length}</strong></div></div></div>` : ''}</div>`;
 }
@@ -1171,9 +1215,31 @@ document.addEventListener('submit', async event => {
   } catch (error) { showToast(error.message); }
 }, true);
 
+document.addEventListener('submit', async event => {
+  if (!event.target.classList.contains('batch-document-form')) return;
+  event.preventDefault(); event.stopImmediatePropagation();
+  const form = event.target; const file = form.querySelector('[name="file"]')?.files?.[0];
+  if (!file) return;
+  const allowed = ['application/pdf', 'application/xml', 'text/xml'];
+  const mimeType = file.type || (file.name.toLowerCase().endsWith('.xml') ? 'application/xml' : '');
+  if (!allowed.includes(mimeType) || file.size > 6 * 1024 * 1024) { showToast('Envie um PDF ou XML de até 6 MB.'); return; }
+  const button = form.querySelector('button[type="submit"]'); button.disabled = true; button.textContent = 'Enviando…';
+  try {
+    const contentDataUrl = String(await fileAsDataUrl(file)).replace(/^data:[^;]*;/, `data:${mimeType};`);
+    const result = await apiRequest(`/batches/${encodeURIComponent(form.dataset.batchId)}/documents`, { method: 'POST', body: JSON.stringify({ category: form.elements.category.value, originalName: file.name, mimeType, contentDataUrl }) });
+    if (result.processing?.matched) {
+      const [apiGlosas, apiGuides] = await Promise.all([apiRequest('/glosas'), apiRequest('/guides')]);
+      glosas = apiGlosas.map(normalizeGlosa); guides = apiGuides.map(normalizeGuide);
+    }
+    await refreshBatches(); render('batches');
+    const processing = result.processing;
+    showToast(processing?.matched ? `Retorno processado: ${processing.matched} guia(s) e ${processing.glosasCreated} glosa(s).${processing.unmatched.length ? ` ${processing.unmatched.length} guia(s) não pertencem ao lote.` : ''}` : 'Documento anexado ao lote.');
+  } catch (error) { showToast(error.message); button.disabled = false; button.textContent = 'Anexar documento'; }
+}, true);
+
 function showBackupPreview(result) {
   document.querySelector('.backup-preview-overlay')?.remove();
-  const labels = { patients: 'Pacientes', guides: 'Guias', patientDocuments: 'Documentos', feedbacks: 'Feedbacks', authorizations: 'Autorizações', billingBatches: 'Lotes', appointments: 'Atendimentos', insurers: 'Convênios' };
+  const labels = { patients: 'Pacientes', guides: 'Guias', patientDocuments: 'Documentos', billingBatchDocuments: 'Retornos de lote', billingBatchStatusHistory: 'Histórico dos lotes', billingBatchReturnItems: 'Resultados das operadoras', feedbacks: 'Feedbacks', authorizations: 'Autorizações', billingBatches: 'Lotes', appointments: 'Atendimentos', insurers: 'Convênios' };
   const overlay = document.createElement('div');
   overlay.className = 'backup-preview-overlay';
   const card = document.createElement('section');
@@ -1191,24 +1257,35 @@ function showBackupPreview(result) {
 }
 
 document.addEventListener('change', async event => {
-  if (event.target.dataset.action !== 'toggle-signed-pdf') return;
-  const { batchId, guideId } = event.target.dataset;
+  if (event.target.dataset.action !== 'upload-signed-pdf') return;
+  const input = event.target; const file = input.files?.[0]; const { batchId, guideId } = input.dataset;
+  input.value = '';
+  if (!file) return;
+  if (file.type !== 'application/pdf' || file.size > 6 * 1024 * 1024) { showToast('Envie um PDF válido de até 6 MB.'); return; }
+  const label = input.closest('label'); const originalLabel = label?.firstChild?.textContent || 'Anexar PDF assinado'; if (label) { label.classList.add('disabled'); label.firstChild.textContent = 'Enviando…'; }
   try {
     if (activeSession?.token) {
-      await apiRequest(`/batches/${batchId}/guides/${guideId}`, { method: 'PATCH', body: JSON.stringify({ signedPdfReceived: event.target.checked }) });
+      await apiRequest(`/batches/${batchId}/guides/${guideId}/signed-pdf`, { method: 'POST', body: JSON.stringify({ originalName: file.name, contentDataUrl: await fileAsDataUrl(file) }) });
       await refreshBatches();
     } else {
       const batch = batches.find(item => item.id === batchId);
       const guide = batch?.guides.find(item => item.id === guideId);
-      if (guide) guide.signedPdfReceived = event.target.checked;
+      if (guide) { guide.signedPdfReceived = true; guide.signedDocumentId = `LOCAL-${Date.now()}`; guide.signedDocumentName = file.name; }
       if (batch) { batch.missingSignedPdfs = batch.guides.filter(item => !item.signedPdfReceived).length; batch.readyForSending = batch.missingSignedPdfs === 0 && !batch.xmlPending; }
       saveBatches();
     }
     render('batches');
-  } catch (error) { event.target.checked = !event.target.checked; showToast(error.message); }
+    showToast('PDF assinado armazenado e vinculado à guia.');
+  } catch (error) { showToast(error.message); if (label) { label.classList.remove('disabled'); label.firstChild.textContent = originalLabel; } }
 });
 
 document.addEventListener('click', async event => {
+  const batchDocumentDownload = event.target.closest('[data-action="download-batch-document"]');
+  if (batchDocumentDownload) { await downloadBatchDocument(batchDocumentDownload.dataset.batchId, batchDocumentDownload.dataset.documentId); return; }
+  const batchDocumentDelete = event.target.closest('[data-action="delete-batch-document"]');
+  if (batchDocumentDelete) { await deleteBatchDocument(batchDocumentDelete.dataset.batchId, batchDocumentDelete.dataset.documentId); return; }
+  const signedPdfButton = event.target.closest('[data-action="download-signed-pdf"]');
+  if (signedPdfButton) { await downloadSignedGuidePdf(signedPdfButton.dataset.batchId, signedPdfButton.dataset.guideId); return; }
   const xmlButton = event.target.closest('[data-action="download-batch-xml"]');
   if (xmlButton) { await downloadBatchXml(xmlButton.dataset.batchId); return; }
   const deleteButton = event.target.closest('[data-action="delete-batch"]');
@@ -1227,18 +1304,52 @@ document.addEventListener('click', async event => {
   const batchId = updateButton.dataset.batchId;
   const status = card.querySelector('[data-batch-status]').value;
   const protocol = card.querySelector('[data-batch-protocol]').value.trim();
+  const expectedPaymentDate = card.querySelector('[data-batch-expected-payment]').value;
+  const receivedAmount = card.querySelector('[data-batch-received-amount]').value;
+  const receivedAt = card.querySelector('[data-batch-received-at]').value;
+  const reconciliationNotes = card.querySelector('[data-batch-reconciliation-notes]').value.trim();
   try {
     if (activeSession?.token) {
-      await apiRequest(`/batches/${batchId}`, { method: 'PATCH', body: JSON.stringify({ status, protocol }) });
+      await apiRequest(`/batches/${batchId}`, { method: 'PATCH', body: JSON.stringify({ status, protocol, expectedPaymentDate, receivedAmount, receivedAt, reconciliationNotes }) });
       await refreshBatches();
     } else {
-      Object.assign(batches.find(batch => batch.id === batchId), { status, protocol });
+      const batch = batches.find(item => item.id === batchId);
+      const receivedCents = Math.max(0, Math.round(Number(String(receivedAmount || '0').replace(',', '.')) * 100) || 0);
+      const totalCents = Math.round(Number(batch.totalValue || 0) * 100);
+      Object.assign(batch, { status, protocol, expectedPaymentDate, receivedCents, receivedAt, reconciliationNotes, reconciliationStatus: receivedCents === 0 ? 'pending' : receivedCents < totalCents ? 'partial' : 'paid' });
       saveBatches();
     }
     render('batches');
     showToast('Acompanhamento do lote atualizado.');
   } catch (error) { showToast(error.message); }
 });
+
+async function downloadSignedGuidePdf(batchId, guideId) {
+  if (!activeSession?.token) { showToast('O arquivo demonstrativo não foi armazenado no servidor.'); return; }
+  try {
+    const response = await fetch(`${apiBase}/batches/${encodeURIComponent(batchId)}/guides/${encodeURIComponent(guideId)}/signed-pdf`, { headers: apiHeaders() });
+    if (!response.ok) { const payload = await response.json().catch(() => ({})); throw new Error(payload.error || 'Não foi possível baixar o PDF assinado.'); }
+    const disposition = response.headers.get('Content-Disposition') || ''; const filename = decodeURIComponent(disposition.match(/filename\*=UTF-8''([^;]+)/)?.[1] || `guia-assinada-${guideId}.pdf`);
+    const url = URL.createObjectURL(await response.blob()); const link = document.createElement('a'); link.href = url; link.download = filename; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (error) { showToast(error.message); }
+}
+
+async function downloadBatchDocument(batchId, documentId) {
+  try {
+    const response = await fetch(`${apiBase}/batches/${encodeURIComponent(batchId)}/documents/${encodeURIComponent(documentId)}/download`, { headers: apiHeaders() });
+    if (!response.ok) { const payload = await response.json().catch(() => ({})); throw new Error(payload.error || 'Não foi possível baixar o documento.'); }
+    const disposition = response.headers.get('Content-Disposition') || ''; const filename = decodeURIComponent(disposition.match(/filename\*=UTF-8''([^;]+)/)?.[1] || 'documento-do-lote');
+    const url = URL.createObjectURL(await response.blob()); const link = document.createElement('a'); link.href = url; link.download = filename; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (error) { showToast(error.message); }
+}
+
+async function deleteBatchDocument(batchId, documentId) {
+  if (!window.confirm('Excluir este documento do lote? Essa ação não pode ser desfeita.')) return;
+  try {
+    await apiRequest(`/batches/${encodeURIComponent(batchId)}/documents/${encodeURIComponent(documentId)}`, { method: 'DELETE' });
+    await refreshBatches(); render('batches'); showToast('Documento removido do lote.');
+  } catch (error) { showToast(error.message); }
+}
 
 document.addEventListener('submit', async event => {
   if (event.target.id !== 'login-form') return;

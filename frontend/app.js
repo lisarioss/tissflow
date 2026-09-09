@@ -73,6 +73,7 @@ function saveAuthorizations() { localStorage.setItem(clinicStorageKey('authoriza
 let feedbacks = JSON.parse(localStorage.getItem(clinicStorageKey('feedbacks')) || 'null') || [];
 let patientDocuments = [];
 let patientConsents = [];
+let privacyRequests = [];
 let patientImportFeedback = null;
 let validatedBackupForRestore = null;
 let encryptedBackupForRestore = null;
@@ -307,7 +308,7 @@ async function loadApiData() {
     const permittedRequest = (allowed, path, fallback = []) => allowed ? apiRequest(path) : Promise.resolve(fallback);
     const canReadFinancial = userCan('financeiro');
     const canReadFeedbacks = userCan('feedback');
-    const [apiGuides, apiInvoices, apiPatients, apiGlosas, apiInsurers, apiFeedbacks, apiSettings, apiBatches, apiAuthorizations, apiPatientDocuments, apiAppointments, apiPatientConsents] = await Promise.all([
+    const [apiGuides, apiInvoices, apiPatients, apiGlosas, apiInsurers, apiFeedbacks, apiSettings, apiBatches, apiAuthorizations, apiPatientDocuments, apiAppointments, apiPatientConsents, apiPrivacyRequests] = await Promise.all([
       apiRequest('/guides'),
       permittedRequest(canReadFinancial, '/invoices'),
       apiRequest('/patients'),
@@ -319,7 +320,8 @@ async function loadApiData() {
       apiRequest('/authorizations'),
       permittedRequest(userCan('patients'), '/patient-documents'),
       permittedRequest(userCan('agenda'), '/appointments'),
-      permittedRequest(userCan('patients'), '/patient-consents')
+      permittedRequest(userCan('patients'), '/patient-consents'),
+      permittedRequest(['admin', 'recepcao'].includes(activeUser?.role), '/privacy-requests')
     ]);
     guides = apiGuides.map(normalizeGuide);
     invoices = apiInvoices.map(normalizeInvoice);
@@ -332,6 +334,7 @@ async function loadApiData() {
     authorizations = apiAuthorizations;
     patientDocuments = apiPatientDocuments;
     patientConsents = apiPatientConsents;
+    privacyRequests = apiPrivacyRequests;
     if (userCan('agenda')) appointments = apiAppointments;
     if (userCan('audit')) auditLogs = await apiRequest('/audit-logs');
     if (userCan('users')) { users = await apiRequest('/users'); loginEvents = await apiRequest('/security/login-events'); }
@@ -699,6 +702,13 @@ function consentHistoryActions(item, documents) {
   const options = documents.map(document => `<option value="${document.id}" ${document.id === item.signedDocumentId ? 'selected' : ''}>${document.originalName}</option>`).join('');
   return `<div class="consent-history-actions"><form class="consent-document-form" data-consent-id="${item.id}"><select name="documentId"><option value="">Sem comprovante</option>${options}</select><button class="text-button" type="submit">${item.signedDocumentId ? 'Atualizar vínculo' : 'Vincular comprovante'}</button></form>${item.documentHash ? `<button class="text-button" data-action="print-historical-consent" data-consent-id="${item.id}">Baixar versão</button>` : ''}${item.signedDocumentId ? `<button class="text-button" data-action="download-patient-document" data-document-id="${item.signedDocumentId}">Baixar assinado</button>` : ''}</div>`;
 }
+const privacyTypeLabels = { access: 'Acesso aos dados', correction: 'Correção', portability: 'Portabilidade', anonymization: 'Anonimização', deletion: 'Eliminação' };
+const privacyStatusLabels = { requested: 'Solicitada', under_review: 'Em análise', fulfilled: 'Atendida', denied: 'Negada com justificativa' };
+function patientPrivacyHtml(patient) {
+  if (!['admin', 'recepcao'].includes(activeUser?.role)) return '';
+  const requests = privacyRequests.filter(item => item.patientId === patient.id);
+  return `<section class="panel patient-folder-section patient-folder-wide privacy-panel"><div class="panel-header"><div><h2 class="panel-title">Direitos do titular e privacidade</h2><p class="panel-subtitle">Registre e documente solicitações sem excluir prontuários automaticamente.</p></div>${activeUser?.role === 'admin' ? `<button class="secondary-button" data-action="export-patient-privacy" data-patient-id="${patient.id}">Exportar dados</button>` : ''}</div>${requests.length ? `<div class="privacy-request-list">${requests.map(item => `<div><span><strong>${privacyTypeLabels[item.requestType] || item.requestType}</strong><small>${item.requestedBy} · ${new Date(`${item.createdAt.replace(' ', 'T')}Z`).toLocaleString('pt-BR')}</small>${item.resolution ? `<small>${item.resolution}</small>` : ''}</span><span class="privacy-status ${item.status}">${privacyStatusLabels[item.status] || item.status}</span>${activeUser?.role === 'admin' && !['fulfilled', 'denied'].includes(item.status) ? `<button class="text-button" data-action="review-privacy-request" data-request-id="${item.id}">Em análise</button><button class="text-button" data-action="resolve-privacy-request" data-request-id="${item.id}" data-status="fulfilled">Atendida</button><button class="finance-delete" data-action="resolve-privacy-request" data-request-id="${item.id}" data-status="denied">Negar</button>` : ''}</div>`).join('')}</div>` : '<div class="patient-folder-empty">Nenhuma solicitação de privacidade registrada.</div>'}<form class="privacy-request-form" data-patient-id="${patient.id}"><select name="type" required><option value="">Tipo da solicitação</option>${Object.entries(privacyTypeLabels).map(([value, label]) => `<option value="${value}">${label}</option>`).join('')}</select><input name="requestedBy" required maxlength="180" placeholder="Titular ou responsável solicitante" /><input name="notes" maxlength="1000" placeholder="Protocolo ou observação" /><button class="primary-button" type="submit">Registrar solicitação</button></form></section>`;
+}
 function patientFolderView(patientId) {
   const patient = patients.find(item => item.id === patientId);
   if (!patient) return listing('Paciente não encontrado', 'O cadastro solicitado não está disponível.', '×');
@@ -717,6 +727,7 @@ function patientFolderView(patientId) {
   return `<div class="page-heading patient-folder-heading"><div><p class="eyebrow">Pasta do paciente · ${patient.id}</p><h1>${patient.name}</h1><p class="heading-copy">Histórico clínico, documentos e faturamento reunidos em um só lugar.</p></div><div class="folder-actions"><button class="secondary-button" data-view="patients">← Voltar</button><button class="secondary-button" data-action="edit-patient" data-patient-id="${patient.id}">Editar cadastro</button></div></div>
   <div class="patient-profile-card"><div class="patient-avatar">${patient.name.split(/\s+/).slice(0, 2).map(part => part[0]).join('').toUpperCase()}</div><div><span>Paciente</span><strong>${patient.name}</strong><small>Nascimento: ${new Date(`${patient.birthDate}T12:00:00`).toLocaleDateString('pt-BR')}</small></div><div><span>Convênio</span><strong>${patient.insurer}</strong><small>${patient.plan}</small></div><div><span>Carteira</span><strong>${patient.cardNumber}</strong><small>Válida até ${validUntil}</small></div><div><span>Responsável legal</span><strong>${patient.guardianName || 'Não informado'}</strong><small>${[patient.guardianRelationship, patient.guardianPhone].filter(Boolean).join(' · ') || 'Sem contato cadastrado'}</small></div><div><span>Consentimento</span><strong>${({ granted: 'Concedido', revoked: 'Revogado', pending: 'Pendente' })[patient.consentStatus || 'pending']}</strong><small>${patient.consentDate ? `Registrado em ${new Date(`${patient.consentDate}T12:00:00`).toLocaleDateString('pt-BR')}` : 'Sem data registrada'}</small><button class="text-button patient-consent-button" data-action="print-patient-consent" data-patient-id="${patient.id}" ${activeSession?.token ? '' : 'disabled'}>Gerar termo em PDF</button></div></div>
   <div class="patient-folder-stats"><div><span>Documentos</span><strong>${documents.length}</strong></div><div><span>Guias</span><strong>${patientGuides.length}</strong></div><div><span>Feedbacks</span><strong>${patientFeedbacks.length}</strong></div><div><span>Autorizações</span><strong>${patientAuthorizations.length}</strong></div><div><span>Atendimentos</span><strong>${patientAppointments.length + patientGuides.reduce((total, guide) => total + (guide.sessions?.length || 0), 0)}</strong></div><div><span>Pendências/glosas</span><strong>${patientGlosas.length}</strong></div></div>
+  ${patientPrivacyHtml(patient)}
   <div class="patient-folder-grid">
     <section class="panel patient-folder-section patient-folder-wide"><div class="panel-header"><div><h2 class="panel-title">Documentos anexados</h2><p class="panel-subtitle">Pedidos, laudos, carteirinhas e arquivos usados no atendimento ou na auditoria.</p></div><span class="guide-type-tag">${documents.length} arquivo(s)</span></div>${documents.length ? `<div class="patient-document-list">${documents.map(item => { const expired = item.validUntil && item.validUntil < new Date().toISOString().slice(0, 10); return `<div class="patient-document-row"><span class="patient-file-icon">${item.mimeType === 'application/pdf' ? 'PDF' : 'IMG'}</span><div><strong>${item.originalName}</strong><small>${item.category}${item.description ? ` · ${item.description}` : ''} · ${(Number(item.sizeBytes) / 1024).toFixed(0)} KB</small><small>Enviado por ${item.uploadedBy}${item.validUntil ? ` · validade ${new Date(`${item.validUntil}T12:00:00`).toLocaleDateString('pt-BR')}` : ''}${item.guideId ? ` · guia ${item.guideId}` : ''}</small></div>${expired ? '<span class="document-validity expired">Vencido</span>' : item.validUntil ? '<span class="document-validity active">Vigente</span>' : '<span></span>'}<button class="text-button" data-action="download-patient-document" data-document-id="${item.id}">Baixar</button><button class="finance-delete" data-action="delete-patient-document" data-document-id="${item.id}" data-patient-id="${patient.id}">Excluir</button></div>`; }).join('')}</div>` : empty('Nenhum documento anexado.')}
       <form class="patient-document-form" id="patient-document-form" data-patient-id="${patient.id}"><div class="form-grid"><div class="field"><label for="patient-document-category">Categoria *</label><select id="patient-document-category" name="category" required><option value="">Selecione</option><option>Termo de consentimento assinado</option><option>Pedido médico</option><option>Laudo</option><option>Carteirinha do convênio</option><option>Autorização</option><option>Relatório clínico</option><option>Documento pessoal</option><option>Outro</option></select></div><div class="field"><label for="patient-document-file">Arquivo *</label><input id="patient-document-file" name="file" type="file" accept="application/pdf,image/png,image/jpeg" required /><small>PDF, PNG ou JPEG de até 6 MB.</small></div><div class="field"><label for="patient-document-validity">Validade</label><input id="patient-document-validity" name="validUntil" type="date" /></div><div class="field"><label for="patient-document-guide">Vincular à guia</label><select id="patient-document-guide" name="guideId"><option value="">Sem guia</option>${patientGuides.map(guide => `<option value="${guide.id}">${guide.id} · ${guide.procedure}</option>`).join('')}</select></div><div class="field"><label for="patient-document-authorization">Vincular à autorização</label><select id="patient-document-authorization" name="authorizationId"><option value="">Sem autorização</option>${patientAuthorizations.map(item => `<option value="${item.id}">${item.authorizationNumber}</option>`).join('')}</select></div><div class="field"><label for="patient-document-description">Descrição</label><input id="patient-document-description" name="description" maxlength="180" placeholder="Observação opcional" /></div></div><div class="form-footer"><button type="submit" class="primary-button" ${activeSession?.token ? '' : 'disabled'}>Anexar documento</button></div>${activeSession?.token ? '' : '<small class="document-api-note">Entre pela API para armazenar documentos com segurança.</small>'}</form>
@@ -731,6 +742,41 @@ function patientFolderView(patientId) {
     <section class="panel patient-folder-section"><div class="panel-header"><div><h2 class="panel-title">Faturamento relacionado</h2><p class="panel-subtitle">Lotes, notas e ocorrências das guias.</p></div></div><div class="patient-finance-groups"><div><span>Lotes</span><strong>${patientBatches.length}</strong></div><div><span>Notas</span><strong>${patientInvoices.length}</strong></div><div><span>Glosas</span><strong>${patientGlosas.length}</strong></div></div>${patientGlosas.length ? `<div class="patient-simple-list">${patientGlosas.map(item => `<div><strong>${item.code || 'Glosa'} · ${formatMoney(item.amount)}</strong><small>${item.guideId} · ${item.reason}</small></div>`).join('')}</div>` : ''}</section>
   </div>`;
 }
+document.addEventListener('submit', async event => {
+  if (!event.target.classList.contains('privacy-request-form')) return;
+  event.preventDefault(); event.stopImmediatePropagation();
+  const form = event.target; const data = Object.fromEntries(new FormData(form));
+  try {
+    await apiRequest(`/patients/${encodeURIComponent(form.dataset.patientId)}/privacy-requests`, { method: 'POST', body: JSON.stringify(data) });
+    privacyRequests = await apiRequest('/privacy-requests');
+    appView.innerHTML = patientFolderView(form.dataset.patientId); showToast('Solicitação de privacidade registrada.');
+  } catch (error) { showToast(error.message); }
+}, true);
+
+document.addEventListener('click', async event => {
+  const exportButton = event.target.closest('[data-action="export-patient-privacy"]');
+  if (exportButton) {
+    try {
+      const response = await fetch(`${apiBase}/patients/${encodeURIComponent(exportButton.dataset.patientId)}/privacy-export`, { headers: apiHeaders() });
+      if (!response.ok) { const payload = await response.json().catch(() => ({})); throw new Error(payload.error || 'Não foi possível exportar os dados.'); }
+      const url = URL.createObjectURL(await response.blob()); const link = document.createElement('a'); link.href = url; link.download = `dados-titular-${exportButton.dataset.patientId}.json`; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+      showToast('Exportação dos dados do titular gerada.');
+    } catch (error) { showToast(error.message); }
+    return;
+  }
+  const reviewButton = event.target.closest('[data-action="review-privacy-request"], [data-action="resolve-privacy-request"]');
+  if (!reviewButton) return;
+  const status = reviewButton.dataset.status || 'under_review';
+  const resolution = ['fulfilled', 'denied'].includes(status) ? window.prompt(status === 'fulfilled' ? 'Como a solicitação foi atendida?' : 'Informe a justificativa para negar a solicitação:') : '';
+  if (['fulfilled', 'denied'].includes(status) && !resolution?.trim()) return;
+  try {
+    await apiRequest(`/privacy-requests/${encodeURIComponent(reviewButton.dataset.requestId)}`, { method: 'PATCH', body: JSON.stringify({ status, resolution }) });
+    privacyRequests = await apiRequest('/privacy-requests');
+    const patientId = reviewButton.closest('.privacy-panel')?.querySelector('.privacy-request-form')?.dataset.patientId;
+    if (patientId) appView.innerHTML = patientFolderView(patientId);
+    showToast('Análise da solicitação atualizada.');
+  } catch (error) { showToast(error.message); }
+}, true);
 function listing(title, description, icon) { return `<div class="page-heading"><div><p class="eyebrow">Módulo operacional</p><h1>${title}</h1><p class="heading-copy">${description}</p></div><button class="primary-button" data-action="new-guide">＋ Nova guia</button></div><div class="empty-state"><div><div class="empty-icon">${icon}</div><h2>Este módulo está pronto para crescer</h2><p>A estrutura de navegação está funcionando. O próximo passo é conectar este fluxo aos dados reais da clínica.</p><button class="primary-button" data-action="soon">Explorar demonstração</button></div></div>`; }
 function insurerRowsHtml(term) {
   const filtered = filterInsurers(insurers, term);
@@ -1239,7 +1285,7 @@ document.addEventListener('submit', async event => {
 
 function showBackupPreview(result) {
   document.querySelector('.backup-preview-overlay')?.remove();
-  const labels = { patients: 'Pacientes', guides: 'Guias', patientDocuments: 'Documentos', billingBatchDocuments: 'Retornos de lote', billingBatchStatusHistory: 'Histórico dos lotes', billingBatchReturnItems: 'Resultados das operadoras', feedbacks: 'Feedbacks', authorizations: 'Autorizações', billingBatches: 'Lotes', appointments: 'Atendimentos', insurers: 'Convênios' };
+  const labels = { patients: 'Pacientes', guides: 'Guias', patientDocuments: 'Documentos', billingBatchDocuments: 'Retornos de lote', billingBatchStatusHistory: 'Histórico dos lotes', billingBatchReturnItems: 'Resultados das operadoras', privacyRequests: 'Solicitações de privacidade', feedbacks: 'Feedbacks', authorizations: 'Autorizações', billingBatches: 'Lotes', appointments: 'Atendimentos', insurers: 'Convênios' };
   const overlay = document.createElement('div');
   overlay.className = 'backup-preview-overlay';
   const card = document.createElement('section');

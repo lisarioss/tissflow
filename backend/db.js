@@ -2,11 +2,15 @@ const Database = require('better-sqlite3');
 const bcrypt = require('bcryptjs');
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
+const { resolveStoragePaths } = require('./storageConfigService');
 
+const demoEnabled = process.env.ENABLE_DEMO_DATA === undefined ? process.env.NODE_ENV !== 'production' : process.env.ENABLE_DEMO_DATA === 'true';
 const demoPassword = process.env.DEMO_PASSWORD;
-if (!demoPassword) throw new Error('DEMO_PASSWORD não configurado no arquivo backend/.env.');
+if (demoEnabled && !demoPassword) throw new Error('DEMO_PASSWORD não configurado para os dados de demonstração.');
 
-const db = new Database(path.join(__dirname, 'tiss-flow.db'));
+const { dataDirectory, databasePath } = resolveStoragePaths(process.env, __dirname);
+require('fs').mkdirSync(dataDirectory, { recursive: true });
+const db = new Database(databasePath);
 db.pragma('foreign_keys = ON');
 
 db.exec(`
@@ -226,6 +230,21 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
   CREATE INDEX IF NOT EXISTS idx_patient_consents_patient ON patient_consents(clinic_id, patient_id, event_date DESC);
+  CREATE TABLE IF NOT EXISTS privacy_requests (
+    id TEXT PRIMARY KEY,
+    clinic_id TEXT NOT NULL REFERENCES clinics(id),
+    patient_id TEXT NOT NULL REFERENCES patients(id),
+    request_type TEXT NOT NULL CHECK (request_type IN ('access', 'correction', 'portability', 'anonymization', 'deletion')),
+    requested_by TEXT NOT NULL,
+    notes TEXT,
+    status TEXT NOT NULL DEFAULT 'requested' CHECK (status IN ('requested', 'under_review', 'fulfilled', 'denied')),
+    resolution TEXT,
+    created_by TEXT NOT NULL REFERENCES users(id),
+    resolved_by TEXT REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    resolved_at TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_privacy_requests_patient ON privacy_requests(clinic_id, patient_id, created_at DESC);
   CREATE TABLE IF NOT EXISTS appointments (
     id TEXT PRIMARY KEY,
     clinic_id TEXT NOT NULL REFERENCES clinics(id),
@@ -386,7 +405,7 @@ const appointmentColumns = new Set(db.prepare('PRAGMA table_info(appointments)')
 if (!appointmentColumns.has('authorization_id')) db.exec('ALTER TABLE appointments ADD COLUMN authorization_id TEXT REFERENCES authorizations(id)');
 if (!appointmentColumns.has('authorization_counted')) db.exec('ALTER TABLE appointments ADD COLUMN authorization_counted INTEGER NOT NULL DEFAULT 0');
 const clinicCount = db.prepare('SELECT COUNT(*) AS count FROM clinics').get().count;
-if (clinicCount === 0) {
+if (clinicCount === 0 && demoEnabled) {
   const insertClinic = db.prepare('INSERT INTO clinics (id, name, unit) VALUES (?, ?, ?)');
   const insertUser = db.prepare('INSERT INTO users (id, clinic_id, name, email, password_hash, role) VALUES (?, ?, ?, ?, ?, ?)');
   const insertGuide = db.prepare('INSERT INTO guides (id, clinic_id, patient, procedure, insurer, status, value_cents, sessions_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
@@ -418,7 +437,7 @@ if (clinicCount === 0) {
 }
 
 
-const demoSeed = db.transaction(() => {
+if (demoEnabled) db.transaction(() => {
   const insertDemoUser = db.prepare('INSERT OR IGNORE INTO users (id, clinic_id, name, email, password_hash, role) VALUES (?, ?, ?, ?, ?, ?)');
   const demoUsers = [
     { id: 'julia', clinicId: 'sabia', name: 'Julia Andrade', email: 'recepcao@clinicasabia.com.br', role: 'recepcao' },
@@ -427,7 +446,6 @@ const demoSeed = db.transaction(() => {
     { id: 'bruno', clinicId: 'vital', name: 'Bruno Castro', email: 'faturamento@institutovital.com.br', role: 'faturamento' }
   ];
   for (const u of demoUsers) insertDemoUser.run(u.id, u.clinicId, u.name, u.email, bcrypt.hashSync(demoPassword, 10), u.role);
-});
-demoSeed();
+})();
 
 module.exports = db;

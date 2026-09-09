@@ -355,6 +355,19 @@
 .batch-financial-report span,.batch-financial-report strong { display:block; }
 .batch-financial-report span { margin-bottom:8px; color:var(--muted); font-size:10px; }
 .batch-financial-report strong { font-size:16px; }
+.privacy-panel { margin:18px 0; }
+.privacy-request-list { display:grid; margin-bottom:14px; }
+.privacy-request-list > div { display:grid; grid-template-columns:minmax(220px,1fr) auto auto auto auto; align-items:center; gap:10px; padding:10px 0; border-top:1px solid var(--line); }
+.privacy-request-list span > * { display:block; }
+.privacy-request-list small { margin-top:3px; color:var(--muted); }
+.privacy-status { padding:6px 9px; border-radius:999px; font-size:9px; font-weight:800; white-space:nowrap; }
+.privacy-status.requested { color:#8a5b00; background:#fff2c7; }
+.privacy-status.under_review { color:#315d87; background:#e6f1fb; }
+.privacy-status.fulfilled { color:var(--green); background:var(--mint); }
+.privacy-status.denied { color:#a23124; background:#fde4df; }
+.privacy-request-form { display:grid; grid-template-columns:1fr 1.2fr 1.5fr auto; gap:10px; }
+.privacy-request-form select,.privacy-request-form input { min-height:40px; border:1px solid var(--line); border-radius:6px; padding:8px 10px; background:#fff; }
+@media (max-width:900px) { .privacy-request-list > div,.privacy-request-form { grid-template-columns:1fr; align-items:start; } }
 @media (max-width:900px) { .batch-financial-report { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 @media (max-width:700px) { .batch-reconciliation-grid { grid-template-columns:1fr; } .batch-reconciliation-heading { align-items:flex-start; flex-direction:column; } }
 .recovery-points-list { display:grid; gap:8px; max-height:360px; margin:20px 0; overflow:auto; }

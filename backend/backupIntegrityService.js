@@ -22,7 +22,7 @@ function backupSummary(backup) {
     feedbacks: count('feedbacks'), authorizations: count('authorizations'), billingBatches: count('billingBatches'), billingBatchDocuments: count('billingBatchDocuments'),
     billingBatchStatusHistory: count('billingBatchStatusHistory'),
     billingBatchReturnItems: count('billingBatchReturnItems'),
-    appointments: count('appointments'), insurers: count('insurers')
+    appointments: count('appointments'), insurers: count('insurers'), privacyRequests: count('privacyRequests')
   };
 }
 

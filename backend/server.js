@@ -6,6 +6,12 @@ const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
+const { validateRuntimeConfig } = require('./runtimeConfigService');
+const runtimeConfig = validateRuntimeConfig(process.env);
+const { resolveStoragePaths } = require('./storageConfigService');
+const { documentUploadRoot, recoveryRoot } = resolveStoragePaths(process.env, __dirname);
+fs.mkdirSync(documentUploadRoot, { recursive: true });
+fs.mkdirSync(recoveryRoot, { recursive: true });
 const db = require('./db');
 const { generateGuidePackagePDF, generateGuideAuditPDF, generatePatientConsentPDF, consentDocumentContent } = require('./pdfService');
 const { feedbackDateBelongsToGuide } = require('./feedbackService');
@@ -22,16 +28,15 @@ const { canTransitionBatch } = require('./batchWorkflowService');
 const { decodeBatchDocument } = require('./batchDocumentService');
 const { parseReceivedAmount, reconciliationStatus } = require('./batchReconciliationService');
 const { parseTissOperatorReturn } = require('./tissReturnService');
+const { validatePrivacyRequest, validatePrivacyResolution } = require('./privacyRequestService');
 
 const app = express();
-const port = Number(process.env.PORT || 3000);
-const jwtSecret = process.env.JWT_SECRET;
-const allowedOrigins = new Set(String(process.env.CORS_ORIGINS || `http://localhost:${port},http://127.0.0.1:${port}`).split(',').map(value => value.trim()).filter(Boolean));
-
-if (!jwtSecret) throw new Error('JWT_SECRET não configurado no arquivo backend/.env.');
+const port = runtimeConfig.port;
+const jwtSecret = runtimeConfig.jwtSecret;
+const allowedOrigins = new Set(runtimeConfig.origins.length ? runtimeConfig.origins : [`http://localhost:${port}`, `http://127.0.0.1:${port}`]);
 
 app.disable('x-powered-by');
-if (process.env.TRUST_PROXY === 'true') app.set('trust proxy', 1);
+if (runtimeConfig.trustProxy) app.set('trust proxy', 1);
 app.use(cors({ origin(origin, callback) { if (!origin || allowedOrigins.has(origin)) return callback(null, true); callback(new Error('Origem não autorizada.')); } }));
 // Um arquivo binario de 6 MB ocupa cerca de 8 MB quando convertido para base64.
 // A margem adicional comporta o restante do JSON sem rejeitar um arquivo valido.
@@ -79,6 +84,15 @@ function moneyToCents(value) {
 }
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok', service: 'tiss-flow-api' }));
+app.get('/api/ready', (req, res) => {
+  try {
+    db.prepare('SELECT 1 AS ready').get();
+    fs.accessSync(documentUploadRoot, fs.constants.R_OK | fs.constants.W_OK);
+    res.json({ status: 'ready', service: 'tiss-flow-api' });
+  } catch {
+    res.status(503).json({ status: 'not-ready', service: 'tiss-flow-api' });
+  }
+});
 
 function parseJsonArray(value) {
   try { const parsed = JSON.parse(value || '[]'); return Array.isArray(parsed) ? parsed : []; } catch { return []; }
@@ -321,27 +335,27 @@ function buildClinicBackup(clinicId) {
   const byClinic = table => db.prepare(`SELECT * FROM ${table} WHERE clinic_id = ?`).all(clinicId);
   const users = db.prepare('SELECT id, clinic_id, name, email, role, active FROM users WHERE clinic_id = ?').all(clinicId);
   const documents = byClinic('patient_documents').map(document => {
-    const storagePath = path.join(__dirname, 'uploads', clinicId, path.basename(document.storage_name));
+    const storagePath = path.join(documentUploadRoot, clinicId, path.basename(document.storage_name));
     return { ...document, content_base64: fs.existsSync(storagePath) ? fs.readFileSync(storagePath).toString('base64') : null };
   });
   const batchDocuments = byClinic('billing_batch_documents').map(document => {
-    const storagePath = path.join(__dirname, 'uploads', clinicId, path.basename(document.storage_name));
+    const storagePath = path.join(documentUploadRoot, clinicId, path.basename(document.storage_name));
     return { ...document, content_base64: fs.existsSync(storagePath) ? fs.readFileSync(storagePath).toString('base64') : null };
   });
   const batchGuides = db.prepare(`SELECT billing_batch_guides.* FROM billing_batch_guides JOIN billing_batches ON billing_batches.id = billing_batch_guides.batch_id WHERE billing_batches.clinic_id = ?`).all(clinicId);
   const batchStatusHistory = byClinic('billing_batch_status_history');
   const batchReturnItems = byClinic('billing_batch_return_items');
+  const privacyRequests = byClinic('privacy_requests');
   return signBackup({ format: 'tiss-flow-backup', version: 1, exportedAt: new Date().toISOString(), clinic, data: {
     clinicSettings: db.prepare('SELECT * FROM clinic_settings WHERE clinic_id = ?').get(clinicId) || null,
     users, patients: byClinic('patients'), guides: byClinic('guides'), insurers: byClinic('insurers'), invoices: byClinic('invoices'),
     glosas: byClinic('glosas'), authorizations: byClinic('authorizations'), billingBatches: byClinic('billing_batches'),
     billingBatchGuides: batchGuides, billingBatchDocuments: batchDocuments, billingBatchStatusHistory: batchStatusHistory, billingBatchReturnItems: batchReturnItems, feedbacks: byClinic('feedbacks'), patientDocuments: documents,
-    patientConsents: byClinic('patient_consents'), appointments: byClinic('appointments'), auditLogs: byClinic('audit_logs')
+    patientConsents: byClinic('patient_consents'), privacyRequests, appointments: byClinic('appointments'), auditLogs: byClinic('audit_logs')
   } });
 }
 
 function createRecoveryPoint(clinicId, reason = 'manual') {
-  const recoveryRoot = path.join(__dirname, 'recovery-backups');
   fs.mkdirSync(recoveryRoot, { recursive: true });
   const name = recoveryPointName(clinicId, reason);
   fs.writeFileSync(path.join(recoveryRoot, name), JSON.stringify(buildClinicBackup(clinicId)), { encoding: 'utf8', flag: 'wx' });
@@ -350,7 +364,6 @@ function createRecoveryPoint(clinicId, reason = 'manual') {
 }
 
 function ensureDailyRecoveryPoints(now = new Date()) {
-  const recoveryRoot = path.join(__dirname, 'recovery-backups');
   fs.mkdirSync(recoveryRoot, { recursive: true });
   const names = fs.readdirSync(recoveryRoot);
   db.prepare('SELECT id FROM clinics').all().forEach(({ id }) => {
@@ -379,6 +392,7 @@ app.get('/api/backup', auth, requireRole('admin'), (req, res) => {
   const batchGuides = db.prepare(`SELECT billing_batch_guides.* FROM billing_batch_guides JOIN billing_batches ON billing_batches.id = billing_batch_guides.batch_id WHERE billing_batches.clinic_id = ?`).all(clinicId);
   const batchStatusHistory = byClinic('billing_batch_status_history');
   const batchReturnItems = byClinic('billing_batch_return_items');
+  const privacyRequests = byClinic('privacy_requests');
   const backup = signBackup({
     format: 'tiss-flow-backup', version: 1, exportedAt: new Date().toISOString(), clinic,
     data: {
@@ -386,7 +400,7 @@ app.get('/api/backup', auth, requireRole('admin'), (req, res) => {
       users, patients: byClinic('patients'), guides: byClinic('guides'), insurers: byClinic('insurers'),
       invoices: byClinic('invoices'), glosas: byClinic('glosas'), authorizations: byClinic('authorizations'),
       billingBatches: byClinic('billing_batches'), billingBatchGuides: batchGuides, billingBatchDocuments: batchDocuments, billingBatchStatusHistory: batchStatusHistory, billingBatchReturnItems: batchReturnItems, feedbacks: byClinic('feedbacks'),
-      patientDocuments: documents, patientConsents: byClinic('patient_consents'), appointments: byClinic('appointments'), auditLogs: byClinic('audit_logs')
+      patientDocuments: documents, patientConsents: byClinic('patient_consents'), privacyRequests, appointments: byClinic('appointments'), auditLogs: byClinic('audit_logs')
     }
   });
   recordAudit(req, 'download', 'backup', clinicId, { document: 'clinic-backup', version: backup.version });
@@ -431,7 +445,7 @@ app.post('/api/backup/encrypted/restore', auth, requireRole('admin'), (req, res)
   const recoveryName = createRecoveryPoint(req.session.clinicId, 'before-restore').name;
   try {
     const restored = restoreBackupDatabase(db, backup, req.session.clinicId, req.session.userId);
-    const clinicDirectory = path.join(__dirname, 'uploads', req.session.clinicId);
+    const clinicDirectory = path.join(documentUploadRoot, req.session.clinicId);
     fs.mkdirSync(clinicDirectory, { recursive: true });
     [...(backup.data.patientDocuments || []), ...(backup.data.billingBatchDocuments || [])].forEach(document => {
       if (document.content_base64 && document.storage_name) fs.writeFileSync(path.join(clinicDirectory, path.basename(document.storage_name)), Buffer.from(document.content_base64, 'base64'));
@@ -459,7 +473,7 @@ app.post('/api/backup/restore', auth, requireRole('admin'), (req, res) => {
   const recoveryName = createRecoveryPoint(req.session.clinicId, 'before-restore').name;
   try {
     const restored = restoreBackupDatabase(db, backup, req.session.clinicId, req.session.userId);
-    const clinicDirectory = path.join(__dirname, 'uploads', req.session.clinicId);
+    const clinicDirectory = path.join(documentUploadRoot, req.session.clinicId);
     fs.mkdirSync(clinicDirectory, { recursive: true });
     [...(backup.data.patientDocuments || []), ...(backup.data.billingBatchDocuments || [])].forEach(document => {
       if (document.content_base64 && document.storage_name) fs.writeFileSync(path.join(clinicDirectory, path.basename(document.storage_name)), Buffer.from(document.content_base64, 'base64'));
@@ -482,7 +496,6 @@ app.post('/api/backup/recovery-points', auth, requireRole('admin'), (req, res) =
 });
 
 app.get('/api/backup/recovery-points', auth, requireRole('admin'), (req, res) => {
-  const recoveryRoot = path.join(__dirname, 'recovery-backups');
   if (!fs.existsSync(recoveryRoot)) return res.json([]);
   const points = fs.readdirSync(recoveryRoot)
     .filter(name => recoveryPointBelongsToClinic(name, req.session.clinicId))
@@ -492,7 +505,6 @@ app.get('/api/backup/recovery-points', auth, requireRole('admin'), (req, res) =>
 });
 
 app.get('/api/backup/status', auth, requireRole('admin'), (req, res) => {
-  const recoveryRoot = path.join(__dirname, 'recovery-backups');
   const names = fs.existsSync(recoveryRoot) ? fs.readdirSync(recoveryRoot).filter(name => recoveryPointBelongsToClinic(name, req.session.clinicId)) : [];
   const health = backupHealth(names, req.session.clinicId);
   const latestDaily = latestRecoveryPointName(names, req.session.clinicId, 'daily');
@@ -509,7 +521,7 @@ app.get('/api/backup/status', auth, requireRole('admin'), (req, res) => {
 app.get('/api/backup/recovery-points/:name', auth, requireRole('admin'), (req, res) => {
   const name = path.basename(req.params.name);
   if (!recoveryPointBelongsToClinic(req.params.name, req.session.clinicId)) return res.status(400).json({ error: 'Ponto de recuperação inválido.' });
-  const filePath = path.join(__dirname, 'recovery-backups', name);
+  const filePath = path.join(recoveryRoot, name);
   if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Ponto de recuperação não encontrado.' });
   recordAudit(req, 'download', 'backup', req.session.clinicId, { document: 'recovery-point', file: name });
   res.download(filePath, name);
@@ -813,7 +825,62 @@ app.get('/api/patients/:id/consent-pdf', auth, requireRole('admin', 'recepcao', 
   generatePatientConsentPDF(mapClinicSettings(settings, clinic), patient, res);
 });
 
-const documentUploadRoot = path.join(__dirname, 'uploads');
+const privacyRequestSelect = `SELECT privacy_requests.id, privacy_requests.patient_id AS patientId, patients.name AS patient,
+  privacy_requests.request_type AS requestType, privacy_requests.requested_by AS requestedBy, privacy_requests.notes,
+  privacy_requests.status, privacy_requests.resolution, privacy_requests.created_at AS createdAt, privacy_requests.resolved_at AS resolvedAt,
+  creator.name AS createdBy, resolver.name AS resolvedBy
+  FROM privacy_requests JOIN patients ON patients.id = privacy_requests.patient_id AND patients.clinic_id = privacy_requests.clinic_id
+  JOIN users creator ON creator.id = privacy_requests.created_by LEFT JOIN users resolver ON resolver.id = privacy_requests.resolved_by`;
+
+app.get('/api/privacy-requests', auth, requireRole('admin', 'recepcao'), (req, res) => {
+  const patientId = String(req.query.patientId || '');
+  const rows = db.prepare(`${privacyRequestSelect} WHERE privacy_requests.clinic_id = ?${patientId ? ' AND privacy_requests.patient_id = ?' : ''} ORDER BY privacy_requests.created_at DESC`).all(...(patientId ? [req.session.clinicId, patientId] : [req.session.clinicId]));
+  res.json(rows);
+});
+
+app.post('/api/patients/:id/privacy-requests', auth, requireRole('admin', 'recepcao'), (req, res) => {
+  const patient = db.prepare('SELECT id FROM patients WHERE id = ? AND clinic_id = ?').get(req.params.id, req.session.clinicId);
+  if (!patient) return res.status(404).json({ error: 'Paciente não encontrado.' });
+  let request;
+  try { request = validatePrivacyRequest(req.body || {}); } catch (error) { return res.status(400).json({ error: error.message }); }
+  const id = `PRIV-${crypto.randomUUID()}`;
+  db.prepare('INSERT INTO privacy_requests (id, clinic_id, patient_id, request_type, requested_by, notes, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)').run(id, req.session.clinicId, patient.id, request.type, request.requestedBy, request.notes || null, req.session.userId);
+  res.status(201).json({ id });
+});
+
+app.patch('/api/privacy-requests/:id', auth, requireRole('admin'), (req, res) => {
+  let resolution;
+  try { resolution = validatePrivacyResolution(req.body || {}); } catch (error) { return res.status(400).json({ error: error.message }); }
+  const result = db.prepare(`UPDATE privacy_requests SET status = ?, resolution = ?, resolved_by = CASE WHEN ? IN ('fulfilled','denied') THEN ? ELSE NULL END,
+    resolved_at = CASE WHEN ? IN ('fulfilled','denied') THEN CURRENT_TIMESTAMP ELSE NULL END WHERE id = ? AND clinic_id = ?`)
+    .run(resolution.status, resolution.resolution || null, resolution.status, req.session.userId, resolution.status, req.params.id, req.session.clinicId);
+  if (!result.changes) return res.status(404).json({ error: 'Solicitação não encontrada.' });
+  res.json({ id: req.params.id, status: resolution.status });
+});
+
+app.get('/api/patients/:id/privacy-export', auth, requireRole('admin'), (req, res) => {
+  const clinicId = req.session.clinicId;
+  const patient = db.prepare('SELECT * FROM patients WHERE id = ? AND clinic_id = ?').get(req.params.id, clinicId);
+  if (!patient) return res.status(404).json({ error: 'Paciente não encontrado.' });
+  const guides = db.prepare('SELECT * FROM guides WHERE clinic_id = ? AND patient = ? ORDER BY created_at').all(clinicId, patient.name);
+  const guideIds = guides.map(guide => guide.id);
+  const linked = (table, column) => guideIds.length ? db.prepare(`SELECT * FROM ${table} WHERE clinic_id = ? AND ${column} IN (${guideIds.map(() => '?').join(',')})`).all(clinicId, ...guideIds) : [];
+  const payload = {
+    format: 'tiss-flow-patient-export', version: 1, exportedAt: new Date().toISOString(),
+    patient, guides,
+    feedbacks: db.prepare('SELECT * FROM feedbacks WHERE clinic_id = ? AND patient = ? ORDER BY created_at').all(clinicId, patient.name),
+    authorizations: db.prepare('SELECT * FROM authorizations WHERE clinic_id = ? AND patient_id = ? ORDER BY created_at').all(clinicId, patient.id),
+    documents: db.prepare('SELECT id, guide_id, authorization_id, category, description, original_name, mime_type, size_bytes, valid_until, created_at FROM patient_documents WHERE clinic_id = ? AND patient_id = ? ORDER BY created_at').all(clinicId, patient.id),
+    consents: db.prepare('SELECT status, event_date, notes, consent_title, privacy_contact, document_hash, signed_document_id, created_at FROM patient_consents WHERE clinic_id = ? AND patient_id = ? ORDER BY created_at').all(clinicId, patient.id),
+    appointments: db.prepare('SELECT * FROM appointments WHERE clinic_id = ? AND patient_id = ? ORDER BY appointment_date').all(clinicId, patient.id),
+    invoices: linked('invoices', 'guide_id'), glosas: linked('glosas', 'guide_id')
+  };
+  recordAudit(req, 'download', 'patients', patient.id, { document: 'privacy-data-export' });
+  res.setHeader('Cache-Control', 'no-store'); res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="dados-titular-${patient.id}.json"`);
+  res.send(JSON.stringify(payload, null, 2));
+});
+
 const allowedDocumentTypes = new Set(['application/pdf', 'image/png', 'image/jpeg']);
 const documentRow = `SELECT patient_documents.id, patient_documents.patient_id AS patientId, patient_documents.guide_id AS guideId, patient_documents.authorization_id AS authorizationId, patient_documents.category, patient_documents.description, patient_documents.original_name AS originalName, patient_documents.mime_type AS mimeType, patient_documents.size_bytes AS sizeBytes, patient_documents.valid_until AS validUntil, patient_documents.created_at AS createdAt, users.name AS uploadedBy
   FROM patient_documents JOIN users ON users.id = patient_documents.uploaded_by AND users.clinic_id = patient_documents.clinic_id`;
@@ -1406,7 +1473,7 @@ app.use((error, req, res, next) => {
   res.status(500).json({ error: 'Erro interno do servidor.' });
 });
 
-app.listen(port, () => {
+const server = app.listen(port, () => {
   console.log(`TISS Flow API disponível em http://localhost:${port}`);
   try { ensureDailyRecoveryPoints(); } catch (error) { console.error('Falha ao criar backup diário:', error.message); }
   const dailyBackupTimer = setInterval(() => {
@@ -1414,3 +1481,11 @@ app.listen(port, () => {
   }, 6 * 60 * 60 * 1000);
   dailyBackupTimer.unref();
 });
+
+function shutdown(signal) {
+  console.log(`${signal} recebido; encerrando o servidor com segurança.`);
+  server.close(() => { try { db.close(); } finally { process.exit(0); } });
+  setTimeout(() => process.exit(1), 10000).unref();
+}
+process.once('SIGTERM', () => shutdown('SIGTERM'));
+process.once('SIGINT', () => shutdown('SIGINT'));

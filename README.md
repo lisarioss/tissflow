@@ -20,6 +20,7 @@ Protótipo de portfólio para operação de faturamento clínico. Demonstra o ci
 - **Conciliação financeira do lote**: registra previsão opcional, valor efetivamente recebido, data do crédito e observações, indicando automaticamente pagamento pendente, parcial ou quitado sem bloquear ajustes posteriores.
 - **Importação do retorno TISS**: ao anexar o XML da operadora, identifica as guias do lote, valores liberados e glosados, atualiza a situação das guias e abre as glosas correspondentes com código e motivo, preservando o arquivo original para auditoria.
 - **Relatório financeiro dos convênios**: consolida por competência o valor faturado, liberado, recebido, glosado e ainda a receber, mantém as notas fiscais em visão separada e exporta os lotes em CSV para conferência no Excel.
+- **Direitos do titular**: registra pedidos de acesso, correção, portabilidade, anonimização ou eliminação na pasta do paciente, exige justificativa para a conclusão, permite exportar os dados em JSON e mantém as decisões na auditoria e no backup. O sistema não elimina prontuários automaticamente.
 - **Controle de autorizações**: registra a guia/senha autorizada por paciente, período de validade, quantidade liberada e utilizada; destaca autorizações vigentes, próximas do vencimento ou vencidas e permite atualizar o saldo de sessões.
 - **Validação TISS oficial**: confere o XML com os schemas de Comunicação 04.03.00 publicados pela ANS, calcula o hash MD5 em ISO-8859-1 e mantém inválido qualquer lote que não passe no XSD.
 - **Feedback de atendimento**: profissionais registram evolução/observações por atendimento, com foto opcional e vínculo validado pelo paciente e pela data da guia faturada; geração do PDF individual e de um relatório consolidado por guia para auditoria.
@@ -131,6 +132,14 @@ As funções puras do front-end (geração de ID sequencial, escape de XML, conf
 cd frontend
 npm test
 ```
+
+## Preparação para produção
+
+Em produção, configure `NODE_ENV=production`, gere um `JWT_SECRET` aleatório com pelo menos 32 caracteres, mantenha `ENABLE_DEMO_DATA=false`, informe somente origens HTTPS em `CORS_ORIGINS`, use `TRUST_PROXY=true` atrás do proxy que encerra o HTTPS e defina `DATA_DIR` com o caminho absoluto de um volume persistente. O servidor recusa a inicialização se alguma dessas proteções estiver ausente.
+
+O `DATA_DIR` reúne o banco `tiss-flow.db`, os documentos enviados e os pontos locais de recuperação. Assim, uma nova versão da aplicação pode substituir o código sem apagar os dados da clínica. O volume deve ter leitura e escrita permitidas somente para o processo da aplicação e precisa fazer parte da rotina externa de backup do provedor.
+
+Use `GET /api/health` para verificar se o processo está ativo e `GET /api/ready` para confirmar também o acesso ao banco e ao armazenamento de documentos. O encerramento por `SIGTERM` ou `SIGINT` aguarda as conexões abertas e fecha o banco antes de finalizar.
 
 ## Estrutura
 

@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { nextSequentialId, timeToMinutes, hasScheduleConflictWith, escapeXml, findSessionOutsidePlanValidity, exceedsAuthorizedQuantity, findCidIncompatibility, filterGuides, filterPatients, filterPatientsByStatus, paginateItems, filterInsurers, filterFeedbacks, isActivePatient, planValidityAlertItems, consentAlertItems, clinicOnboardingChecklist } = require('./lib.js');
+const { nextSequentialId, timeToMinutes, hasScheduleConflictWith, escapeXml, findSessionOutsidePlanValidity, exceedsAuthorizedQuantity, findCidIncompatibility, filterGuides, filterPatients, filterPatientsByStatus, paginateItems, filterInsurers, filterFeedbacks, isActivePatient, planValidityAlertItems, consentAlertItems, clinicOnboardingChecklist, batchFollowupAlertItems } = require('./lib.js');
 
 test('isActivePatient trata booleanos locais e inteiros vindos do SQLite', () => {
   assert.equal(isActivePatient({ active: true }), true);
@@ -263,4 +263,35 @@ test('filterFeedbacks encontra por paciente, profissional, guia ou tipo de atend
   assert.equal(filterFeedbacks(feedbacks, 'G-2026-00481').length, 1);
   assert.equal(filterFeedbacks(feedbacks, 'fisioterapia').length, 1);
   assert.equal(filterFeedbacks(feedbacks, '').length, 2);
+});
+
+test('batchFollowupAlertItems alerta remessas sem retorno após sete e quinze dias', () => {
+  const today = new Date('2026-09-20T12:00:00');
+  const alerts = batchFollowupAlertItems([
+    { id: 'L-1', insurer: 'Unimed', status: 'sent', protocol: 'P-1', sentPackageId: 'PKG-1', sentAt: '2026-09-12 10:00:00', returnItems: [], documents: [] },
+    { id: 'L-2', insurer: 'Amil', status: 'processing', protocol: 'P-2', sentPackageId: 'PKG-2', sentAt: '2026-09-01 10:00:00', returnItems: [], documents: [] }
+  ], today);
+  assert.equal(alerts.find(item => item.title.includes('L-1')).level, 'warning');
+  assert.equal(alerts.find(item => item.title.includes('L-2')).level, 'critical');
+});
+
+test('batchFollowupAlertItems encerra o alerta quando o retorno foi anexado', () => {
+  const alerts = batchFollowupAlertItems([{ id: 'L-1', insurer: 'Unimed', status: 'sent', protocol: 'P-1', sentPackageId: 'PKG-1', sentAt: '2026-08-01 10:00:00', returnItems: [{ id: 'R-1' }], documents: [] }], new Date('2026-09-20T12:00:00'));
+  assert.equal(alerts.length, 0);
+});
+
+test('batchFollowupAlertItems respeita os prazos configurados no convênio', () => {
+  const batch = { id: 'L-1', insurer: 'Plano Ágil', status: 'sent', protocol: 'P-1', sentPackageId: 'PKG-1', sentAt: '2026-09-10 10:00:00', returnAlertDays: 12, returnCriticalDays: 20, returnItems: [], documents: [] };
+  assert.equal(batchFollowupAlertItems([batch], new Date('2026-09-20T12:00:00')).length, 0);
+  assert.equal(batchFollowupAlertItems([batch], new Date('2026-09-22T12:00:00'))[0].level, 'warning');
+  assert.equal(batchFollowupAlertItems([batch], new Date('2026-09-30T12:00:00'))[0].level, 'critical');
+});
+
+test('batchFollowupAlertItems prioriza a próxima cobrança agendada', () => {
+  const batch = { id: 'L-1', insurer: 'Unimed', status: 'processing', protocol: 'P-1', sentPackageId: 'PKG-1', sentAt: '2026-09-01 10:00:00', returnItems: [], documents: [], followups: [{ nextFollowupDate: '2026-09-20' }] };
+  const todayAlert = batchFollowupAlertItems([batch], new Date('2026-09-20T12:00:00'))[0];
+  const lateAlert = batchFollowupAlertItems([batch], new Date('2026-09-21T12:00:00'))[0];
+  assert.match(todayAlert.title, /hoje/);
+  assert.equal(todayAlert.level, 'warning');
+  assert.equal(lateAlert.level, 'critical');
 });

@@ -29,6 +29,7 @@ db.exec(`
     active INTEGER NOT NULL DEFAULT 1,
     UNIQUE (clinic_id, email)
   );
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_login ON users(lower(email));
   CREATE TABLE IF NOT EXISTS patients (
     id TEXT PRIMARY KEY,
     clinic_id TEXT NOT NULL REFERENCES clinics(id),
@@ -100,6 +101,8 @@ db.exec(`
     contact_phone TEXT,
     provider_code TEXT,
     delivery_format TEXT NOT NULL DEFAULT 'both' CHECK (delivery_format IN ('pdf', 'xml', 'both')),
+    return_alert_days INTEGER NOT NULL DEFAULT 7,
+    return_critical_days INTEGER NOT NULL DEFAULT 15,
     accepted_procedures TEXT NOT NULL DEFAULT '[]',
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(clinic_id, name)
@@ -115,6 +118,18 @@ db.exec(`
     locked_until TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
+  CREATE TABLE IF NOT EXISTS platform_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    trade_name TEXT NOT NULL DEFAULT 'TISSFlow',
+    legal_name TEXT NOT NULL DEFAULT '',
+    cnpj TEXT NOT NULL DEFAULT '',
+    address TEXT NOT NULL DEFAULT '',
+    support_email TEXT NOT NULL DEFAULT '',
+    privacy_email TEXT NOT NULL DEFAULT '',
+    support_whatsapp TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  INSERT OR IGNORE INTO platform_settings (id) VALUES (1);
   CREATE TABLE IF NOT EXISTS platform_audit_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     platform_admin_id TEXT NOT NULL REFERENCES platform_admins(id),
@@ -123,6 +138,43 @@ db.exec(`
     details_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
+  CREATE TABLE IF NOT EXISTS commercial_leads (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    contact_name TEXT NOT NULL,
+    clinic_name TEXT NOT NULL,
+    email TEXT NOT NULL,
+    phone TEXT NOT NULL DEFAULT '',
+    clinic_size TEXT NOT NULL DEFAULT '',
+    plan_code TEXT NOT NULL DEFAULT 'professional' CHECK (plan_code IN ('essential', 'professional', 'network')),
+    status TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new', 'contacted', 'converted', 'discarded')),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE INDEX IF NOT EXISTS idx_commercial_leads_status_date ON commercial_leads(status, created_at DESC);
+  CREATE TABLE IF NOT EXISTS legal_acceptances (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    clinic_id TEXT NOT NULL REFERENCES clinics(id),
+    user_id TEXT NOT NULL REFERENCES users(id),
+    terms_version TEXT NOT NULL,
+    privacy_version TEXT NOT NULL,
+    ip_address TEXT,
+    accepted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE TABLE IF NOT EXISTS password_reset_tokens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL REFERENCES users(id),
+    token_hash TEXT NOT NULL UNIQUE,
+    expires_at TEXT NOT NULL,
+    used_at TEXT,
+    requested_ip TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE INDEX IF NOT EXISTS idx_password_reset_user ON password_reset_tokens(user_id, created_at DESC);
+  CREATE TABLE IF NOT EXISTS billing_delivery_packages (
+    id TEXT PRIMARY KEY, clinic_id TEXT NOT NULL REFERENCES clinics(id), batch_id TEXT NOT NULL REFERENCES billing_batches(id),
+    storage_name TEXT NOT NULL UNIQUE, sha256 TEXT NOT NULL, size_bytes INTEGER NOT NULL, created_by TEXT NOT NULL REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE INDEX IF NOT EXISTS idx_delivery_packages_batch ON billing_delivery_packages(clinic_id, batch_id, created_at DESC);
   CREATE TABLE IF NOT EXISTS clinic_subscriptions (
     clinic_id TEXT PRIMARY KEY REFERENCES clinics(id) ON DELETE CASCADE,
     plan_code TEXT NOT NULL DEFAULT 'professional' CHECK (plan_code IN ('essential', 'professional', 'network')),
@@ -151,6 +203,8 @@ db.exec(`
     status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'ready', 'sent', 'processing', 'approved', 'error')),
     protocol TEXT,
     sent_at TEXT,
+    sent_package_id TEXT,
+    sent_by TEXT REFERENCES users(id),
     xml_generated INTEGER NOT NULL DEFAULT 0,
     xml_valid INTEGER NOT NULL DEFAULT 0,
     xml_validation_errors TEXT NOT NULL DEFAULT '[]',
@@ -208,6 +262,19 @@ db.exec(`
     UNIQUE(document_id, guide_id)
   );
   CREATE INDEX IF NOT EXISTS idx_batch_return_items ON billing_batch_return_items(clinic_id, batch_id, guide_id);
+  CREATE TABLE IF NOT EXISTS billing_batch_followups (
+    id TEXT PRIMARY KEY,
+    clinic_id TEXT NOT NULL REFERENCES clinics(id),
+    batch_id TEXT NOT NULL REFERENCES billing_batches(id) ON DELETE CASCADE,
+    contact_date TEXT NOT NULL,
+    channel TEXT NOT NULL CHECK (channel IN ('portal', 'email', 'phone', 'whatsapp', 'other')),
+    outcome TEXT NOT NULL,
+    notes TEXT,
+    next_followup_date TEXT,
+    created_by TEXT NOT NULL REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE INDEX IF NOT EXISTS idx_batch_followups_batch ON billing_batch_followups(clinic_id, batch_id, contact_date DESC);
   CREATE TABLE IF NOT EXISTS authorizations (
     id TEXT PRIMARY KEY,
     clinic_id TEXT NOT NULL REFERENCES clinics(id),
@@ -414,6 +481,8 @@ const platformAdminColumns = new Set(db.prepare('PRAGMA table_info(platform_admi
 if (!platformAdminColumns.has('token_version')) db.exec('ALTER TABLE platform_admins ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0');
 if (!platformAdminColumns.has('failed_login_attempts')) db.exec('ALTER TABLE platform_admins ADD COLUMN failed_login_attempts INTEGER NOT NULL DEFAULT 0');
 if (!platformAdminColumns.has('locked_until')) db.exec("ALTER TABLE platform_admins ADD COLUMN locked_until TEXT NOT NULL DEFAULT ''");
+const platformSettingsColumns = new Set(db.prepare('PRAGMA table_info(platform_settings)').all().map(column => column.name));
+if (!platformSettingsColumns.has('support_whatsapp')) db.exec("ALTER TABLE platform_settings ADD COLUMN support_whatsapp TEXT NOT NULL DEFAULT ''");
 const settingsColumns = new Set(db.prepare('PRAGMA table_info(clinic_settings)').all().map(column => column.name));
 if (!settingsColumns.has('letterhead_data_url')) db.exec("ALTER TABLE clinic_settings ADD COLUMN letterhead_data_url TEXT NOT NULL DEFAULT ''");
 if (!settingsColumns.has('letterhead_header_mm')) db.exec('ALTER TABLE clinic_settings ADD COLUMN letterhead_header_mm INTEGER NOT NULL DEFAULT 35');
@@ -433,6 +502,8 @@ const insurerColumns = new Set(db.prepare('PRAGMA table_info(insurers)').all().m
 if (!insurerColumns.has('procedure_rules')) db.exec("ALTER TABLE insurers ADD COLUMN procedure_rules TEXT NOT NULL DEFAULT '[]'");
 if (!insurerColumns.has('delivery_format')) db.exec("ALTER TABLE insurers ADD COLUMN delivery_format TEXT NOT NULL DEFAULT 'both' CHECK (delivery_format IN ('pdf', 'xml', 'both'))");
 if (!insurerColumns.has('provider_code')) db.exec('ALTER TABLE insurers ADD COLUMN provider_code TEXT');
+if (!insurerColumns.has('return_alert_days')) db.exec('ALTER TABLE insurers ADD COLUMN return_alert_days INTEGER NOT NULL DEFAULT 7');
+if (!insurerColumns.has('return_critical_days')) db.exec('ALTER TABLE insurers ADD COLUMN return_critical_days INTEGER NOT NULL DEFAULT 15');
 const batchColumns = new Set(db.prepare('PRAGMA table_info(billing_batches)').all().map(column => column.name));
 if (!batchColumns.has('xml_valid')) db.exec('ALTER TABLE billing_batches ADD COLUMN xml_valid INTEGER NOT NULL DEFAULT 0');
 if (!batchColumns.has('xml_validation_errors')) db.exec("ALTER TABLE billing_batches ADD COLUMN xml_validation_errors TEXT NOT NULL DEFAULT '[]'");
@@ -441,6 +512,8 @@ if (!batchColumns.has('expected_payment_date')) db.exec('ALTER TABLE billing_bat
 if (!batchColumns.has('received_cents')) db.exec('ALTER TABLE billing_batches ADD COLUMN received_cents INTEGER NOT NULL DEFAULT 0');
 if (!batchColumns.has('received_at')) db.exec('ALTER TABLE billing_batches ADD COLUMN received_at TEXT');
 if (!batchColumns.has('reconciliation_notes')) db.exec('ALTER TABLE billing_batches ADD COLUMN reconciliation_notes TEXT');
+if (!batchColumns.has('sent_package_id')) db.exec('ALTER TABLE billing_batches ADD COLUMN sent_package_id TEXT');
+if (!batchColumns.has('sent_by')) db.exec('ALTER TABLE billing_batches ADD COLUMN sent_by TEXT REFERENCES users(id)');
 const batchGuideColumns = new Set(db.prepare('PRAGMA table_info(billing_batch_guides)').all().map(column => column.name));
 if (!batchGuideColumns.has('signed_document_id')) db.exec('ALTER TABLE billing_batch_guides ADD COLUMN signed_document_id TEXT REFERENCES patient_documents(id)');
 const appointmentColumns = new Set(db.prepare('PRAGMA table_info(appointments)').all().map(column => column.name));

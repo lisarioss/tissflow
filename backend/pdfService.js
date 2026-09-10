@@ -171,6 +171,45 @@ function consentDocumentContent(clinic) {
   return { title: clinic.consentTitle || 'TERMO DE CIÊNCIA E CONSENTIMENTO', text: clinic.consentText || defaultConsentText.join('\n\n'), privacyContact: clinic.privacyContact || '' };
 }
 
+function generateBatchAuditPDF(clinic, batch, res) {
+  const hasLetterhead = Boolean(clinic.letterheadDataUrl);
+  const headerSpace = Math.max(20, Math.min(Number(clinic.letterheadHeaderMm) || 35, 70)) * (72 / 25.4);
+  const footerSpace = Math.max(15, Math.min(Number(clinic.letterheadFooterMm) || 25, 50)) * (72 / 25.4);
+  const money = cents => (Number(cents || 0) / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+  const rule = { hLineColor: () => '#cbd8d2', vLineColor: () => '#cbd8d2', hLineWidth: () => 0.6, vLineWidth: () => 0.6 };
+  const guideRows = (batch.guides || []).map(guide => [guide.id, guide.patient, guide.procedure, money(guide.valueCents), guide.signedDocumentId ? 'Sim' : 'Não']);
+  const contactRows = (batch.followups || []).map(item => [ptDate(item.contactDate), item.channel, item.outcome, item.nextFollowupDate ? ptDate(item.nextFollowupDate) : '-']);
+  const returnRows = (batch.returnItems || []).map(item => [item.guideId, money(item.releasedCents), money(item.glosaCents), item.glosaCode || '-']);
+  const officialPackage = (batch.deliveryPackages || []).find(item => item.id === batch.sentPackageId);
+  const definition = {
+    pageSize: 'A4', pageMargins: [42, hasLetterhead ? headerSpace + 24 : 44, 42, hasLetterhead ? footerSpace : 44],
+    background: hasLetterhead ? { image: clinic.letterheadDataUrl, width: 595.28, height: 841.89, absolutePosition: { x: 0, y: 0 } } : null,
+    defaultStyle: { font: 'Helvetica', fontSize: 8, color: '#263731' },
+    footer: (page, pages) => ({ text: `Dossiê ${batch.id}  |  Página ${page} de ${pages}`, alignment: 'center', fontSize: 7, color: '#718078', margin: [0, 12, 0, 0] }),
+    content: [
+      ...(!hasLetterhead && clinic.logoDataUrl ? [{ image: clinic.logoDataUrl, fit: [120, 52], alignment: 'center', margin: [0, 0, 0, 12] }] : []),
+      { text: 'DOSSIÊ DE FATURAMENTO TISS', bold: true, fontSize: 16, color: '#173d30', alignment: 'center' },
+      { text: `${batch.id} · competência ${competenceLabel(batch.competence)}`, alignment: 'center', color: '#607168', margin: [0, 4, 0, 18] },
+      { table: { widths: ['*', '*'], body: [[field('OPERADORA', batch.insurer), field('STATUS', batch.status)], [field('PROTOCOLO', batch.protocol || 'Não informado'), field('ENVIADO EM', batch.sentAt ? new Date(`${batch.sentAt.replace(' ', 'T')}Z`).toLocaleString('pt-BR') : 'Não enviado')], [field('REMESSA OFICIAL', batch.sentPackageId || 'Não vinculada'), field('RESPONSÁVEL PELO ENVIO', batch.sentBy || 'Não informado')]] }, layout: rule, margin: [0, 0, 0, 15] },
+      { text: 'GUIAS DO LOTE', bold: true, color: '#173d30', margin: [0, 0, 0, 6] },
+      { table: { headerRows: 1, widths: [60, '*', '*', 65, 48], body: [['Guia', 'Paciente', 'Procedimento', 'Valor', 'PDF assinado'], ...guideRows] }, layout: 'lightHorizontalLines', margin: [0, 0, 0, 15] },
+      { text: 'INTEGRIDADE DA REMESSA', bold: true, color: '#173d30', margin: [0, 0, 0, 6] },
+      { text: officialPackage ? `SHA-256: ${officialPackage.sha256}\nTamanho: ${(Number(officialPackage.sizeBytes || 0) / 1024).toFixed(1)} KB · preservado em ${new Date(`${officialPackage.createdAt.replace(' ', 'T')}Z`).toLocaleString('pt-BR')}` : 'Nenhum pacote foi vinculado como remessa oficial.', margin: [0, 0, 0, 15] },
+      { text: 'CONTATOS COM A OPERADORA', bold: true, color: '#173d30', margin: [0, 0, 0, 6] },
+      contactRows.length ? { table: { headerRows: 1, widths: [65, 55, '*', 80], body: [['Data', 'Canal', 'Resultado', 'Próximo contato'], ...contactRows] }, layout: 'lightHorizontalLines', margin: [0, 0, 0, 15] } : { text: 'Nenhum contato registrado.', color: '#718078', margin: [0, 0, 0, 15] },
+      { text: 'RETORNO E CONCILIAÇÃO', bold: true, color: '#173d30', margin: [0, 0, 0, 6] },
+      ...(returnRows.length ? [{ table: { headerRows: 1, widths: ['*', 75, 75, 70], body: [['Guia', 'Liberado', 'Glosado', 'Código'], ...returnRows] }, layout: 'lightHorizontalLines', margin: [0, 0, 0, 10] }] : [{ text: 'Nenhum retorno detalhado recebido.', color: '#718078', margin: [0, 0, 0, 10] }]),
+      { columns: [{ text: `Total faturado\n${money(batch.totalValueCents)}`, bold: true }, { text: `Total recebido\n${money(batch.receivedCents)}`, bold: true }, { text: `Diferença\n${money(Math.max(0, Number(batch.totalValueCents || 0) - Number(batch.receivedCents || 0)))}`, bold: true }], columnGap: 12, margin: [0, 4, 0, 16] },
+      { text: `Documento gerado em ${new Date().toLocaleString('pt-BR')}. Os arquivos originais permanecem preservados no lote.`, fontSize: 7, color: '#718078' }
+    ],
+    info: { title: `Dossiê de faturamento ${batch.id}`, author: clinic.tradeName || clinic.legalName || clinic.name }
+  };
+  const pdfDoc = printer.createPdfKitDocument(definition);
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="dossie-${batch.id}.pdf"`);
+  pdfDoc.pipe(res); pdfDoc.end();
+}
+
 function generatePatientConsentPDF(clinic, patient, res) {
   const hasLetterhead = Boolean(clinic.letterheadDataUrl);
   const headerSpace = Math.max(20, Math.min(Number(clinic.letterheadHeaderMm) || 35, 70)) * (72 / 25.4);
@@ -207,4 +246,4 @@ function generatePatientConsentPDF(clinic, patient, res) {
   pdfDoc.end();
 }
 
-module.exports = { generateGuidePackagePDF, generateGuideAuditPDF, generatePatientConsentPDF, consentDocumentContent };
+module.exports = { generateGuidePackagePDF, generateGuideAuditPDF, generatePatientConsentPDF, generateBatchAuditPDF, consentDocumentContent };

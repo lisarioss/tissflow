@@ -166,8 +166,33 @@ function clinicOnboardingChecklist(settings, insurers, users, patients) {
   ];
 }
 
+function batchFollowupAlertItems(batches, today = new Date()) {
+  const referenceDate = new Date(today); referenceDate.setHours(0, 0, 0, 0);
+  return (batches || []).flatMap(batch => {
+    if (!['sent', 'processing'].includes(batch.status)) return [];
+    const alerts = [];
+    if (!batch.protocol) alerts.push({ level: 'critical', title: `Lote ${batch.id} sem protocolo`, detail: `${batch.insurer} · registre o comprovante do envio.`, view: 'batches', targetId: batch.id });
+    if (!batch.sentPackageId) alerts.push({ level: 'warning', title: `Lote ${batch.id} sem remessa oficial`, detail: 'Vincule a versão exata do pacote enviada à operadora.', view: 'batches', targetId: batch.id });
+    if ((batch.returnItems || []).length || (batch.documents || []).some(item => ['operator_return', 'payment_statement'].includes(item.category))) return alerts;
+    const scheduled = (batch.followups || [])[0]?.nextFollowupDate ? batch.followups[0] : null;
+    if (scheduled) {
+      const dueDate = new Date(`${scheduled.nextFollowupDate}T12:00:00`); dueDate.setHours(0, 0, 0, 0);
+      const daysUntilFollowup = Math.ceil((dueDate - referenceDate) / 86400000);
+      if (daysUntilFollowup <= 0) alerts.push({ level: daysUntilFollowup < 0 ? 'critical' : 'warning', title: daysUntilFollowup < 0 ? `Cobrança atrasada · lote ${batch.id}` : `Cobrar operadora hoje · lote ${batch.id}`, detail: `${batch.insurer} · acompanhamento marcado para ${dueDate.toLocaleDateString('pt-BR')}.`, view: 'batches', targetId: batch.id });
+      return alerts;
+    }
+    const sentDate = batch.sentAt ? new Date(`${String(batch.sentAt).replace(' ', 'T')}Z`) : null;
+    if (!sentDate || Number.isNaN(sentDate.getTime())) return alerts;
+    sentDate.setHours(0, 0, 0, 0);
+    const elapsedDays = Math.max(0, Math.floor((referenceDate - sentDate) / 86400000));
+    const alertDays = Number(batch.returnAlertDays || 7), criticalDays = Number(batch.returnCriticalDays || 15);
+    if (elapsedDays >= alertDays) alerts.push({ level: elapsedDays >= criticalDays ? 'critical' : 'warning', title: `Lote ${batch.id} sem retorno há ${elapsedDays} dias`, detail: `${batch.insurer} · protocolo ${batch.protocol || 'não informado'}. Consulte a operadora.`, view: 'batches', targetId: batch.id });
+    return alerts;
+  });
+}
+
 // Disponibiliza as funções tanto para <script> no navegador (globais em
 // `window`) quanto para `require()` em testes Node — sem precisar de bundler.
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { nextSequentialId, timeToMinutes, hasScheduleConflictWith, escapeXml, findSessionOutsidePlanValidity, exceedsAuthorizedQuantity, findCidIncompatibility, filterGuides, filterPatients, filterPatientsByStatus, paginateItems, filterInsurers, filterFeedbacks, isActivePatient, planValidityAlertItems, consentAlertItems, clinicOnboardingChecklist };
+  module.exports = { nextSequentialId, timeToMinutes, hasScheduleConflictWith, escapeXml, findSessionOutsidePlanValidity, exceedsAuthorizedQuantity, findCidIncompatibility, filterGuides, filterPatients, filterPatientsByStatus, paginateItems, filterInsurers, filterFeedbacks, isActivePatient, planValidityAlertItems, consentAlertItems, clinicOnboardingChecklist, batchFollowupAlertItems };
 }

@@ -1,0 +1,8 @@
+const token = new URLSearchParams(location.search).get('token');
+const requestSection = document.querySelector('#request-reset');
+const applySection = document.querySelector('#apply-reset');
+const message = document.querySelector('#reset-message');
+if (token) { requestSection.hidden = true; applySection.hidden = false; }
+async function post(path, body) { const response = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); const payload = await response.json().catch(() => ({})); if (!response.ok) throw new Error(payload.error || 'Não foi possível concluir a solicitação.'); return payload; }
+document.querySelector('#request-reset-form').addEventListener('submit', async event => { event.preventDefault(); message.textContent = 'Enviando…'; try { const result = await post('/api/auth/forgot-password', Object.fromEntries(new FormData(event.target))); message.innerHTML = result.resetUrl ? `${result.message} <a href="${result.resetUrl}">Abrir link local de teste</a>.` : result.message; event.target.reset(); } catch (error) { message.textContent = error.message; } });
+document.querySelector('#apply-reset-form').addEventListener('submit', async event => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); if (data.newPassword !== data.confirmation) { message.textContent = 'A confirmação não corresponde à nova senha.'; return; } try { const result = await post('/api/auth/reset-password', { token, newPassword: data.newPassword }); message.innerHTML = `${result.message} <a href="/login">Ir para o login</a>.`; event.target.reset(); } catch (error) { message.textContent = error.message; } });

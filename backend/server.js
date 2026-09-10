@@ -3,6 +3,7 @@ const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
+const JSZip = require('jszip');
 const path = require('path');
 const fs = require('fs');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
@@ -13,7 +14,7 @@ const { documentUploadRoot, recoveryRoot } = resolveStoragePaths(process.env, __
 fs.mkdirSync(documentUploadRoot, { recursive: true });
 fs.mkdirSync(recoveryRoot, { recursive: true });
 const db = require('./db');
-const { generateGuidePackagePDF, generateGuideAuditPDF, generatePatientConsentPDF, consentDocumentContent } = require('./pdfService');
+const { generateGuidePackagePDF, generateGuideAuditPDF, generatePatientConsentPDF, generateBatchAuditPDF, consentDocumentContent } = require('./pdfService');
 const { feedbackDateBelongsToGuide } = require('./feedbackService');
 const { hasAppointmentConflict, weeklyDates } = require('./appointmentService');
 const { TISS_VERSION, calculateTissHash, validateTissXml } = require('./tissValidationService');
@@ -33,12 +34,15 @@ const { shouldRedirectToHttps, requestLog } = require('./httpOperationsService')
 const { plans: subscriptionPlans, validPlan, subscriptionState, remainingTrialDays, planCapacityAvailable, subscriptionWriteAccess, extendedTrialEnd } = require('./subscriptionService');
 const { asaasConfig, secureTokenMatches, subscriptionStatusForAsaasEvent, externalSubscriptionId, periodEndForPayload, createClinicSubscription } = require('./asaasBillingService');
 const { commercialMetrics, commercialCsv } = require('./platformCommercialService');
+const { createPasswordReset, hashResetToken, resetTokenIsValid } = require('./passwordResetService');
+const { launchReadiness } = require('./launchReadinessService');
 
 const app = express();
 const port = runtimeConfig.port;
 const jwtSecret = runtimeConfig.jwtSecret;
 const allowedOrigins = new Set(runtimeConfig.origins.length ? runtimeConfig.origins : [`http://localhost:${port}`, `http://127.0.0.1:${port}`]);
 const billingConfig = asaasConfig(process.env);
+const legalVersions = { terms: '2026-09-10', privacy: '2026-09-10' };
 
 app.disable('x-powered-by');
 if (runtimeConfig.trustProxy) app.set('trust proxy', 1);
@@ -72,6 +76,10 @@ app.use(express.static(path.join(__dirname, '..', 'frontend'), { index: false })
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, '..', 'frontend', 'landing.html')));
 app.get(['/login', '/app'], (req, res) => res.sendFile(path.join(__dirname, '..', 'frontend', 'index.html')));
 app.get('/platform', (req, res) => res.sendFile(path.join(__dirname, '..', 'frontend', 'platform.html')));
+function sendLegalPage(filename, res) { res.type('html').send(fs.readFileSync(path.join(__dirname, '..', 'frontend', filename), 'utf8').replace('</body>', '<script src="legal.js"></script></body>')); }
+app.get('/termos', (req, res) => sendLegalPage('terms.html', res));
+app.get('/privacidade', (req, res) => sendLegalPage('privacy.html', res));
+app.get('/recuperar', (req, res) => res.sendFile(path.join(__dirname, '..', 'frontend', 'reset-password.html')));
 
 function auth(req, res, next) {
   const token = req.headers.authorization?.replace('Bearer ', '');
@@ -180,6 +188,8 @@ function rateLimit({ windowMs, max, message, resetOnSuccess = false }) {
 
 const loginRateLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 15, resetOnSuccess: true, message: 'Muitas tentativas de acesso. Aguarde 15 minutos e tente novamente.' });
 const registrationRateLimit = rateLimit({ windowMs: 60 * 60 * 1000, max: 5, message: 'Limite de cadastros atingido. Aguarde uma hora e tente novamente.' });
+const commercialContactRateLimit = rateLimit({ windowMs: 60 * 60 * 1000, max: 5, message: 'Limite de contatos atingido. Aguarde uma hora e tente novamente.' });
+const passwordResetRateLimit = rateLimit({ windowMs: 60 * 60 * 1000, max: 5, message: 'Muitas solicitações de recuperação. Aguarde uma hora.' });
 const platformLoginRateLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, resetOnSuccess: true, message: 'Muitas tentativas de acesso. Aguarde 15 minutos.' });
 
 function recordLoginEvent(clinicId, userId, email, outcome, ipAddress) {
@@ -224,15 +234,13 @@ function mapClinicSettings(row, clinic) {
   };
 }
 
-app.get('/api/clinics', (req, res) => {
-  res.json(db.prepare('SELECT id, name, unit FROM clinics ORDER BY name').all());
-});
-
 app.post('/api/auth/register-clinic', registrationRateLimit, (req, res) => {
   const { clinicName, unit, cnpj, cnes, adminName, email, password } = req.body;
   let selectedPlan;
   try { selectedPlan = validPlan(req.body?.planCode || 'professional'); } catch (error) { return res.status(400).json({ error: error.message }); }
   if (String(clinicName || '').trim().length < 3 || String(adminName || '').trim().length < 3 || !/^\S+@\S+\.\S+$/.test(String(email || '')) || String(password || '').length < 12) return res.status(400).json({ error: 'Informe clínica, responsável, e-mail válido e senha de pelo menos 12 caracteres.' });
+  if (req.body?.legalAccepted !== true && req.body?.legalAccepted !== 'on') return res.status(400).json({ error: 'Leia e aceite os Termos de Uso e a Política de Privacidade para continuar.' });
+  if (db.prepare('SELECT 1 FROM users WHERE lower(email) = lower(?)').get(String(email).trim())) return res.status(409).json({ error: 'Este e-mail já possui acesso ao TISSFlow. Entre com sua conta ou utilize outro e-mail.' });
   if (cnes && !/^\d{7}$/.test(String(cnes))) return res.status(400).json({ error: 'O CNES deve possuir 7 dígitos.' });
   const baseSlug = String(clinicName).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 32) || 'clinica';
   let clinicId = baseSlug;
@@ -245,6 +253,8 @@ app.post('/api/auth/register-clinic', registrationRateLimit, (req, res) => {
       db.prepare('INSERT INTO users (id, clinic_id, name, email, password_hash, role, active) VALUES (?, ?, ?, ?, ?, ?, 1)').run(userId, clinicId, String(adminName).trim(), String(email).trim().toLowerCase(), bcrypt.hashSync(password, 10), 'admin');
       db.prepare('INSERT INTO clinic_settings (clinic_id, legal_name, trade_name, cnpj, cnes) VALUES (?, ?, ?, ?, ?)').run(clinicId, String(clinicName).trim(), String(clinicName).trim(), String(cnpj || '').trim(), String(cnes || '').trim());
       db.prepare("INSERT INTO clinic_subscriptions (clinic_id, plan_code, status, trial_end) VALUES (?, ?, 'trialing', date('now', '+30 days'))").run(clinicId, selectedPlan.code);
+      db.prepare('INSERT INTO legal_acceptances (clinic_id, user_id, terms_version, privacy_version, ip_address) VALUES (?, ?, ?, ?, ?)').run(clinicId, userId, legalVersions.terms, legalVersions.privacy, req.ip || null);
+      db.prepare("UPDATE commercial_leads SET status = 'converted' WHERE lower(email) = lower(?) AND status IN ('new', 'contacted')").run(String(email).trim());
       db.prepare('INSERT INTO audit_logs (clinic_id, user_id, action, entity_type, entity_id, route, details_json, ip_address) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(clinicId, userId, 'create', 'clinics', clinicId, '/api/auth/register-clinic', JSON.stringify({ fields: ['clinicName', 'unit', 'cnpj', 'cnes', 'adminName', 'email', 'planCode'], planCode: selectedPlan.code }), req.ip || '');
     })();
     const clinic = { id: clinicId, name: String(clinicName).trim(), unit: String(unit || 'Unidade principal').trim() };
@@ -254,9 +264,58 @@ app.post('/api/auth/register-clinic', registrationRateLimit, (req, res) => {
   } catch (error) { res.status(409).json({ error: error.message.includes('UNIQUE') ? 'Este e-mail já está cadastrado nesta clínica.' : error.message }); }
 });
 
+app.post('/api/commercial/contact', commercialContactRateLimit, (req, res) => {
+  const { contactName, clinicName, email, phone = '', clinicSize = '', planCode = 'professional' } = req.body || {};
+  if (String(contactName || '').trim().length < 2 || String(clinicName || '').trim().length < 2 || !/^\S+@\S+\.\S+$/.test(String(email || ''))) return res.status(400).json({ error: 'Informe seu nome, a clínica e um e-mail válido.' });
+  let plan;
+  try { plan = validPlan(planCode); } catch (error) { return res.status(400).json({ error: error.message }); }
+  db.prepare('INSERT INTO commercial_leads (contact_name, clinic_name, email, phone, clinic_size, plan_code) VALUES (?, ?, ?, ?, ?, ?)').run(String(contactName).trim().slice(0, 120), String(clinicName).trim().slice(0, 160), String(email).trim().toLowerCase().slice(0, 180), String(phone).trim().slice(0, 30), String(clinicSize).trim().slice(0, 40), plan.code);
+  res.status(201).json({ message: 'Contato recebido. Retornaremos pelos dados informados.' });
+});
+
+app.get('/api/public/platform-info', (req, res) => {
+  const row = db.prepare(`SELECT trade_name AS tradeName, legal_name AS legalName, cnpj, address,
+    support_email AS supportEmail, privacy_email AS privacyEmail, support_whatsapp AS supportWhatsapp FROM platform_settings WHERE id = 1`).get();
+  res.setHeader('Cache-Control', 'public, max-age=300');
+  res.json({ ...row, legalVersions });
+});
+
+app.post('/api/auth/forgot-password', passwordResetRateLimit, async (req, res) => {
+  const generic = { message: 'Se o e-mail estiver cadastrado, você receberá as instruções de recuperação.' };
+  const users = db.prepare('SELECT id, email, name FROM users WHERE lower(email) = lower(?) AND active = 1').all(String(req.body?.email || '').trim());
+  if (users.length !== 1) return res.status(202).json(generic);
+  const user = users[0];
+  const reset = createPasswordReset();
+  db.prepare("UPDATE password_reset_tokens SET used_at = CURRENT_TIMESTAMP WHERE user_id = ? AND used_at IS NULL").run(user.id);
+  db.prepare('INSERT INTO password_reset_tokens (user_id, token_hash, expires_at, requested_ip) VALUES (?, ?, ?, ?)').run(user.id, reset.tokenHash, reset.expiresAt, req.ip || null);
+  const resetUrl = `${req.protocol}://${req.get('host')}/recuperar?token=${encodeURIComponent(reset.token)}`;
+  if (process.env.PASSWORD_RESET_WEBHOOK_URL) {
+    try { await fetch(process.env.PASSWORD_RESET_WEBHOOK_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', ...(process.env.PASSWORD_RESET_WEBHOOK_SECRET ? { Authorization: `Bearer ${process.env.PASSWORD_RESET_WEBHOOK_SECRET}` } : {}) }, body: JSON.stringify({ type: 'password_reset', recipient: user.email, name: user.name, resetUrl, expiresInMinutes: 30 }) }); }
+    catch (error) { console.error('Falha ao entregar recuperação de senha:', error.message); }
+  }
+  res.status(202).json({ ...generic, ...(runtimeConfig.production ? {} : { resetUrl }) });
+});
+
+app.post('/api/auth/reset-password', passwordResetRateLimit, (req, res) => {
+  const passwordError = validateNewPassword(req.body?.newPassword);
+  if (passwordError) return res.status(400).json({ error: passwordError });
+  const record = db.prepare(`SELECT password_reset_tokens.id, password_reset_tokens.user_id AS userId,
+    password_reset_tokens.expires_at AS expiresAt, password_reset_tokens.used_at AS usedAt
+    FROM password_reset_tokens JOIN users ON users.id = password_reset_tokens.user_id
+    WHERE password_reset_tokens.token_hash = ? AND users.active = 1`).get(hashResetToken(req.body?.token));
+  if (!resetTokenIsValid(record)) return res.status(400).json({ error: 'O link de recuperação é inválido ou expirou.' });
+  db.transaction(() => {
+    db.prepare('UPDATE users SET password_hash = ?, token_version = token_version + 1, failed_login_attempts = 0, locked_until = ? WHERE id = ?').run(bcrypt.hashSync(String(req.body.newPassword), 10), '', record.userId);
+    db.prepare('UPDATE password_reset_tokens SET used_at = CURRENT_TIMESTAMP WHERE id = ?').run(record.id);
+  })();
+  res.json({ message: 'Senha atualizada. Entre novamente com a nova senha.' });
+});
+
 app.post('/api/auth/login', loginRateLimit, (req, res) => {
-  const { clinicId, email, password } = req.body;
-  const user = db.prepare('SELECT * FROM users WHERE clinic_id = ? AND lower(email) = lower(?)').get(clinicId, email);
+  const { email, password } = req.body;
+  const matchingUsers = db.prepare('SELECT * FROM users WHERE lower(email) = lower(?)').all(String(email || '').trim());
+  const user = matchingUsers.length === 1 ? matchingUsers[0] : null;
+  const clinicId = user?.clinic_id || '';
   if (user && accountIsLocked(user.locked_until)) {
     recordLoginEvent(clinicId, user.id, email, 'blocked', req.ip);
     return res.status(429).json({ error: 'Conta temporariamente bloqueada por tentativas incorretas. Tente novamente mais tarde ou fale com o administrador.' });
@@ -290,6 +349,20 @@ app.post('/api/auth/change-password', auth, (req, res) => {
   const token = jwt.sign({ userId: user.id, clinicId: user.clinic_id, role: user.role, tokenVersion }, jwtSecret, { expiresIn: '8h' });
   req.auditDetails = { sessionsRevoked: true };
   res.json({ token });
+});
+
+app.get('/api/legal-status', auth, requireRole('admin'), (req, res) => {
+  const latest = db.prepare(`SELECT terms_version AS termsVersion, privacy_version AS privacyVersion, accepted_at AS acceptedAt
+    FROM legal_acceptances WHERE clinic_id = ? AND user_id = ? ORDER BY id DESC LIMIT 1`).get(req.session.clinicId, req.session.userId);
+  const required = !latest || latest.termsVersion !== legalVersions.terms || latest.privacyVersion !== legalVersions.privacy;
+  res.json({ required, current: legalVersions, latest: latest || null });
+});
+
+app.post('/api/legal-acceptance', auth, requireRole('admin'), (req, res) => {
+  if (req.body?.accepted !== true) return res.status(400).json({ error: 'Confirme a leitura e o aceite dos documentos atuais.' });
+  db.prepare('INSERT INTO legal_acceptances (clinic_id, user_id, terms_version, privacy_version, ip_address) VALUES (?, ?, ?, ?, ?)').run(req.session.clinicId, req.session.userId, legalVersions.terms, legalVersions.privacy, req.ip || null);
+  req.auditDetails = { termsVersion: legalVersions.terms, privacyVersion: legalVersions.privacy };
+  res.status(201).json({ required: false, current: legalVersions });
 });
 
 app.get('/api/settings', auth, (req, res) => {
@@ -375,7 +448,7 @@ app.post('/api/platform/auth/change-password', platformAuth, (req, res) => {
 });
 
 app.get('/api/platform/overview', platformAuth, (req, res) => {
-  const clinics = db.prepare(`SELECT clinics.id, clinics.name, clinics.unit, COALESCE(clinic_settings.cnpj, '') AS cnpj,
+  const clinics = db.prepare(`SELECT clinics.id, clinics.name, clinics.unit, COALESCE(clinic_settings.cnpj, '') AS cnpj, COALESCE(clinic_settings.phone, '') AS phone,
     (SELECT email FROM users WHERE users.clinic_id = clinics.id AND users.role = 'admin' AND users.active = 1 ORDER BY users.id LIMIT 1) AS adminEmail,
     clinic_subscriptions.plan_code AS planCode,
     clinic_subscriptions.status, clinic_subscriptions.trial_end AS trialEnd, clinic_subscriptions.current_period_end AS currentPeriodEnd,
@@ -385,12 +458,47 @@ app.get('/api/platform/overview', platformAuth, (req, res) => {
     FROM clinics JOIN clinic_subscriptions ON clinic_subscriptions.clinic_id = clinics.id
     LEFT JOIN clinic_settings ON clinic_settings.clinic_id = clinics.id ORDER BY clinics.name`).all();
   const items = clinics.map(clinic => ({ ...clinic, effectiveStatus: subscriptionState(clinic), plan: subscriptionPlans[clinic.planCode] }));
+  const leads = db.prepare(`SELECT id, contact_name AS contactName, clinic_name AS clinicName, email, phone,
+    clinic_size AS clinicSize, plan_code AS planCode, status, created_at AS createdAt
+    FROM commercial_leads ORDER BY id DESC LIMIT 100`).all();
+  const leadCounts = db.prepare("SELECT COUNT(*) AS total, SUM(status = 'new') AS newCount, SUM(status = 'contacted') AS contactedCount, SUM(status = 'converted') AS convertedCount FROM commercial_leads").get();
+  const leadTotals = { total: leadCounts.total, new: leadCounts.newCount || 0, contacted: leadCounts.contactedCount || 0, converted: leadCounts.convertedCount || 0 };
   res.json({ generatedAt: new Date().toISOString(), totals: {
     clinics: items.length,
     trials: items.filter(item => item.effectiveStatus === 'trialing').length,
     active: items.filter(item => item.effectiveStatus === 'active').length,
     attention: items.filter(item => ['past_due', 'trial_expired', 'canceled'].includes(item.effectiveStatus)).length
-  }, commercial: commercialMetrics(items, subscriptionPlans), clinics: items });
+  }, commercial: { ...commercialMetrics(items, subscriptionPlans), leadTotals }, leads, clinics: items });
+});
+
+app.get('/api/platform/settings', platformAuth, (req, res) => {
+  res.json(db.prepare(`SELECT trade_name AS tradeName, legal_name AS legalName, cnpj, address,
+    support_email AS supportEmail, privacy_email AS privacyEmail, support_whatsapp AS supportWhatsapp FROM platform_settings WHERE id = 1`).get());
+});
+
+app.get('/api/platform/readiness', platformAuth, (req, res) => {
+  const legalSettings = db.prepare(`SELECT legal_name AS legalName, cnpj, support_email AS supportEmail, privacy_email AS privacyEmail FROM platform_settings WHERE id = 1`).get();
+  res.json(launchReadiness({ production: runtimeConfig.production, billingConfigured: billingConfig.enabled, passwordResetConfigured: Boolean(process.env.PASSWORD_RESET_WEBHOOK_URL), demoEnabled: runtimeConfig.demoEnabled, dataDirectoryConfigured: Boolean(String(process.env.DATA_DIR || '').trim()), legalSettings }));
+});
+
+app.put('/api/platform/settings', platformAuth, (req, res) => {
+  const { tradeName, legalName, cnpj = '', address = '', supportEmail, privacyEmail, supportWhatsapp = '' } = req.body || {};
+  if (String(tradeName || '').trim().length < 2 || String(legalName || '').trim().length < 2 || !/^\S+@\S+\.\S+$/.test(String(supportEmail || '')) || !/^\S+@\S+\.\S+$/.test(String(privacyEmail || ''))) return res.status(400).json({ error: 'Informe nome, razão social e e-mails válidos de suporte e privacidade.' });
+  const whatsapp = String(supportWhatsapp).replace(/\D/g, '');
+  if (whatsapp && !/^\d{10,15}$/.test(whatsapp)) return res.status(400).json({ error: 'Informe o WhatsApp com DDI e DDD, usando entre 10 e 15 dígitos.' });
+  db.prepare(`UPDATE platform_settings SET trade_name = ?, legal_name = ?, cnpj = ?, address = ?, support_email = ?, privacy_email = ?, support_whatsapp = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1`).run(String(tradeName).trim(), String(legalName).trim(), String(cnpj).trim(), String(address).trim(), String(supportEmail).trim().toLowerCase(), String(privacyEmail).trim().toLowerCase(), whatsapp);
+  recordPlatformAudit(req, 'update_platform_settings', null, { fields: ['tradeName', 'legalName', 'cnpj', 'address', 'supportEmail', 'privacyEmail', 'supportWhatsapp'] });
+  res.json({ message: 'Dados institucionais atualizados.' });
+});
+
+app.patch('/api/platform/leads/:id', platformAuth, (req, res) => {
+  const status = String(req.body?.status || '');
+  if (!['new', 'contacted', 'converted', 'discarded'].includes(status)) return res.status(400).json({ error: 'Situação comercial inválida.' });
+  const current = db.prepare('SELECT id, status FROM commercial_leads WHERE id = ?').get(req.params.id);
+  if (!current) return res.status(404).json({ error: 'Contato comercial não encontrado.' });
+  db.prepare('UPDATE commercial_leads SET status = ? WHERE id = ?').run(status, current.id);
+  recordPlatformAudit(req, 'update_lead', null, { leadId: current.id, from: current.status, to: status });
+  res.json({ id: current.id, status });
 });
 
 app.get('/api/platform/clinics.csv', platformAuth, (req, res) => {
@@ -443,6 +551,16 @@ app.get('/api/platform/audit', platformAuth, (req, res) => {
   res.json(logs.map(log => ({ ...log, details: JSON.parse(log.detailsJson || '{}'), detailsJson: undefined })));
 });
 
+app.get('/api/platform/legal-acceptances', platformAuth, (req, res) => {
+  const rows = db.prepare(`SELECT legal_acceptances.id, clinics.name AS clinicName, users.name AS userName, users.email,
+    legal_acceptances.terms_version AS termsVersion, legal_acceptances.privacy_version AS privacyVersion,
+    legal_acceptances.accepted_at AS acceptedAt
+    FROM legal_acceptances JOIN clinics ON clinics.id = legal_acceptances.clinic_id
+    JOIN users ON users.id = legal_acceptances.user_id ORDER BY legal_acceptances.id DESC LIMIT 200`).all();
+  res.setHeader('Cache-Control', 'no-store');
+  res.json(rows);
+});
+
 // Depois do período de tolerância os dados continuam disponíveis para consulta
 // e exportação, mas novas alterações ficam bloqueadas até a regularização.
 app.use('/api', (req, res, next) => {
@@ -486,6 +604,7 @@ app.post('/api/users', auth, requireRole('admin'), (req, res) => {
   const { name, email, password, role } = req.body;
   const allowedRoles = ['admin', 'faturamento', 'recepcao', 'medico'];
   if (!String(name || '').trim() || !/^\S+@\S+\.\S+$/.test(String(email || '')) || String(password || '').length < 12 || !allowedRoles.includes(role)) return res.status(400).json({ error: 'Informe nome, e-mail válido, perfil e uma senha de pelo menos 12 caracteres.' });
+  if (db.prepare('SELECT 1 FROM users WHERE lower(email) = lower(?)').get(String(email).trim())) return res.status(409).json({ error: 'Este e-mail já possui acesso ao TISSFlow.' });
   const capacity = clinicPlanCapacity(req.session.clinicId, 'users');
   if (!capacity.available) return res.status(409).json({ error: `O plano ${capacity.planName} permite até ${capacity.limit} usuários ativos. Arquive um usuário ou altere o plano.` });
   const id = `USR-${req.session.clinicId}-${Date.now()}`;
@@ -501,6 +620,7 @@ app.put('/api/users/:id', auth, requireRole('admin'), (req, res) => {
   const { name, email, password, role, active = true } = req.body;
   const allowedRoles = ['admin', 'faturamento', 'recepcao', 'medico'];
   if (!String(name || '').trim() || !/^\S+@\S+\.\S+$/.test(String(email || '')) || !allowedRoles.includes(role) || (password && String(password).length < 12)) return res.status(400).json({ error: 'Revise nome, e-mail, perfil e a nova senha (mínimo de 12 caracteres).' });
+  if (db.prepare('SELECT 1 FROM users WHERE lower(email) = lower(?) AND id <> ?').get(String(email).trim(), current.id)) return res.status(409).json({ error: 'Este e-mail já possui acesso ao TISSFlow.' });
   if (current.id === req.session.userId && !active) return res.status(409).json({ error: 'Você não pode desativar o próprio acesso.' });
   if (current.id === req.session.userId && password) return res.status(409).json({ error: 'Altere sua própria senha na seção Segurança da conta.' });
   if (!current.active && active) {
@@ -584,6 +704,10 @@ function buildClinicBackup(clinicId) {
     const storagePath = path.join(documentUploadRoot, clinicId, path.basename(document.storage_name));
     return { ...document, content_base64: fs.existsSync(storagePath) ? fs.readFileSync(storagePath).toString('base64') : null };
   });
+  const deliveryPackages = byClinic('billing_delivery_packages').map(item => {
+    const storagePath = path.join(documentUploadRoot, clinicId, path.basename(item.storage_name));
+    return { ...item, content_base64: fs.existsSync(storagePath) ? fs.readFileSync(storagePath).toString('base64') : null };
+  });
   const batchGuides = db.prepare(`SELECT billing_batch_guides.* FROM billing_batch_guides JOIN billing_batches ON billing_batches.id = billing_batch_guides.batch_id WHERE billing_batches.clinic_id = ?`).all(clinicId);
   const batchStatusHistory = byClinic('billing_batch_status_history');
   const batchReturnItems = byClinic('billing_batch_return_items');
@@ -592,7 +716,7 @@ function buildClinicBackup(clinicId) {
     clinicSettings: db.prepare('SELECT * FROM clinic_settings WHERE clinic_id = ?').get(clinicId) || null,
     users, patients: byClinic('patients'), guides: byClinic('guides'), insurers: byClinic('insurers'), invoices: byClinic('invoices'),
     glosas: byClinic('glosas'), authorizations: byClinic('authorizations'), billingBatches: byClinic('billing_batches'),
-    billingBatchGuides: batchGuides, billingBatchDocuments: batchDocuments, billingBatchStatusHistory: batchStatusHistory, billingBatchReturnItems: batchReturnItems, feedbacks: byClinic('feedbacks'), patientDocuments: documents,
+    billingBatchGuides: batchGuides, billingBatchDocuments: batchDocuments, billingBatchStatusHistory: batchStatusHistory, billingBatchReturnItems: batchReturnItems, billingDeliveryPackages: deliveryPackages, billingBatchFollowups: byClinic('billing_batch_followups'), feedbacks: byClinic('feedbacks'), patientDocuments: documents,
     patientConsents: byClinic('patient_consents'), privacyRequests, appointments: byClinic('appointments'), auditLogs: byClinic('audit_logs')
   } });
 }
@@ -631,6 +755,10 @@ app.get('/api/backup', auth, requireRole('admin'), (req, res) => {
     const storagePath = path.join(documentUploadRoot, clinicId, path.basename(document.storage_name));
     return { ...document, content_base64: fs.existsSync(storagePath) ? fs.readFileSync(storagePath).toString('base64') : null };
   });
+  const deliveryPackages = byClinic('billing_delivery_packages').map(item => {
+    const storagePath = path.join(documentUploadRoot, clinicId, path.basename(item.storage_name));
+    return { ...item, content_base64: fs.existsSync(storagePath) ? fs.readFileSync(storagePath).toString('base64') : null };
+  });
   const batchGuides = db.prepare(`SELECT billing_batch_guides.* FROM billing_batch_guides JOIN billing_batches ON billing_batches.id = billing_batch_guides.batch_id WHERE billing_batches.clinic_id = ?`).all(clinicId);
   const batchStatusHistory = byClinic('billing_batch_status_history');
   const batchReturnItems = byClinic('billing_batch_return_items');
@@ -641,7 +769,7 @@ app.get('/api/backup', auth, requireRole('admin'), (req, res) => {
       clinicSettings: db.prepare('SELECT * FROM clinic_settings WHERE clinic_id = ?').get(clinicId) || null,
       users, patients: byClinic('patients'), guides: byClinic('guides'), insurers: byClinic('insurers'),
       invoices: byClinic('invoices'), glosas: byClinic('glosas'), authorizations: byClinic('authorizations'),
-      billingBatches: byClinic('billing_batches'), billingBatchGuides: batchGuides, billingBatchDocuments: batchDocuments, billingBatchStatusHistory: batchStatusHistory, billingBatchReturnItems: batchReturnItems, feedbacks: byClinic('feedbacks'),
+      billingBatches: byClinic('billing_batches'), billingBatchGuides: batchGuides, billingBatchDocuments: batchDocuments, billingBatchStatusHistory: batchStatusHistory, billingBatchReturnItems: batchReturnItems, billingDeliveryPackages: deliveryPackages, billingBatchFollowups: byClinic('billing_batch_followups'), feedbacks: byClinic('feedbacks'),
       patientDocuments: documents, patientConsents: byClinic('patient_consents'), privacyRequests, appointments: byClinic('appointments'), auditLogs: byClinic('audit_logs')
     }
   });
@@ -689,7 +817,7 @@ app.post('/api/backup/encrypted/restore', auth, requireRole('admin'), (req, res)
     const restored = restoreBackupDatabase(db, backup, req.session.clinicId, req.session.userId);
     const clinicDirectory = path.join(documentUploadRoot, req.session.clinicId);
     fs.mkdirSync(clinicDirectory, { recursive: true });
-    [...(backup.data.patientDocuments || []), ...(backup.data.billingBatchDocuments || [])].forEach(document => {
+    [...(backup.data.patientDocuments || []), ...(backup.data.billingBatchDocuments || []), ...(backup.data.billingDeliveryPackages || [])].forEach(document => {
       if (document.content_base64 && document.storage_name) fs.writeFileSync(path.join(clinicDirectory, path.basename(document.storage_name)), Buffer.from(document.content_base64, 'base64'));
     });
     req.auditDetails = { encryptedBackupRestore: 'completed', recoveryFile: recoveryName, restored };
@@ -717,7 +845,7 @@ app.post('/api/backup/restore', auth, requireRole('admin'), (req, res) => {
     const restored = restoreBackupDatabase(db, backup, req.session.clinicId, req.session.userId);
     const clinicDirectory = path.join(documentUploadRoot, req.session.clinicId);
     fs.mkdirSync(clinicDirectory, { recursive: true });
-    [...(backup.data.patientDocuments || []), ...(backup.data.billingBatchDocuments || [])].forEach(document => {
+    [...(backup.data.patientDocuments || []), ...(backup.data.billingBatchDocuments || []), ...(backup.data.billingDeliveryPackages || [])].forEach(document => {
       if (document.content_base64 && document.storage_name) fs.writeFileSync(path.join(clinicDirectory, path.basename(document.storage_name)), Buffer.from(document.content_base64, 'base64'));
     });
     req.auditDetails = { backupRestore: 'completed', recoveryFile: recoveryName, restored };
@@ -1011,7 +1139,7 @@ app.delete('/api/invoices/:id', auth, requireRole('admin', 'faturamento'), (req,
 });
 
 app.get('/api/insurers', auth, (req, res) => {
-  const insurers = db.prepare('SELECT id, name, ans_code AS ansCode, contact_email AS contactEmail, contact_phone AS contactPhone, provider_code AS providerCode, delivery_format AS deliveryFormat, accepted_procedures AS acceptedProcedures, procedure_rules AS procedureRules FROM insurers WHERE clinic_id = ? ORDER BY name').all(req.session.clinicId);
+  const insurers = db.prepare('SELECT id, name, ans_code AS ansCode, contact_email AS contactEmail, contact_phone AS contactPhone, provider_code AS providerCode, delivery_format AS deliveryFormat, return_alert_days AS returnAlertDays, return_critical_days AS returnCriticalDays, accepted_procedures AS acceptedProcedures, procedure_rules AS procedureRules FROM insurers WHERE clinic_id = ? ORDER BY name').all(req.session.clinicId);
   res.json(insurers.map(insurer => ({ ...insurer, acceptedProcedures: JSON.parse(insurer.acceptedProcedures || '[]'), procedureRules: JSON.parse(insurer.procedureRules || '[]') })));
 });
 
@@ -1274,16 +1402,18 @@ function unknownProcedureCodes(rules) {
 }
 
 app.post('/api/insurers', auth, requireRole('admin'), (req, res) => {
-  const { id, name, ansCode, contactEmail, contactPhone, providerCode, deliveryFormat = 'both', acceptedProcedures = [], procedureRules = [] } = req.body;
+  const { id, name, ansCode, contactEmail, contactPhone, providerCode, deliveryFormat = 'both', returnAlertDays = 7, returnCriticalDays = 15, acceptedProcedures = [], procedureRules = [] } = req.body;
   if (!id || !name) return res.status(400).json({ error: 'Nome e identificador são obrigatórios.' });
   if (providerCode && String(providerCode).length > 14) return res.status(400).json({ error: 'O código do prestador pode ter no máximo 14 caracteres.' });
   if (!['pdf', 'xml', 'both'].includes(deliveryFormat)) return res.status(400).json({ error: 'Forma de envio inválida.' });
+  const alertDays = Number(returnAlertDays), criticalDays = Number(returnCriticalDays);
+  if (!Number.isInteger(alertDays) || alertDays < 1 || alertDays > 90 || !Number.isInteger(criticalDays) || criticalDays <= alertDays || criticalDays > 180) return res.status(400).json({ error: 'Defina o primeiro alerta entre 1 e 90 dias e a urgência em um prazo posterior, de até 180 dias.' });
   try {
     const rules = normalizeProcedureRules(procedureRules);
     if (rules.some(rule => rule.validFrom && rule.validTo && rule.validFrom > rule.validTo)) return res.status(400).json({ error: 'A data final da vigência não pode ser anterior à data inicial.' });
     const unknownCodes = unknownProcedureCodes(rules);
     if (unknownCodes.length) return res.status(400).json({ error: `Código TUSS não encontrado na versão oficial: ${unknownCodes.join(', ')}.` });
-    db.prepare('INSERT INTO insurers (id, clinic_id, name, ans_code, contact_email, contact_phone, provider_code, delivery_format, accepted_procedures, procedure_rules) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, req.session.clinicId, name, ansCode || null, contactEmail || null, contactPhone || null, providerCode || null, deliveryFormat, JSON.stringify(rules.length ? [...new Set(rules.map(rule => rule.code))] : acceptedProcedures), JSON.stringify(rules));
+    db.prepare('INSERT INTO insurers (id, clinic_id, name, ans_code, contact_email, contact_phone, provider_code, delivery_format, return_alert_days, return_critical_days, accepted_procedures, procedure_rules) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, req.session.clinicId, name, ansCode || null, contactEmail || null, contactPhone || null, providerCode || null, deliveryFormat, alertDays, criticalDays, JSON.stringify(rules.length ? [...new Set(rules.map(rule => rule.code))] : acceptedProcedures), JSON.stringify(rules));
     res.status(201).json({ id });
   } catch (error) {
     res.status(409).json({ error: error.message });
@@ -1291,17 +1421,19 @@ app.post('/api/insurers', auth, requireRole('admin'), (req, res) => {
 });
 
 app.put('/api/insurers/:id', auth, requireRole('admin'), (req, res) => {
-  const { name, ansCode, contactEmail, contactPhone, providerCode, deliveryFormat = 'both', acceptedProcedures = [], procedureRules = [] } = req.body;
+  const { name, ansCode, contactEmail, contactPhone, providerCode, deliveryFormat = 'both', returnAlertDays = 7, returnCriticalDays = 15, acceptedProcedures = [], procedureRules = [] } = req.body;
   if (!name) return res.status(400).json({ error: 'Nome é obrigatório.' });
   if (providerCode && String(providerCode).length > 14) return res.status(400).json({ error: 'O código do prestador pode ter no máximo 14 caracteres.' });
   if (!['pdf', 'xml', 'both'].includes(deliveryFormat)) return res.status(400).json({ error: 'Forma de envio inválida.' });
+  const alertDays = Number(returnAlertDays), criticalDays = Number(returnCriticalDays);
+  if (!Number.isInteger(alertDays) || alertDays < 1 || alertDays > 90 || !Number.isInteger(criticalDays) || criticalDays <= alertDays || criticalDays > 180) return res.status(400).json({ error: 'Defina o primeiro alerta entre 1 e 90 dias e a urgência em um prazo posterior, de até 180 dias.' });
   try {
     const rules = normalizeProcedureRules(procedureRules);
     if (rules.some(rule => rule.validFrom && rule.validTo && rule.validFrom > rule.validTo)) return res.status(400).json({ error: 'A data final da vigência não pode ser anterior à data inicial.' });
     const unknownCodes = unknownProcedureCodes(rules);
     if (unknownCodes.length) return res.status(400).json({ error: `Código TUSS não encontrado na versão oficial: ${unknownCodes.join(', ')}.` });
     const codes = rules.length ? [...new Set(rules.map(rule => rule.code))] : acceptedProcedures;
-    const result = db.prepare('UPDATE insurers SET name = ?, ans_code = ?, contact_email = ?, contact_phone = ?, provider_code = ?, delivery_format = ?, accepted_procedures = ?, procedure_rules = ? WHERE id = ? AND clinic_id = ?').run(name, ansCode || null, contactEmail || null, contactPhone || null, providerCode || null, deliveryFormat, JSON.stringify(codes), JSON.stringify(rules), req.params.id, req.session.clinicId);
+    const result = db.prepare('UPDATE insurers SET name = ?, ans_code = ?, contact_email = ?, contact_phone = ?, provider_code = ?, delivery_format = ?, return_alert_days = ?, return_critical_days = ?, accepted_procedures = ?, procedure_rules = ? WHERE id = ? AND clinic_id = ?').run(name, ansCode || null, contactEmail || null, contactPhone || null, providerCode || null, deliveryFormat, alertDays, criticalDays, JSON.stringify(codes), JSON.stringify(rules), req.params.id, req.session.clinicId);
     if (!result.changes) return res.status(404).json({ error: 'Convênio não encontrado.' });
     res.json({ id: req.params.id });
   } catch (error) {
@@ -1386,6 +1518,16 @@ function batchDetails(batch) {
       billing_batch_return_items.glosa_code AS glosaCode, billing_batch_return_items.created_at AS createdAt,
       billing_batch_return_items.document_id AS documentId
     FROM billing_batch_return_items WHERE batch_id = ? AND clinic_id = ? ORDER BY created_at DESC`).all(batch.id, batch.clinicId);
+  const deliveryPackages = db.prepare(`SELECT billing_delivery_packages.id, billing_delivery_packages.sha256,
+    billing_delivery_packages.size_bytes AS sizeBytes, billing_delivery_packages.created_at AS createdAt, users.name AS createdBy
+    FROM billing_delivery_packages JOIN users ON users.id = billing_delivery_packages.created_by
+    WHERE billing_delivery_packages.batch_id = ? AND billing_delivery_packages.clinic_id = ? ORDER BY billing_delivery_packages.created_at DESC`).all(batch.id, batch.clinicId);
+  const followups = db.prepare(`SELECT billing_batch_followups.id, billing_batch_followups.contact_date AS contactDate,
+    billing_batch_followups.channel, billing_batch_followups.outcome, billing_batch_followups.notes,
+    billing_batch_followups.next_followup_date AS nextFollowupDate, billing_batch_followups.created_at AS createdAt,
+    users.name AS createdBy FROM billing_batch_followups JOIN users ON users.id = billing_batch_followups.created_by
+    WHERE billing_batch_followups.batch_id = ? AND billing_batch_followups.clinic_id = ?
+    ORDER BY billing_batch_followups.contact_date DESC, billing_batch_followups.created_at DESC`).all(batch.id, batch.clinicId);
   const missingSignedPdfs = requiresPdf ? guides.filter(guide => !signedPdfRequirementMet(guide)).length : 0;
   const xmlPending = requiresXml && (!batch.xmlGenerated || !batch.xmlValid);
   const totalValueCents = guides.reduce((sum, guide) => sum + Number(guide.valueCents || 0), 0);
@@ -1403,6 +1545,8 @@ function batchDetails(batch) {
     documents,
     statusHistory,
     returnItems,
+    deliveryPackages,
+    followups,
     guides: guides.map(guide => ({ ...guide, signedPdfReceived: Boolean(guide.signedDocumentId) }))
   };
 }
@@ -1411,6 +1555,10 @@ app.get('/api/batches', auth, requireRole('admin', 'faturamento'), (req, res) =>
   const batches = db.prepare(`SELECT billing_batches.id, billing_batches.insurer_id AS insurerId, insurers.name AS insurer,
       billing_batches.competence, billing_batches.delivery_format AS deliveryFormat, billing_batches.status,
       billing_batches.protocol, billing_batches.sent_at AS sentAt, billing_batches.xml_generated AS xmlGenerated,
+      billing_batches.sent_package_id AS sentPackageId,
+      (SELECT users.name FROM users WHERE users.id = billing_batches.sent_by) AS sentBy,
+      insurers.return_alert_days AS returnAlertDays, insurers.return_critical_days AS returnCriticalDays,
+      insurers.contact_email AS insurerContactEmail, insurers.contact_phone AS insurerContactPhone,
       billing_batches.xml_valid AS xmlValid, billing_batches.xml_validation_errors AS xmlValidationErrors,
       billing_batches.tiss_version AS tissVersion,
       billing_batches.expected_payment_date AS expectedPaymentDate, billing_batches.received_cents AS receivedCents,
@@ -1579,6 +1727,16 @@ function escapeXml(value) {
   return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 }
 
+async function buildBatchXml(batch, guides) {
+  const guideXml = guides.map(guide => `<ans:guia><ans:numeroGuiaPrestador>${escapeXml(guide.id)}</ans:numeroGuiaPrestador><ans:beneficiario>${escapeXml(guide.patient)}</ans:beneficiario><ans:numeroCarteira>${escapeXml(guide.card_number)}</ans:numeroCarteira><ans:codigoTUSS>${escapeXml(guide.service_code)}</ans:codigoTUSS><ans:quantidade>${escapeXml(guide.quantity)}</ans:quantidade><ans:valorTotal>${(Number(guide.value_cents || 0) / 100).toFixed(2)}</ans:valorTotal></ans:guia>`).join('');
+  const now = new Date(), date = now.toISOString().slice(0, 10), time = now.toTimeString().slice(0, 8);
+  const values = ['ENVIO_LOTE_GUIAS', batch.id.replace(/\D/g, '').slice(-12) || '1', date, time, batch.ansCode || '', TISS_VERSION, batch.id, ...guides.flatMap(guide => [guide.id, guide.patient, guide.card_number, guide.service_code, guide.quantity, (Number(guide.value_cents || 0) / 100).toFixed(2)])];
+  const hash = calculateTissHash(values);
+  const xml = `<?xml version="1.0" encoding="ISO-8859-1"?><ans:mensagemTISS xmlns:ans="http://www.ans.gov.br/padroes/tiss/schemas"><ans:cabecalho><ans:identificacaoTransacao><ans:tipoTransacao>ENVIO_LOTE_GUIAS</ans:tipoTransacao><ans:sequencialTransacao>${escapeXml(values[1])}</ans:sequencialTransacao><ans:dataRegistroTransacao>${date}</ans:dataRegistroTransacao><ans:horaRegistroTransacao>${time}</ans:horaRegistroTransacao></ans:identificacaoTransacao><ans:origem><ans:identificacaoPrestador><ans:CNPJ>${escapeXml(guides[0]?.provider_cnpj || '')}</ans:CNPJ></ans:identificacaoPrestador></ans:origem><ans:destino><ans:registroANS>${escapeXml(batch.ansCode)}</ans:registroANS></ans:destino><ans:Padrao>${TISS_VERSION}</ans:Padrao></ans:cabecalho><ans:prestadorParaOperadora><ans:loteGuias><ans:numeroLote>${escapeXml(batch.id)}</ans:numeroLote><ans:guiasTISS>${guideXml}</ans:guiasTISS></ans:loteGuias></ans:prestadorParaOperadora><ans:epilogo><ans:hash>${hash}</ans:hash></ans:epilogo></ans:mensagemTISS>`;
+  const validation = await validateTissXml(xml);
+  return { xml, validation };
+}
+
 app.get('/api/batches/:id/xml', auth, requireRole('admin', 'faturamento'), async (req, res) => {
   const batch = db.prepare(`SELECT billing_batches.*, insurers.name AS insurer, insurers.ans_code AS ansCode
     FROM billing_batches JOIN insurers ON insurers.id = billing_batches.insurer_id
@@ -1602,13 +1760,97 @@ app.get('/api/batches/:id/xml', auth, requireRole('admin', 'faturamento'), async
   res.send(Buffer.from(xml, 'latin1'));
 });
 
+app.get('/api/batches/:id/package', auth, requireRole('admin', 'faturamento'), async (req, res) => {
+  const batch = db.prepare(`SELECT billing_batches.id, billing_batches.clinic_id AS clinicId, billing_batches.competence,
+    billing_batches.delivery_format AS deliveryFormat, insurers.name AS insurer, insurers.ans_code AS ansCode
+    FROM billing_batches JOIN insurers ON insurers.id = billing_batches.insurer_id
+    WHERE billing_batches.id = ? AND billing_batches.clinic_id = ?`).get(req.params.id, req.session.clinicId);
+  if (!batch) return res.status(404).json({ error: 'Lote não encontrado.' });
+  const guides = db.prepare(`SELECT guides.*, billing_batch_guides.signed_document_id AS signedDocumentId,
+    patient_documents.storage_name AS storageName FROM billing_batch_guides JOIN guides ON guides.id = billing_batch_guides.guide_id
+    LEFT JOIN patient_documents ON patient_documents.id = billing_batch_guides.signed_document_id
+    WHERE billing_batch_guides.batch_id = ? ORDER BY guides.id`).all(batch.id);
+  if (!guides.length) return res.status(409).json({ error: 'O lote não possui guias.' });
+  const requiresPdf = ['pdf', 'both'].includes(batch.deliveryFormat), requiresXml = ['xml', 'both'].includes(batch.deliveryFormat);
+  if (requiresPdf && guides.some(guide => !guide.signedDocumentId || !guide.storageName)) return res.status(409).json({ error: 'Anexe todos os PDFs assinados antes de gerar o pacote.' });
+  const zip = new JSZip();
+  if (requiresXml) {
+    const generated = await buildBatchXml(batch, guides);
+    db.prepare('UPDATE billing_batches SET xml_generated = 1, xml_valid = ?, xml_validation_errors = ?, tiss_version = ? WHERE id = ? AND clinic_id = ?').run(generated.validation.valid ? 1 : 0, JSON.stringify(generated.validation.errors), TISS_VERSION, batch.id, req.session.clinicId);
+    if (!generated.validation.valid) return res.status(409).json({ error: 'O XML não passou na validação TISS. Corrija as pendências antes de gerar o pacote.', errors: generated.validation.errors });
+    zip.file(`lote-${batch.id}.xml`, Buffer.from(generated.xml, 'latin1'));
+  }
+  if (requiresPdf) for (const guide of guides) {
+    const filePath = path.join(documentUploadRoot, req.session.clinicId, guide.storageName);
+    if (!fs.existsSync(filePath)) return res.status(409).json({ error: `O arquivo assinado da guia ${guide.id} não foi encontrado.` });
+    zip.file(`pdf-assinados/guia-${guide.id}.pdf`, fs.readFileSync(filePath));
+  }
+  zip.file('manifesto.json', JSON.stringify({ batchId: batch.id, insurer: batch.insurer, competence: batch.competence, deliveryFormat: batch.deliveryFormat, tissVersion: TISS_VERSION, guideIds: guides.map(guide => guide.id), generatedAt: new Date().toISOString() }, null, 2));
+  const archive = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+  const packageId = `PKG-${crypto.randomUUID()}`, storageName = `${Date.now()}-${packageId}.zip`;
+  const clinicDirectory = path.join(documentUploadRoot, req.session.clinicId); fs.mkdirSync(clinicDirectory, { recursive: true });
+  const storagePath = path.join(clinicDirectory, storageName), sha256 = crypto.createHash('sha256').update(archive).digest('hex');
+  try { fs.writeFileSync(storagePath, archive, { flag: 'wx' }); db.prepare('INSERT INTO billing_delivery_packages (id, clinic_id, batch_id, storage_name, sha256, size_bytes, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)').run(packageId, req.session.clinicId, batch.id, storageName, sha256, archive.length, req.session.userId); }
+  catch (error) { if (fs.existsSync(storagePath)) fs.unlinkSync(storagePath); return res.status(409).json({ error: 'Não foi possível preservar a cópia do pacote.' }); }
+  recordAudit(req, 'download', 'batches', batch.id, { document: 'delivery-package', deliveryFormat: batch.deliveryFormat, guideCount: guides.length });
+  res.setHeader('X-Package-ID', packageId); res.setHeader('X-Content-SHA256', sha256);
+  res.setHeader('Content-Type', 'application/zip'); res.setHeader('Content-Length', archive.length);
+  res.setHeader('Content-Disposition', `attachment; filename="pacote-${batch.id}.zip"`); res.send(archive);
+});
+
+app.get('/api/batches/:id/packages/:packageId', auth, requireRole('admin', 'faturamento'), (req, res) => {
+  const item = db.prepare('SELECT * FROM billing_delivery_packages WHERE id = ? AND batch_id = ? AND clinic_id = ?').get(req.params.packageId, req.params.id, req.session.clinicId);
+  if (!item) return res.status(404).json({ error: 'Versão do pacote não encontrada.' });
+  const storagePath = path.join(documentUploadRoot, req.session.clinicId, item.storage_name);
+  if (!fs.existsSync(storagePath)) return res.status(404).json({ error: 'Cópia do pacote não encontrada no armazenamento.' });
+  const archive = fs.readFileSync(storagePath), currentHash = crypto.createHash('sha256').update(archive).digest('hex');
+  if (currentHash !== item.sha256 || archive.length !== Number(item.size_bytes)) {
+    recordAudit(req, 'integrity_failure', 'batches', req.params.id, { document: 'archived-delivery-package', packageId: item.id });
+    return res.status(409).json({ error: 'A cópia preservada falhou na verificação de integridade e não será entregue.' });
+  }
+  recordAudit(req, 'download', 'batches', req.params.id, { document: 'archived-delivery-package', packageId: item.id, sha256: item.sha256 });
+  res.setHeader('Content-Type', 'application/zip'); res.setHeader('Content-Length', item.size_bytes); res.setHeader('X-Content-SHA256', item.sha256);
+  res.setHeader('Content-Disposition', `attachment; filename="pacote-${req.params.id}-${item.id}.zip"`); res.send(archive);
+});
+
+app.post('/api/batches/:id/followups', auth, requireRole('admin', 'faturamento'), (req, res) => {
+  const batch = db.prepare('SELECT id FROM billing_batches WHERE id = ? AND clinic_id = ?').get(req.params.id, req.session.clinicId);
+  if (!batch) return res.status(404).json({ error: 'Lote não encontrado.' });
+  const { contactDate, channel, outcome, notes = '', nextFollowupDate = '' } = req.body || {};
+  const channels = ['portal', 'email', 'phone', 'whatsapp', 'other'];
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(contactDate || '') || !channels.includes(channel) || !String(outcome || '').trim()) return res.status(400).json({ error: 'Informe data, canal e resultado do contato.' });
+  if (nextFollowupDate && (!/^\d{4}-\d{2}-\d{2}$/.test(nextFollowupDate) || nextFollowupDate < contactDate)) return res.status(400).json({ error: 'A próxima cobrança não pode ser anterior ao contato realizado.' });
+  const id = `BC-${crypto.randomUUID()}`;
+  db.prepare('INSERT INTO billing_batch_followups (id, clinic_id, batch_id, contact_date, channel, outcome, notes, next_followup_date, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, req.session.clinicId, batch.id, contactDate, channel, String(outcome).trim().slice(0, 180), String(notes).trim().slice(0, 1000) || null, nextFollowupDate || null, req.session.userId);
+  req.auditDetails = { batchFollowup: true, batchId: batch.id, channel, nextFollowupDate: nextFollowupDate || null };
+  res.status(201).json({ id });
+});
+
+app.get('/api/batches/:id/audit-pdf', auth, requireRole('admin', 'faturamento'), (req, res) => {
+  const raw = db.prepare(`SELECT billing_batches.id, billing_batches.clinic_id AS clinicId, billing_batches.competence,
+    billing_batches.delivery_format AS deliveryFormat, billing_batches.status, billing_batches.protocol,
+    billing_batches.sent_at AS sentAt, billing_batches.sent_package_id AS sentPackageId,
+    billing_batches.xml_generated AS xmlGenerated, billing_batches.xml_valid AS xmlValid,
+    billing_batches.xml_validation_errors AS xmlValidationErrors, billing_batches.tiss_version AS tissVersion,
+    billing_batches.received_cents AS receivedCents, insurers.name AS insurer,
+    (SELECT users.name FROM users WHERE users.id = billing_batches.sent_by) AS sentBy
+    FROM billing_batches JOIN insurers ON insurers.id = billing_batches.insurer_id WHERE billing_batches.id = ? AND billing_batches.clinic_id = ?`).get(req.params.id, req.session.clinicId);
+  if (!raw) return res.status(404).json({ error: 'Lote não encontrado.' });
+  const clinic = db.prepare('SELECT * FROM clinics WHERE id = ?').get(req.session.clinicId);
+  const settings = db.prepare('SELECT * FROM clinic_settings WHERE clinic_id = ?').get(req.session.clinicId);
+  recordAudit(req, 'download', 'batches', raw.id, { document: 'batch-audit-pdf' });
+  generateBatchAuditPDF(mapClinicSettings(settings, clinic), batchDetails({ ...raw, xmlGenerated: Boolean(raw.xmlGenerated) }), res);
+});
+
 app.patch('/api/batches/:id', auth, requireRole('admin', 'faturamento'), (req, res) => {
   const allowedStatuses = ['draft', 'ready', 'sent', 'processing', 'approved', 'error'];
   const status = allowedStatuses.includes(req.body.status) ? req.body.status : 'draft';
   const protocol = String(req.body.protocol || '').trim();
+  const requestedPackageId = String(req.body.packageId || '').trim();
   const batch = db.prepare(`SELECT id, status, delivery_format AS deliveryFormat, xml_generated AS xmlGenerated, xml_valid AS xmlValid,
     xml_validation_errors AS xmlValidationErrors, expected_payment_date AS expectedPaymentDate, received_cents AS receivedCents,
-    received_at AS receivedAt, reconciliation_notes AS reconciliationNotes FROM billing_batches WHERE id = ? AND clinic_id = ?`).get(req.params.id, req.session.clinicId);
+    received_at AS receivedAt, reconciliation_notes AS reconciliationNotes, sent_package_id AS sentPackageId
+    FROM billing_batches WHERE id = ? AND clinic_id = ?`).get(req.params.id, req.session.clinicId);
   if (!batch) return res.status(404).json({ error: 'Lote não encontrado.' });
   let receivedCents;
   try { receivedCents = Object.hasOwn(req.body, 'receivedAmount') ? parseReceivedAmount(req.body.receivedAmount) : Number(batch.receivedCents || 0); } catch (error) { return res.status(400).json({ error: error.message }); }
@@ -1620,14 +1862,22 @@ app.patch('/api/batches/:id', auth, requireRole('admin', 'faturamento'), (req, r
   const readiness = batchDetails({ ...batch, clinicId: req.session.clinicId, xmlGenerated: Boolean(batch.xmlGenerated) });
   if (['ready', 'sent', 'processing', 'approved'].includes(status) && !readiness.readyForSending) return res.status(409).json({ error: 'Conclua os PDFs assinados e/ou gere o XML antes de liberar o lote.' });
   if (['sent', 'processing', 'approved'].includes(status) && !protocol) return res.status(400).json({ error: 'Informe o protocolo da operadora para esse status.' });
+  let sentPackageId = batch.sentPackageId;
+  if (status === 'sent' && currentStatus !== 'sent') {
+    const selectedPackage = db.prepare('SELECT id FROM billing_delivery_packages WHERE id = ? AND batch_id = ? AND clinic_id = ?').get(requestedPackageId, batch.id, req.session.clinicId);
+    if (!selectedPackage) return res.status(400).json({ error: 'Selecione o pacote preservado que foi enviado à operadora.' });
+    sentPackageId = selectedPackage.id;
+  }
   db.transaction(() => {
     db.prepare(`UPDATE billing_batches SET status = ?, protocol = ?, expected_payment_date = ?, received_cents = ?, received_at = ?, reconciliation_notes = ?,
-      sent_at = CASE WHEN ? = 'sent' AND sent_at IS NULL THEN CURRENT_TIMESTAMP ELSE sent_at END WHERE id = ? AND clinic_id = ?`)
-      .run(status, protocol || null, expectedPaymentDate, receivedCents, receivedAt, reconciliationNotes || null, status, batch.id, req.session.clinicId);
+      sent_at = CASE WHEN ? = 'sent' AND sent_at IS NULL THEN CURRENT_TIMESTAMP ELSE sent_at END,
+      sent_package_id = CASE WHEN ? = 'sent' THEN ? ELSE sent_package_id END,
+      sent_by = CASE WHEN ? = 'sent' AND sent_by IS NULL THEN ? ELSE sent_by END WHERE id = ? AND clinic_id = ?`)
+      .run(status, protocol || null, expectedPaymentDate, receivedCents, receivedAt, reconciliationNotes || null, status, status, sentPackageId, status, req.session.userId, batch.id, req.session.clinicId);
     if (status !== currentStatus) db.prepare(`INSERT INTO billing_batch_status_history (id, clinic_id, batch_id, previous_status, new_status, changed_by)
       VALUES (?, ?, ?, ?, ?, ?)`).run(crypto.randomUUID(), req.session.clinicId, batch.id, currentStatus, status, req.session.userId);
   })();
-  res.json({ id: batch.id, status, protocol, receivedCents, reconciliationStatus: reconciliationStatus(readiness.totalValueCents, receivedCents) });
+  res.json({ id: batch.id, status, protocol, sentPackageId, receivedCents, reconciliationStatus: reconciliationStatus(readiness.totalValueCents, receivedCents) });
 });
 
 app.delete('/api/batches/:id', auth, requireRole('admin', 'faturamento'), (req, res) => {

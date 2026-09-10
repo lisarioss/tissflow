@@ -92,6 +92,7 @@ let users = clinicUsers[activeClinicId] || [];
 let loginEvents = [];
 let selectedReportCompetence = '';
 let subscription = null;
+let legalStatus = null;
 function saveFeedbacks() { localStorage.setItem(clinicStorageKey('feedbacks'), JSON.stringify(feedbacks)); }
 let clinicSettings = JSON.parse(localStorage.getItem(clinicStorageKey('settings')) || 'null') || { tradeName: clinicProfiles[activeClinicId]?.name || '', legalName: '', cnpj: '', cnes: '', phone: '', instagram: '', address: '', city: '', state: '', postalCode: '', logoDataUrl: '', letterheadDataUrl: '', letterheadHeaderMm: 35, letterheadFooterMm: 25, owners: [], professionals: [], consentTitle: '', consentText: '', privacyContact: '', consentRenewalMonths: 0 };
 const views = { overview: 'Visão geral', alerts: 'Notificações', agenda: 'Agenda', guides: 'Guias TISS', authorizations: 'Controle de autorizações', batches: 'Lotes de faturamento', financeiro: 'Financeiro', users: 'Usuários', patients: 'Pacientes', convenios: 'Convênios', feedback: 'Feedbacks', reports: 'Relatórios', audit: 'Trilha de auditoria', settings: 'Configurações' };
@@ -151,16 +152,6 @@ async function apiRequest(path, options = {}) {
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) { const error = new Error(payload.error || 'Não foi possível comunicar com a API.'); error.details = payload.errors || []; throw error; }
   return payload;
-}
-async function loadClinicOptions() {
-  const select = document.querySelector('#login-clinic');
-  if (!select) return;
-  try {
-    const clinics = await apiRequest('/clinics');
-    const selected = select.value;
-    select.replaceChildren(...clinics.map(clinic => { const option = document.createElement('option'); option.value = clinic.id; option.textContent = clinic.name; return option; }));
-    if (clinics.some(clinic => clinic.id === selected)) select.value = selected;
-  } catch { /* mantém as clínicas demonstrativas quando a API estiver indisponível */ }
 }
 function applyLandingRegistrationIntent() {
   if (!['essential', 'professional', 'network'].includes(selectedLandingPlan)) return;
@@ -324,7 +315,7 @@ document.addEventListener('submit', event => {
 function normalizeGuide(guide) { const sessions = guide.sessions || []; const competence = guide.competence || sessions[0]?.date?.slice(0, 7) || ''; return { ...guide, competence, sessions, status: guide.status, label: { sent: 'Enviada', review: 'Em análise', approved: 'Aprovada', error: 'Com glosa', recurso: 'Recurso enviado' }[guide.status] || guide.status, value: formatMoney((guide.valueCents || 0) / 100), unitValue: Number(guide.unitValueCents || 0) / 100, date: guide.createdAt ? new Date(guide.createdAt).toLocaleDateString('pt-BR') : '' }; }
 function normalizeInvoice(invoice) { return { ...invoice, amount: Number(invoice.amountCents || 0) / 100 }; }
 function normalizeGlosa(glosa) { return { ...glosa, amount: Number(glosa.amountCents || 0) / 100 }; }
-function normalizeBatch(batch) { return { ...batch, totalValue: Number(batch.totalValueCents || 0) / 100, guides: batch.guides || [], documents: batch.documents || [], statusHistory: batch.statusHistory || [], returnItems: batch.returnItems || [] }; }
+function normalizeBatch(batch) { return { ...batch, totalValue: Number(batch.totalValueCents || 0) / 100, guides: batch.guides || [], documents: batch.documents || [], statusHistory: batch.statusHistory || [], returnItems: batch.returnItems || [], deliveryPackages: batch.deliveryPackages || [], followups: batch.followups || [] }; }
 async function loadApiData() {
   if (!activeSession?.token) return;
   try {
@@ -360,6 +351,7 @@ async function loadApiData() {
     patientConsents = apiPatientConsents;
     privacyRequests = apiPrivacyRequests;
     subscription = apiSubscription;
+    if (activeUser?.role === 'admin') legalStatus = await apiRequest('/legal-status');
     if (userCan('agenda')) appointments = apiAppointments;
     if (userCan('audit')) auditLogs = await apiRequest('/audit-logs');
     if (userCan('users')) { users = await apiRequest('/users'); loginEvents = await apiRequest('/security/login-events'); }
@@ -414,6 +406,7 @@ function overview() {
   const onboardingComplete = onboarding.filter(item => item.complete).length;
   const onboardingPercent = onboarding.length ? Math.round(onboardingComplete / onboarding.length * 100) : 100;
   return `<div class="page-heading"><div><p class="eyebrow">${new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</p><h1>Olá, ${activeUser?.name?.split(' ')[0] || 'equipe'}.</h1><p class="heading-copy">Dados reais da clínica · competência ${competenceLabel}.</p></div>${canCreateGuide ? '<button class="primary-button" data-action="new-guide">＋ Nova guia</button>' : ''}</div>
+  ${legalStatus?.required ? `<div class="legal-update-banner"><span><strong>Documentos jurídicos atualizados</strong><small>Leia as versões atuais antes de continuar usando a plataforma.</small></span><span><a href="/termos" target="_blank">Termos</a><a href="/privacidade" target="_blank">Privacidade</a><button data-action="accept-current-legal">Li e aceito</button></span></div>` : ''}
   ${onboarding.length ? `<div class="panel onboarding-panel"><div class="panel-header"><div><h2 class="panel-title">Implantação da clínica</h2><p class="panel-subtitle">Complete os dados necessários para gerar documentos e operar com segurança.</p></div><span class="status ${onboardingPercent === 100 ? 'approved' : 'review'}">${onboardingPercent}% concluído</span></div><div class="onboarding-progress"><span style="width:${onboardingPercent}%"></span></div><div class="onboarding-list">${onboarding.map(item => `<button data-view="${item.view}" class="onboarding-item ${item.complete ? 'complete' : ''}"><b>${item.complete ? '✓' : '○'}</b><span>${item.label}</span><small>${item.complete ? 'Concluído' : 'Configurar →'}</small></button>`).join('')}</div></div>` : ''}
   <div class="stats-grid"><article class="stat-card"><div class="stat-top"><span>Guias na competência</span><span class="stat-icon">▣</span></div><div class="stat-value">${monthGuides.length}</div><div class="stat-note"><b>${monthGuides.filter(guide => guide.status === 'approved').length} aprovada(s)</b> no período</div></article><article class="stat-card"><div class="stat-top"><span>Taxa de aprovação</span><span class="stat-icon">◉</span></div><div class="stat-value">${approvalRate}%</div><div class="stat-note">Baseada em <b>${concluded.length} guia(s) concluída(s)</b></div></article><article class="stat-card"><div class="stat-top"><span>Em processamento</span><span class="stat-icon">◷</span></div><div class="stat-value">${reviewing}</div><div class="stat-note warn"><b>${notificationItems().length} alerta(s)</b> precisam de atenção</div></article><article class="stat-card"><div class="stat-top"><span>${userCan('financeiro') ? 'Valor faturado' : 'Atendimentos hoje'}</span><span class="stat-icon">◇</span></div><div class="stat-value">${userCan('financeiro') ? formatMoney(billed) : todayAppointments}</div><div class="stat-note">${userCan('financeiro') ? `<b>${formatMoney(received)}</b> recebido(s)` : '<b>Agenda atualizada</b> para hoje'}</div></article></div>
   <div class="content-grid"><div class="panel"><div class="panel-header"><div><h2 class="panel-title">Guias recentes</h2><p class="panel-subtitle">Últimos registros da clínica</p></div>${userCan('guides') ? '<button class="text-button" data-view="guides">Ver todas →</button>' : ''}</div><table><thead><tr><th>Guia</th><th>Paciente</th><th>Convênio</th><th>Status</th><th>Valor</th></tr></thead><tbody>${recent.length ? recent.map(g => `<tr><td><strong>${g.id}</strong><small>${g.date || ''}</small></td><td>${g.patient}<small>${g.procedure}</small></td><td>${g.insurer}</td><td>${statusTag(g)}</td><td><strong>${userCan('financeiro') ? g.value : '—'}</strong></td></tr>`).join('') : '<tr><td colspan="5">Nenhuma guia cadastrada.</td></tr>'}</tbody></table></div><div class="panel activity"><div class="panel-header"><div><h2 class="panel-title">Atenção operacional</h2><p class="panel-subtitle">Pendências atuais</p></div></div>${activities.length ? activities.map(item => `<div class="activity-item"><span class="activity-dot ${item.warn ? 'orange' : ''}"></span><div><strong>${item.title}</strong><p>${item.text}</p></div></div>`).join('') : '<div class="patient-folder-empty">Nenhuma pendência operacional.</div>'}</div></div>
@@ -502,6 +495,17 @@ function batchDocumentsHtml(batch) {
   const rows = (batch.documents || []).map(document => `<div class="batch-document-row"><span><strong>${batchDocumentLabels[document.category] || document.category}${processedDocuments.has(document.id) ? ' · Processado' : ''}</strong><small>${document.originalName} · ${(Number(document.sizeBytes || 0) / 1024).toFixed(1)} KB</small></span><div><button type="button" class="text-button" data-action="download-batch-document" data-batch-id="${batch.id}" data-document-id="${document.id}">Baixar</button>${processedDocuments.has(document.id) ? '' : `<button type="button" class="finance-delete" data-action="delete-batch-document" data-batch-id="${batch.id}" data-document-id="${document.id}">Excluir</button>`}</div></div>`).join('');
   return `<div class="batch-documents"><div class="batch-documents-heading"><strong>Documentos de retorno</strong><small>Comprovantes recebidos após o envio à operadora.</small></div>${rows || '<small>Nenhum documento de retorno anexado.</small>'}<form class="batch-document-form" data-batch-id="${batch.id}"><select name="category" required><option value="protocol_receipt">Comprovante de protocolo</option><option value="operator_return">Retorno da operadora</option><option value="payment_statement">Demonstrativo de pagamento</option><option value="other">Outro documento</option></select><input name="file" type="file" accept="application/pdf,application/xml,text/xml,.xml" required /><button class="secondary-button" type="submit">Anexar documento</button></form></div>`;
 }
+function batchDeliveryPackagesHtml(batch) {
+  const packages = batch.deliveryPackages || [];
+  if (!packages.length) return '';
+  const rows = packages.map(item => {
+    const timestamp = item.createdAt ? new Date(`${item.createdAt.replace(' ', 'T')}Z`).toLocaleString('pt-BR') : 'Data não informada';
+    const size = (Number(item.sizeBytes || 0) / 1024).toFixed(1);
+    const official = item.id === batch.sentPackageId;
+    return `<div class="batch-document-row"><span><strong>Pacote ${item.id}${official ? ' · Remessa oficial' : ''}</strong><small>${timestamp} · ${size} KB · por ${item.createdBy || 'Usuário não identificado'}</small><small title="${item.sha256}">SHA-256: ${String(item.sha256 || '').slice(0, 16)}…</small></span><button type="button" class="text-button" data-action="download-archived-package" data-batch-id="${batch.id}" data-package-id="${item.id}">Baixar cópia preservada</button></div>`;
+  }).join('');
+  return `<div class="batch-documents"><div class="batch-documents-heading"><strong>Pacotes enviados preservados</strong><small>Cada versão é imutável e pode ser recuperada para auditoria.</small></div>${rows}</div>`;
+}
 function batchReturnResultsHtml(batch) {
   const items = batch.returnItems || [];
   if (!items.length) return '';
@@ -517,6 +521,13 @@ function batchTimelineHtml(batch) {
     const label = batchStatusLabels[entry.newStatus] || entry.newStatus;
     return `<div class="batch-timeline-entry"><span class="batch-timeline-dot"></span><div><strong>${label}</strong><small>${timestamp} · ${entry.changedBy || 'Usuário não identificado'}</small></div></div>`;
   }).join('')}</div></div>`;
+}
+const followupChannelLabels = { portal: 'Portal', email: 'E-mail', phone: 'Telefone', whatsapp: 'WhatsApp', other: 'Outro' };
+function batchFollowupsHtml(batch) {
+  if (!['sent', 'processing', 'approved', 'error'].includes(batch.status)) return '';
+  const rows = (batch.followups || []).map(item => `<div class="batch-document-row"><span><strong>${new Date(`${item.contactDate}T12:00:00`).toLocaleDateString('pt-BR')} · ${followupChannelLabels[item.channel] || item.channel}</strong><small>${item.outcome} · por ${item.createdBy}</small>${item.notes ? `<small>${item.notes}</small>` : ''}${item.nextFollowupDate ? `<small>Próximo acompanhamento: ${new Date(`${item.nextFollowupDate}T12:00:00`).toLocaleDateString('pt-BR')}</small>` : ''}</span></div>`).join('');
+  const shortcuts = `${batch.insurerContactEmail ? `<button type="button" class="text-button" data-action="contact-insurer-email" data-batch-id="${batch.id}">Enviar e-mail</button>` : ''}${batch.insurerContactPhone ? `<button type="button" class="text-button" data-action="contact-insurer-whatsapp" data-batch-id="${batch.id}">Abrir WhatsApp</button>` : ''}`;
+  return `<div class="batch-documents"><div class="batch-documents-heading"><span><strong>Contatos com a operadora</strong><small>Histórico de cobranças e acompanhamentos deste lote.</small></span><span>${shortcuts}</span></div>${rows || '<small>Nenhum contato registrado.</small>'}<form class="batch-followup-form" data-batch-id="${batch.id}"><input type="date" name="contactDate" value="${new Date().toISOString().slice(0, 10)}" required /><select name="channel" required><option value="portal">Portal</option><option value="email">E-mail</option><option value="phone">Telefone</option><option value="whatsapp">WhatsApp</option><option value="other">Outro</option></select><input name="outcome" maxlength="180" placeholder="Resultado do contato" required /><input type="date" name="nextFollowupDate" title="Próximo acompanhamento" /><input name="notes" maxlength="1000" placeholder="Observação opcional" /><button class="secondary-button" type="submit">Registrar contato</button></form></div>`;
 }
 const reconciliationLabels = { pending: 'Pagamento pendente', partial: 'Pagamento parcial', paid: 'Lote quitado' };
 function batchReconciliationHtml(batch) {
@@ -550,10 +561,12 @@ function batchCard(batch) {
     ${batch.xmlGenerated && !batch.xmlValid ? '<div class="batch-validation-alert"><strong>O schema oficial encontrou incompatibilidades.</strong><span>Revise os cadastros obrigatórios da clínica, do profissional e da guia antes do envio.</span></div>' : ''}
     <div class="batch-guide-list">${batch.guides.map(guide => `<div class="batch-guide-row"><div><strong>${guide.id} · ${guide.patient}</strong><small>${guide.procedure} · ${formatMoney(Number(guide.valueCents || 0) / 100)}</small></div>${requiresPdf ? `<div class="signed-pdf-control">${guide.signedDocumentId ? `<span class="signed-pdf-name"><strong>PDF armazenado</strong><small>${guide.signedDocumentName || 'Guia assinada'}</small></span><button type="button" class="text-button" data-action="download-signed-pdf" data-batch-id="${batch.id}" data-guide-id="${guide.id}">Baixar</button><label class="text-button signed-pdf-upload">Substituir<input type="file" accept="application/pdf" data-action="upload-signed-pdf" data-batch-id="${batch.id}" data-guide-id="${guide.id}" hidden /></label>` : `<label class="secondary-button signed-pdf-upload">Anexar PDF assinado<input type="file" accept="application/pdf" data-action="upload-signed-pdf" data-batch-id="${batch.id}" data-guide-id="${guide.id}" hidden /></label>`}</div>` : ''}</div>`).join('')}</div>
     ${batchDocumentsHtml(batch)}
+    ${batchDeliveryPackagesHtml(batch)}
     ${batchReturnResultsHtml(batch)}
     ${batchTimelineHtml(batch)}
+    ${batchFollowupsHtml(batch)}
     ${batchReconciliationHtml(batch)}
-    <div class="batch-actions">${requiresXml ? `<button type="button" class="secondary-button" data-action="download-batch-xml" data-batch-id="${batch.id}">Gerar XML</button>` : ''}<select data-batch-status>${batchStatusOptions(batch.status)}</select><input data-batch-protocol placeholder="Protocolo da operadora" value="${batch.protocol || ''}" /><button type="button" class="primary-button" data-action="update-batch" data-batch-id="${batch.id}">Salvar acompanhamento</button>${batch.status === 'draft' ? `<button type="button" class="finance-delete" data-action="delete-batch" data-batch-id="${batch.id}">Excluir lote</button>` : ''}</div>
+    <div class="batch-actions">${requiresXml ? `<button type="button" class="secondary-button" data-action="download-batch-xml" data-batch-id="${batch.id}">Gerar XML</button>` : ''}<button type="button" class="secondary-button" data-action="download-batch-package" data-batch-id="${batch.id}">Baixar pacote ZIP</button><button type="button" class="secondary-button" data-action="download-batch-audit" data-batch-id="${batch.id}">Dossiê PDF</button><select data-batch-status>${batchStatusOptions(batch.status)}</select><select data-batch-package ${batch.sentPackageId ? 'disabled' : ''}><option value="">Pacote enviado à operadora</option>${(batch.deliveryPackages || []).map(item => `<option value="${item.id}" ${item.id === batch.sentPackageId ? 'selected' : ''}>${item.id} · ${new Date(`${item.createdAt.replace(' ', 'T')}Z`).toLocaleString('pt-BR')}</option>`).join('')}</select><input data-batch-protocol placeholder="Protocolo da operadora" value="${batch.protocol || ''}" /><button type="button" class="primary-button" data-action="update-batch" data-batch-id="${batch.id}">Salvar acompanhamento</button>${batch.status === 'draft' ? `<button type="button" class="finance-delete" data-action="delete-batch" data-batch-id="${batch.id}">Excluir lote</button>` : ''}</div>
   </article>`;
 }
 function batchesView() {
@@ -592,6 +605,7 @@ function notificationItems() {
   if (userCan('patients')) items.push(...planValidityAlertItems(patients, today));
   if (userCan('patients')) items.push(...consentAlertItems(patients, patientConsents, Number(clinicSettings.consentRenewalMonths || 0)));
   if (userCan('batches')) batches.filter(batch => !batch.readyForSending && ['draft', 'ready'].includes(batch.status)).forEach(batch => items.push({ level: 'warning', title: `Lote ${batch.id} com pendências`, detail: `${batch.insurer} · ${batch.missingSignedPdfs || 0} PDF(s) pendente(s)${batch.xmlPending ? ' · XML pendente' : ''}.`, view: 'batches' }));
+  if (userCan('batches')) items.push(...batchFollowupAlertItems(batches, today));
   if (userCan('financeiro')) guides.filter(guide => guide.status === 'error').forEach(guide => items.push({ level: 'critical', title: `Guia ${guide.id} com glosa`, detail: `${guide.patient} · ${guide.insurer}`, view: 'guides' }));
   if (userCan('agenda')) appointments.forEach(item => { const days = daysUntil(item.date); if (days >= 0 && days <= 1 && !['completed', 'cancelled'].includes(item.status)) items.push({ level: 'info', title: days === 0 ? 'Atendimento hoje' : 'Atendimento amanhã', detail: `${item.start} · ${item.patient} · ${item.professional}`, view: 'agenda' }); });
   const priority = { critical: 0, warning: 1, info: 2 };
@@ -805,14 +819,14 @@ document.addEventListener('click', async event => {
 function listing(title, description, icon) { return `<div class="page-heading"><div><p class="eyebrow">Módulo operacional</p><h1>${title}</h1><p class="heading-copy">${description}</p></div><button class="primary-button" data-action="new-guide">＋ Nova guia</button></div><div class="empty-state"><div><div class="empty-icon">${icon}</div><h2>Este módulo está pronto para crescer</h2><p>A estrutura de navegação está funcionando. O próximo passo é conectar este fluxo aos dados reais da clínica.</p><button class="primary-button" data-action="soon">Explorar demonstração</button></div></div>`; }
 function insurerRowsHtml(term) {
   const filtered = filterInsurers(insurers, term);
-  if (!filtered.length) return '<tr><td colspan="6">Nenhum convênio encontrado.</td></tr>';
+  if (!filtered.length) return '<tr><td colspan="7">Nenhum convênio encontrado.</td></tr>';
   const deliveryLabels = { pdf: 'PDF assinado', xml: 'XML', both: 'PDF + XML' };
-  return filtered.map(insurer => `<tr><td><strong>${insurer.name}</strong></td><td>${insurer.ansCode || '—'}</td><td>${insurer.contactEmail || '—'}<br><small>${insurer.contactPhone || ''}</small></td><td><span class="delivery-format ${insurer.deliveryFormat || 'both'}">${deliveryLabels[insurer.deliveryFormat] || deliveryLabels.both}</span></td><td>${(insurer.acceptedProcedures || []).length} procedimento(s)</td><td><button class="text-button" data-action="edit-insurer" data-insurer-id="${insurer.id}">Editar</button> <button class="finance-delete" data-action="delete-insurer" data-insurer-id="${insurer.id}">Excluir</button></td></tr>`).join('');
+  return filtered.map(insurer => `<tr><td><strong>${insurer.name}</strong></td><td>${insurer.ansCode || '—'}</td><td>${insurer.contactEmail || '—'}<br><small>${insurer.contactPhone || ''}</small></td><td><span class="delivery-format ${insurer.deliveryFormat || 'both'}">${deliveryLabels[insurer.deliveryFormat] || deliveryLabels.both}</span></td><td><strong>${insurer.returnAlertDays || 7}º dia</strong><small>Urgente no ${insurer.returnCriticalDays || 15}º dia</small></td><td>${(insurer.acceptedProcedures || []).length} procedimento(s)</td><td><button class="text-button" data-action="edit-insurer" data-insurer-id="${insurer.id}">Editar</button> <button class="finance-delete" data-action="delete-insurer" data-insurer-id="${insurer.id}">Excluir</button></td></tr>`).join('');
 }
 function insurersView() {
   return `<div class="page-heading"><div><p class="eyebrow">Cadastro da clínica</p><h1>Convênios</h1><p class="heading-copy">Operadoras aceitas pela clínica — alimenta os seletores de guia, paciente e lote.</p></div></div>
-  <div class="panel"><div class="panel-header"><div><h2 class="panel-title">Convênios cadastrados</h2><p class="panel-subtitle">${insurers.length} operadoras</p></div></div><div class="search-bar"><input type="search" id="insurer-search" placeholder="Buscar por nome, código ANS ou contato" /></div><table><thead><tr><th>Nome</th><th>Código ANS</th><th>Contato</th><th>Envio exigido</th><th>Procedimentos aceitos</th><th></th></tr></thead><tbody id="insurer-table-body">${insurerRowsHtml('')}</tbody></table></div>
-  <form class="panel patient-form" id="insurer-form"><div class="panel-header"><div><h2 class="panel-title">Cadastrar convênio</h2><p class="panel-subtitle">Defina também os documentos exigidos no fechamento do faturamento.</p></div></div><div class="form-section"><div class="form-grid"><div class="field"><label for="new-insurer-name">Nome *</label><input id="new-insurer-name" name="name" required /></div><div class="field"><label for="new-insurer-ans">Código ANS</label><input id="new-insurer-ans" name="ansCode" placeholder="Ex.: 004701" /></div><div class="field"><label for="new-insurer-provider-code">Código do prestador na operadora</label><input id="new-insurer-provider-code" name="providerCode" maxlength="14" placeholder="Código fornecido pelo convênio" /><small>Pode ser diferente em cada operadora.</small></div><div class="field"><label for="new-insurer-email">E-mail de contato</label><input id="new-insurer-email" name="contactEmail" type="email" placeholder="faturamento@operadora.com.br" /></div><div class="field"><label for="new-insurer-phone">Telefone de contato</label><input id="new-insurer-phone" name="contactPhone" placeholder="(00) 0000-0000" /></div><div class="field"><label for="new-insurer-delivery">Forma de envio exigida *</label><select id="new-insurer-delivery" name="deliveryFormat" required><option value="pdf">PDF assinado</option><option value="xml">XML</option><option value="both" selected>PDF assinado + XML</option></select><small>O lote cobrará automaticamente os arquivos escolhidos.</small></div></div><div class="field"><label for="new-insurer-procedures">Códigos TUSS aceitos (separados por vírgula)</label><input id="new-insurer-procedures" name="acceptedProcedures" placeholder="Ex.: 10101012, 50000470" /></div></div><div class="form-footer"><button type="button" class="secondary-button" data-action="cancel-insurer-edit" hidden>Cancelar edição</button><button class="primary-button" type="submit">Salvar convênio</button></div></form>`;
+  <div class="panel"><div class="panel-header"><div><h2 class="panel-title">Convênios cadastrados</h2><p class="panel-subtitle">${insurers.length} operadoras</p></div></div><div class="search-bar"><input type="search" id="insurer-search" placeholder="Buscar por nome, código ANS ou contato" /></div><table><thead><tr><th>Nome</th><th>Código ANS</th><th>Contato</th><th>Envio exigido</th><th>Prazo de retorno</th><th>Procedimentos aceitos</th><th></th></tr></thead><tbody id="insurer-table-body">${insurerRowsHtml('')}</tbody></table></div>
+  <form class="panel patient-form" id="insurer-form"><div class="panel-header"><div><h2 class="panel-title">Cadastrar convênio</h2><p class="panel-subtitle">Defina também os documentos exigidos no fechamento do faturamento.</p></div></div><div class="form-section"><div class="form-grid"><div class="field"><label for="new-insurer-name">Nome *</label><input id="new-insurer-name" name="name" required /></div><div class="field"><label for="new-insurer-ans">Código ANS</label><input id="new-insurer-ans" name="ansCode" placeholder="Ex.: 004701" /></div><div class="field"><label for="new-insurer-provider-code">Código do prestador na operadora</label><input id="new-insurer-provider-code" name="providerCode" maxlength="14" placeholder="Código fornecido pelo convênio" /><small>Pode ser diferente em cada operadora.</small></div><div class="field"><label for="new-insurer-email">E-mail de contato</label><input id="new-insurer-email" name="contactEmail" type="email" placeholder="faturamento@operadora.com.br" /></div><div class="field"><label for="new-insurer-phone">Telefone de contato</label><input id="new-insurer-phone" name="contactPhone" placeholder="(00) 0000-0000" /></div><div class="field"><label for="new-insurer-delivery">Forma de envio exigida *</label><select id="new-insurer-delivery" name="deliveryFormat" required><option value="pdf">PDF assinado</option><option value="xml">XML</option><option value="both" selected>PDF assinado + XML</option></select><small>O lote cobrará automaticamente os arquivos escolhidos.</small></div><div class="field"><label for="new-insurer-return-alert">Alertar sem retorno após *</label><input id="new-insurer-return-alert" name="returnAlertDays" type="number" min="1" max="90" value="7" required /><small>Dias corridos após o envio.</small></div><div class="field"><label for="new-insurer-return-critical">Considerar urgente após *</label><input id="new-insurer-return-critical" name="returnCriticalDays" type="number" min="2" max="180" value="15" required /><small>Deve ser posterior ao primeiro alerta.</small></div></div><div class="field"><label for="new-insurer-procedures">Códigos TUSS aceitos (separados por vírgula)</label><input id="new-insurer-procedures" name="acceptedProcedures" placeholder="Ex.: 10101012, 50000470" /></div></div><div class="form-footer"><button type="button" class="secondary-button" data-action="cancel-insurer-edit" hidden>Cancelar edição</button><button class="primary-button" type="submit">Salvar convênio</button></div></form>`;
 }
 function editInsurer(insurerId) {
   const insurer = insurers.find(item => item.id === insurerId);
@@ -826,6 +840,8 @@ function editInsurer(insurerId) {
   form.querySelector('#new-insurer-phone').value = insurer.contactPhone || '';
   form.querySelector('#new-insurer-provider-code').value = insurer.providerCode || '';
   form.querySelector('#new-insurer-delivery').value = insurer.deliveryFormat || 'both';
+  form.querySelector('#new-insurer-return-alert').value = insurer.returnAlertDays || 7;
+  form.querySelector('#new-insurer-return-critical').value = insurer.returnCriticalDays || 15;
   form.querySelector('#new-insurer-procedures').value = (insurer.acceptedProcedures || []).join(', ');
   renderContractRules(insurer.procedureRules || []);
   form.querySelector('.panel-title').textContent = 'Editar convênio';
@@ -891,6 +907,12 @@ document.addEventListener('change', event => {
   if (!event.target.matches('#audit-action, #audit-user, #audit-from, #audit-to')) return;
   const body = document.querySelector('#audit-table-body');
   if (body) body.innerHTML = auditRowsHtml();
+});
+
+document.addEventListener('click', async event => {
+  if (!event.target.closest('[data-action="accept-current-legal"]')) return;
+  try { await apiRequest('/legal-acceptance', { method:'POST', body:JSON.stringify({ accepted:true }) }); legalStatus = await apiRequest('/legal-status'); render('overview'); showToast('Aceite das versões atuais registrado.'); }
+  catch (error) { showToast(error.message); }
 });
 function reportsView() {
   const reportGuides = selectedReportCompetence ? guides.filter(guide => guide.competence === selectedReportCompetence) : guides;
@@ -1153,6 +1175,32 @@ async function downloadBatchXml(batchId) {
   } catch (error) { showToast(error.message); }
 }
 
+async function downloadBatchPackage(batchId) {
+  try { const response = await fetch(`${apiBase}/batches/${encodeURIComponent(batchId)}/package`, { headers: apiHeaders() }); if (!response.ok) { const payload = await response.json().catch(() => ({})); throw new Error(payload.error || 'Não foi possível gerar o pacote.'); } const url = URL.createObjectURL(await response.blob()); const link = document.createElement('a'); link.href = url; link.download = `pacote-${batchId}.zip`; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); await refreshBatches(); render('batches'); showToast('Pacote gerado e uma cópia imutável foi preservada.'); } catch (error) { showToast(error.message); }
+}
+
+async function downloadArchivedBatchPackage(batchId, packageId) {
+  try {
+    const response = await fetch(`${apiBase}/batches/${encodeURIComponent(batchId)}/packages/${encodeURIComponent(packageId)}`, { headers: apiHeaders() });
+    if (!response.ok) { const payload = await response.json().catch(() => ({})); throw new Error(payload.error || 'Não foi possível recuperar o pacote preservado.'); }
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement('a');
+    link.href = url; link.download = `pacote-${batchId}-${packageId}.zip`; link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    showToast('Cópia preservada baixada sem alterações.');
+  } catch (error) { showToast(error.message); }
+}
+
+async function downloadBatchAuditPdf(batchId) {
+  try {
+    const response = await fetch(`${apiBase}/batches/${encodeURIComponent(batchId)}/audit-pdf`, { headers: apiHeaders() });
+    if (!response.ok) { const payload = await response.json().catch(() => ({})); throw new Error(payload.error || 'Não foi possível gerar o dossiê.'); }
+    const url = URL.createObjectURL(await response.blob()), link = document.createElement('a');
+    link.href = url; link.download = `dossie-${batchId}.pdf`; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+    showToast('Dossiê de auditoria gerado.');
+  } catch (error) { showToast(error.message); }
+}
+
 function parsePeople(value, isOwner = false) {
   return String(value || '').split(/\r?\n/).map(line => line.trim()).filter(Boolean).map(line => {
     const [name = '', title = '', council = ''] = line.split('|').map(part => part.trim());
@@ -1341,9 +1389,20 @@ document.addEventListener('submit', async event => {
   } catch (error) { showToast(error.message); button.disabled = false; button.textContent = 'Anexar documento'; }
 }, true);
 
+document.addEventListener('submit', async event => {
+  if (!event.target.classList.contains('batch-followup-form')) return;
+  event.preventDefault(); event.stopImmediatePropagation();
+  const form = event.target, data = Object.fromEntries(new FormData(form));
+  const button = form.querySelector('button[type="submit"]'); button.disabled = true;
+  try {
+    await apiRequest(`/batches/${encodeURIComponent(form.dataset.batchId)}/followups`, { method: 'POST', body: JSON.stringify(data) });
+    await refreshBatches(); render('batches'); showToast('Contato com a operadora registrado.');
+  } catch (error) { showToast(error.message); button.disabled = false; }
+}, true);
+
 function showBackupPreview(result) {
   document.querySelector('.backup-preview-overlay')?.remove();
-  const labels = { patients: 'Pacientes', guides: 'Guias', patientDocuments: 'Documentos', billingBatchDocuments: 'Retornos de lote', billingBatchStatusHistory: 'Histórico dos lotes', billingBatchReturnItems: 'Resultados das operadoras', privacyRequests: 'Solicitações de privacidade', feedbacks: 'Feedbacks', authorizations: 'Autorizações', billingBatches: 'Lotes', appointments: 'Atendimentos', insurers: 'Convênios' };
+  const labels = { patients: 'Pacientes', guides: 'Guias', patientDocuments: 'Documentos', billingBatchDocuments: 'Retornos de lote', billingBatchStatusHistory: 'Histórico dos lotes', billingBatchReturnItems: 'Resultados das operadoras', billingDeliveryPackages: 'Pacotes preservados', billingBatchFollowups: 'Contatos com operadoras', privacyRequests: 'Solicitações de privacidade', feedbacks: 'Feedbacks', authorizations: 'Autorizações', billingBatches: 'Lotes', appointments: 'Atendimentos', insurers: 'Convênios' };
   const overlay = document.createElement('div');
   overlay.className = 'backup-preview-overlay';
   const card = document.createElement('section');
@@ -1392,6 +1451,22 @@ document.addEventListener('click', async event => {
   if (signedPdfButton) { await downloadSignedGuidePdf(signedPdfButton.dataset.batchId, signedPdfButton.dataset.guideId); return; }
   const xmlButton = event.target.closest('[data-action="download-batch-xml"]');
   if (xmlButton) { await downloadBatchXml(xmlButton.dataset.batchId); return; }
+  const packageButton = event.target.closest('[data-action="download-batch-package"]');
+  if (packageButton) { await downloadBatchPackage(packageButton.dataset.batchId); return; }
+  const archivedPackageButton = event.target.closest('[data-action="download-archived-package"]');
+  if (archivedPackageButton) { await downloadArchivedBatchPackage(archivedPackageButton.dataset.batchId, archivedPackageButton.dataset.packageId); return; }
+  const auditButton = event.target.closest('[data-action="download-batch-audit"]');
+  if (auditButton) { await downloadBatchAuditPdf(auditButton.dataset.batchId); return; }
+  const insurerEmailButton = event.target.closest('[data-action="contact-insurer-email"]');
+  const insurerWhatsappButton = event.target.closest('[data-action="contact-insurer-whatsapp"]');
+  if (insurerEmailButton || insurerWhatsappButton) {
+    const batch = batches.find(item => item.id === (insurerEmailButton || insurerWhatsappButton).dataset.batchId);
+    if (!batch) return;
+    const message = `Olá, solicitamos uma atualização sobre o lote TISS ${batch.id}, competência ${batch.competence}, protocolo ${batch.protocol || 'a confirmar'}. Aguardamos o retorno da análise. Obrigado.`;
+    if (insurerEmailButton) window.location.href = `mailto:${batch.insurerContactEmail}?subject=${encodeURIComponent(`Acompanhamento do lote TISS ${batch.id}`)}&body=${encodeURIComponent(message)}`;
+    else { const phone = String(batch.insurerContactPhone || '').replace(/\D/g, ''); window.open(`https://wa.me/${phone.startsWith('55') ? phone : `55${phone}`}?text=${encodeURIComponent(message)}`, '_blank', 'noopener'); }
+    return;
+  }
   const deleteButton = event.target.closest('[data-action="delete-batch"]');
   if (deleteButton) {
     const batchId = deleteButton.dataset.batchId;
@@ -1408,13 +1483,14 @@ document.addEventListener('click', async event => {
   const batchId = updateButton.dataset.batchId;
   const status = card.querySelector('[data-batch-status]').value;
   const protocol = card.querySelector('[data-batch-protocol]').value.trim();
+  const packageId = card.querySelector('[data-batch-package]').value;
   const expectedPaymentDate = card.querySelector('[data-batch-expected-payment]').value;
   const receivedAmount = card.querySelector('[data-batch-received-amount]').value;
   const receivedAt = card.querySelector('[data-batch-received-at]').value;
   const reconciliationNotes = card.querySelector('[data-batch-reconciliation-notes]').value.trim();
   try {
     if (activeSession?.token) {
-      await apiRequest(`/batches/${batchId}`, { method: 'PATCH', body: JSON.stringify({ status, protocol, expectedPaymentDate, receivedAmount, receivedAt, reconciliationNotes }) });
+      await apiRequest(`/batches/${batchId}`, { method: 'PATCH', body: JSON.stringify({ status, protocol, packageId, expectedPaymentDate, receivedAmount, receivedAt, reconciliationNotes }) });
       await refreshBatches();
     } else {
       const batch = batches.find(item => item.id === batchId);
@@ -1568,7 +1644,7 @@ document.addEventListener('submit', async event => {
   const insurerId = event.target.dataset.insurerId;
   try {
     if (insurerId) {
-      const payload = { name: data.name, ansCode: data.ansCode, contactEmail: data.contactEmail, contactPhone: data.contactPhone, providerCode: data.providerCode, deliveryFormat: data.deliveryFormat, acceptedProcedures, procedureRules };
+      const payload = { name: data.name, ansCode: data.ansCode, contactEmail: data.contactEmail, contactPhone: data.contactPhone, providerCode: data.providerCode, deliveryFormat: data.deliveryFormat, returnAlertDays: Number(data.returnAlertDays), returnCriticalDays: Number(data.returnCriticalDays), acceptedProcedures, procedureRules };
       if (activeSession?.token) {
         await apiRequest(`/insurers/${insurerId}`, { method: 'PUT', body: JSON.stringify(payload) });
         insurers = await apiRequest('/insurers');
@@ -1578,7 +1654,7 @@ document.addEventListener('submit', async event => {
       }
       showToast('Convênio atualizado.');
     } else {
-      const insurer = { id: nextSequentialId(insurers, 'INS-', 3), name: data.name, ansCode: data.ansCode, contactEmail: data.contactEmail, contactPhone: data.contactPhone, providerCode: data.providerCode, deliveryFormat: data.deliveryFormat, acceptedProcedures, procedureRules };
+      const insurer = { id: nextSequentialId(insurers, 'INS-', 3), name: data.name, ansCode: data.ansCode, contactEmail: data.contactEmail, contactPhone: data.contactPhone, providerCode: data.providerCode, deliveryFormat: data.deliveryFormat, returnAlertDays: Number(data.returnAlertDays), returnCriticalDays: Number(data.returnCriticalDays), acceptedProcedures, procedureRules };
       if (activeSession?.token) {
         await apiRequest('/insurers', { method: 'POST', body: JSON.stringify(insurer) });
         insurers = await apiRequest('/insurers');
@@ -2567,4 +2643,14 @@ document.addEventListener('submit', async event => {
   } catch (error) { showToast(error.message); }
 });
 
-if (activeSession) { document.querySelector('#login-screen').classList.add('hidden'); applySession(); render(); loadApiData(); } else { document.querySelector('.app-shell').classList.add('hidden'); loadClinicOptions(); applyLandingRegistrationIntent(); }
+if (activeSession) { document.querySelector('#login-screen').classList.add('hidden'); applySession(); render(); loadApiData(); } else { document.querySelector('.app-shell').classList.add('hidden'); applyLandingRegistrationIntent(); }
+
+document.addEventListener('click', async event => {
+  if (!event.target.closest('[data-action="contact-support"]')) return;
+  try {
+    const info = await apiRequest('/public/platform-info');
+    if (!info.supportWhatsapp) throw new Error('O WhatsApp de suporte ainda não foi configurado pela plataforma.');
+    const text = `Olá, preciso de ajuda com o TISSFlow. Clínica: ${activeClinic.name}. Usuário: ${activeUser?.name || 'não identificado'}.`;
+    window.location.href = `https://wa.me/${info.supportWhatsapp}?text=${encodeURIComponent(text)}`;
+  } catch (error) { showToast(error.message); }
+});

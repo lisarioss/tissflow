@@ -10,6 +10,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
+    "check:production": "node scripts/checkProduction.js",
     "import:tuss": "node scripts/importTuss.js"
   },
   "dependencies": {
@@ -19,6 +20,7 @@
     "dotenv": "^16.6.1",
     "express": "^4.21.2",
     "jsonwebtoken": "^9.0.2",
+    "jszip": "^3.10.1",
     "pdfmake": "^0.2.20",
     "xmllint-wasm": "^5.3.0"
   },

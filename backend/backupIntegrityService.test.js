@@ -20,10 +20,12 @@ test('validateBackup rejeita alteração e backup de outra clínica', () => {
 });
 
 test('backupSummary conta somente coleções conhecidas do backup', () => {
-  const summary = backupSummary({ data: { patients: [{}, {}], guides: [{}], patientDocuments: [{}], unknown: [{}, {}] } });
+  const summary = backupSummary({ data: { patients: [{}, {}], guides: [{}], patientDocuments: [{}], billingDeliveryPackages: [{}], billingBatchFollowups: [{}, {}], unknown: [{}, {}] } });
   assert.equal(summary.patients, 2);
   assert.equal(summary.guides, 1);
   assert.equal(summary.patientDocuments, 1);
+  assert.equal(summary.billingDeliveryPackages, 1);
+  assert.equal(summary.billingBatchFollowups, 2);
   assert.equal(summary.appointments, 0);
   assert.equal(summary.unknown, undefined);
 });

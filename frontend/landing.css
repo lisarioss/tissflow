@@ -68,5 +68,19 @@ h1 { max-width: 650px; margin: 0; font-size: clamp(2.8rem, 5.5vw, 5.1rem); line-
 .final-cta > a { display: inline-block; margin-top: 15px; background: #79d9be; color: #133d32; font-weight: 800; }
 footer { display: grid; grid-template-columns: 1fr 1fr 1fr; align-items: center; gap: 30px; padding: 40px max(28px, calc((100vw - 1180px) / 2)); border-top: 1px solid #dce7e3; color: #667a73; font-size: .8rem; }
 footer div { display: flex; justify-content: flex-end; gap: 20px; }
+.contact-section { display:grid; grid-template-columns:.85fr 1.15fr; gap:64px; align-items:start; }
+.contact-copy h2 { margin:8px 0 14px; font-size:clamp(30px,4vw,48px); line-height:1.08; }
+.contact-copy p:last-child { color:#62776f; line-height:1.7; }
+#commercial-contact-form { display:grid; gap:14px; padding:26px; border:1px solid #d9e5e1; border-radius:18px; background:#fff; box-shadow:0 18px 45px rgba(25,57,47,.08); }
+#commercial-contact-form > div { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+#commercial-contact-form label { display:grid; gap:6px; color:#40544d; font-size:12px; font-weight:700; }
+#commercial-contact-form input,#commercial-contact-form select { min-height:44px; padding:10px 12px; border:1px solid #d6dfdb; border-radius:8px; background:#fff; color:#173f35; font:inherit; }
+#commercial-contact-form button { min-height:46px; border:0; border-radius:8px; background:#19836a; color:#fff; font-weight:800; cursor:pointer; }
+#commercial-contact-form button:disabled { opacity:.65; cursor:wait; }
+#commercial-contact-message { min-height:18px; color:#62776f; }
+#commercial-contact-message.success { color:#19836a; }
+#commercial-contact-message.error { color:#9c352b; }
+.whatsapp-float{position:fixed;right:22px;bottom:22px;z-index:20;padding:13px 18px;border-radius:999px;background:#1f9d69;color:#fff;text-decoration:none;font-size:13px;font-weight:800;box-shadow:0 10px 30px rgba(20,83,62,.25)}
 @media (max-width: 900px) { .site-header { grid-template-columns: 1fr auto; } nav, .platform-link { display: none; } .hero, .workflow, .security { grid-template-columns: 1fr; } .hero { gap: 40px; } .feature-grid, .pricing-grid { grid-template-columns: 1fr; } .pricing-grid article.featured { padding-block: 32px; } }
-@media (max-width: 600px) { .site-header { padding-inline: 18px; } .clinic-login { padding: 9px 11px; } .hero { padding-top: 50px; } .hero-actions { align-items: stretch; flex-direction: column; } .product-stats { grid-template-columns: 1fr; } .flow-list em { display: none; } .section { padding-block: 75px; } .security-points { grid-template-columns: 1fr; } .final-cta { padding: 45px 24px; } footer { grid-template-columns: 1fr; text-align: center; } footer .brand, footer div { justify-content: center; } }
+@media (max-width: 900px) { .contact-section { grid-template-columns:1fr; gap:28px; } }
+@media (max-width: 600px) { .site-header { padding-inline: 18px; } .clinic-login { padding: 9px 11px; } .hero { padding-top: 50px; } .hero-actions { align-items: stretch; flex-direction: column; } .product-stats { grid-template-columns: 1fr; } .flow-list em { display: none; } .section { padding-block: 75px; } .security-points { grid-template-columns: 1fr; } .final-cta { padding: 45px 24px; } #commercial-contact-form > div { grid-template-columns:1fr; } footer { grid-template-columns: 1fr; text-align: center; } footer .brand, footer div { justify-content: center; } }

@@ -149,10 +149,11 @@ Use `GET /api/health` para verificar se o processo está ativo e `GET /api/ready
 O projeto inclui `Dockerfile`, `compose.prod.yml` e `Caddyfile`. O Caddy atua como proxy reverso e solicita automaticamente o certificado HTTPS do domínio configurado.
 
 1. Copie `.env.production.example` para `.env.production` e substitua o domínio e o segredo.
-2. Aponte o DNS do domínio para o servidor.
-3. Libere as portas 80 e 443 no servidor.
-4. Execute `docker compose --env-file .env.production -f compose.prod.yml up -d --build`.
-5. Confirme `https://seu-dominio/api/health` e `https://seu-dominio/api/ready`.
+2. Antes de publicar, execute `cd backend && npm run check:production -- ../.env.production`. O comando lista todas as variáveis pendentes sem imprimir seus valores secretos.
+3. Aponte o DNS do domínio para o servidor.
+4. Libere as portas 80 e 443 no servidor.
+5. Execute `docker compose --env-file .env.production -f compose.prod.yml up -d --build`.
+6. Confirme `https://seu-dominio/api/health` e `https://seu-dominio/api/ready`.
 
 O volume `app_data` preserva banco, documentos e recuperações entre atualizações. Os volumes do Caddy preservam certificados. Configure no provedor uma cópia externa recorrente do `app_data`; os pontos de recuperação dentro do mesmo volume não substituem um backup externo.
 

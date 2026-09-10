@@ -314,8 +314,8 @@ document.addEventListener('submit', event => {
 }, true);
 function normalizeGuide(guide) { const sessions = guide.sessions || []; const competence = guide.competence || sessions[0]?.date?.slice(0, 7) || ''; return { ...guide, competence, sessions, status: guide.status, label: { sent: 'Enviada', review: 'Em análise', approved: 'Aprovada', error: 'Com glosa', recurso: 'Recurso enviado' }[guide.status] || guide.status, value: formatMoney((guide.valueCents || 0) / 100), unitValue: Number(guide.unitValueCents || 0) / 100, date: guide.createdAt ? new Date(guide.createdAt).toLocaleDateString('pt-BR') : '' }; }
 function normalizeInvoice(invoice) { return { ...invoice, amount: Number(invoice.amountCents || 0) / 100 }; }
-function normalizeGlosa(glosa) { return { ...glosa, amount: Number(glosa.amountCents || 0) / 100 }; }
-function normalizeBatch(batch) { return { ...batch, totalValue: Number(batch.totalValueCents || 0) / 100, guides: batch.guides || [], documents: batch.documents || [], statusHistory: batch.statusHistory || [], returnItems: batch.returnItems || [], deliveryPackages: batch.deliveryPackages || [], followups: batch.followups || [] }; }
+function normalizeGlosa(glosa) { return { ...glosa, amount: Number(glosa.amountCents || 0) / 100, recoveredAmount: glosa.recoveredCents === null || glosa.recoveredCents === undefined ? null : Number(glosa.recoveredCents) / 100 }; }
+function normalizeBatch(batch) { return { ...batch, totalValue: Number(batch.totalValueCents || 0) / 100, guides: batch.guides || [], documents: batch.documents || [], statusHistory: batch.statusHistory || [], returnItems: batch.returnItems || [], deliveryPackages: batch.deliveryPackages || [], followups: batch.followups || [], payments: batch.payments || [] }; }
 async function loadApiData() {
   if (!activeSession?.token) return;
   try {
@@ -453,9 +453,12 @@ function glosaPanel(guide) {
   const guideGlosas = glosas.filter(item => item.guideId === guide.id).sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
   const current = guideGlosas[0];
   let body;
-  if (!current || current.status === 'revertida') {
-    body = `${current ? `<div class="glosa-outcome success">Glosa anterior <strong>revertida</strong> — guia reaprovada pela operadora.</div>` : ''}
+  if (!current) {
+    body = `
     <form class="glosa-form" id="glosa-form" data-guide-id="${guide.id}"><div class="form-grid"><div class="field"><label for="glosa-code">Código da glosa</label><select id="glosa-code" name="code">${glosaCodes.map(item => `<option value="${item.value}">${item.label}</option>`).join('')}</select></div><div class="field"><label for="glosa-amount">Valor glosado *</label><input id="glosa-amount" name="amount" type="number" min="0.01" step="0.01" value="${Number(guide.value?.replace(/[^\d,]/g, '').replace(',', '.')) || 0}" required /></div></div><div class="field"><label for="glosa-reason">Motivo *</label><input id="glosa-reason" name="reason" required placeholder="Descreva o motivo informado pela operadora" /></div><button class="secondary-button" type="submit">Registrar glosa (simular retorno)</button></form>`;
+  } else if (current.status === 'revertida') {
+    const recovery = current.recoveredAmount === null ? `<form class="glosa-recovery-form" data-glosa-id="${current.id}" data-guide-id="${guide.id}"><div class="form-grid"><div class="field"><label>Data do crédito *</label><input type="date" name="recoveredDate" value="${new Date().toISOString().slice(0, 10)}" required /></div><div class="field"><label>Valor recuperado *</label><input type="number" name="amount" min="0.01" max="${current.amount.toFixed(2)}" step="0.01" required /></div><div class="field"><label>Referência bancária</label><input name="reference" maxlength="120" /></div><div class="field"><label>Observação</label><input name="notes" maxlength="500" /></div></div><button class="primary-button" type="submit">Registrar recuperação</button></form>` : `<div class="recurso-sent"><span>Crédito recuperado: <strong>${formatMoney(current.recoveredAmount)}</strong></span><p>${new Date(`${current.recoveredDate}T12:00:00`).toLocaleDateString('pt-BR')} · ${current.recoveryReference || 'Sem referência'} · por ${current.recoveredBy || 'usuário não identificado'}</p>${current.recoveryNotes ? `<small>${current.recoveryNotes}</small>` : ''}<small>${current.recoveredAmount < current.amount ? `Diferença não recuperada: ${formatMoney(current.amount - current.recoveredAmount)}` : 'Valor glosado integralmente recuperado.'}</small></div>`;
+    body = `<div class="glosa-outcome success">Glosa de ${formatMoney(current.amount)} <strong>revertida</strong> — guia reaprovada pela operadora.</div>${recovery}`;
   } else if (current.status === 'aberta') {
     body = `<div class="glosa-outcome error"><strong>${current.code || 'Sem código'}</strong> · ${current.reason} · <span>${formatMoney(current.amount)}</span></div>
     <form class="recurso-form" id="recurso-form" data-glosa-id="${current.id}"><div class="field"><label for="recurso-justification">Justificativa do recurso *</label><textarea id="recurso-justification" name="justification" rows="3" required placeholder="Explique por que a glosa deve ser revertida"></textarea></div><button class="primary-button" type="submit">Enviar recurso</button></form>`;
@@ -533,7 +536,9 @@ const reconciliationLabels = { pending: 'Pagamento pendente', partial: 'Pagament
 function batchReconciliationHtml(batch) {
   const received = Number(batch.receivedCents || 0) / 100;
   const difference = Math.max(0, Number(batch.totalValue || 0) - received);
-  return `<div class="batch-reconciliation"><div class="batch-reconciliation-heading"><div><strong>Conciliação financeira</strong><small>Registre o crédito quando ele acontecer. A previsão é apenas informativa.</small></div><span class="reconciliation-status ${batch.reconciliationStatus || 'pending'}">${reconciliationLabels[batch.reconciliationStatus] || reconciliationLabels.pending}</span></div><div class="batch-reconciliation-grid"><label>Previsão de pagamento<input type="date" data-batch-expected-payment value="${batch.expectedPaymentDate || ''}" /></label><label>Valor recebido<input type="number" min="0" step="0.01" data-batch-received-amount value="${received ? received.toFixed(2) : ''}" placeholder="0,00" /></label><label>Data do crédito<input type="date" data-batch-received-at value="${batch.receivedAt || ''}" /></label></div><label class="batch-reconciliation-notes">Observações<textarea rows="2" maxlength="1000" data-batch-reconciliation-notes placeholder="Descontos, diferenças ou observações da operadora">${batch.reconciliationNotes || ''}</textarea></label><div class="batch-reconciliation-summary"><span>Faturado <strong>${formatMoney(batch.totalValue)}</strong></span><span>Recebido <strong>${formatMoney(received)}</strong></span><span>Diferença <strong>${formatMoney(difference)}</strong></span></div></div>`;
+  const paymentRows = (batch.payments || []).map(item => `<div class="batch-document-row batch-payment-entry${item.reversedAt ? ' reversed' : ''}"><span><strong>${new Date(`${item.paymentDate}T12:00:00`).toLocaleDateString('pt-BR')} · ${formatMoney(Number(item.amountCents || 0) / 100)}${item.reversedAt ? ' · ESTORNADO' : ''}</strong><small>${item.reference || 'Sem referência'} · lançado por ${item.createdBy}</small>${item.notes ? `<small>${item.notes}</small>` : ''}${item.reversedAt ? `<small>Estornado por ${item.reversedBy || 'usuário não identificado'} · ${new Date(`${item.reversedAt.replace(' ', 'T')}Z`).toLocaleString('pt-BR')}</small><small>Motivo: ${item.reversalReason}</small>` : ''}</span>${item.reversedAt ? '' : `<button type="button" class="text-button danger-text" data-action="reverse-batch-payment" data-batch-id="${batch.id}" data-payment-id="${item.id}">Estornar</button>`}</div>`).join('');
+  const canReceive = ['sent', 'processing', 'approved', 'error'].includes(batch.status) && difference > 0;
+  return `<div class="batch-reconciliation"><div class="batch-reconciliation-heading"><div><strong>Conciliação financeira</strong><small>Registre cada crédito separadamente. A previsão é apenas informativa.</small></div><span class="reconciliation-status ${batch.reconciliationStatus || 'pending'}">${reconciliationLabels[batch.reconciliationStatus] || reconciliationLabels.pending}</span></div><div class="batch-reconciliation-grid"><label>Previsão de pagamento<input type="date" data-batch-expected-payment value="${batch.expectedPaymentDate || ''}" /></label></div><label class="batch-reconciliation-notes">Observações gerais<textarea rows="2" maxlength="1000" data-batch-reconciliation-notes placeholder="Descontos, diferenças ou observações da operadora">${batch.reconciliationNotes || ''}</textarea></label><div class="batch-reconciliation-summary"><span>Faturado <strong>${formatMoney(batch.totalValue)}</strong></span><span>Recebido <strong>${formatMoney(received)}</strong></span><span>Diferença <strong>${formatMoney(difference)}</strong></span></div>${paymentRows ? `<div class="batch-payment-history">${paymentRows}</div>` : ''}${canReceive ? `<form class="batch-payment-form" data-batch-id="${batch.id}"><input type="date" name="paymentDate" value="${new Date().toISOString().slice(0, 10)}" required /><input type="number" name="amount" min="0.01" max="${difference.toFixed(2)}" step="0.01" placeholder="Valor do crédito" required /><input name="reference" maxlength="120" placeholder="Referência bancária" /><input name="notes" maxlength="500" placeholder="Observação opcional" /><button class="secondary-button" type="submit">Registrar crédito</button></form>` : ''}</div>`;
 }
 const deliveryFormatLabels = { pdf: 'PDF assinado', xml: 'XML', both: 'PDF assinado + XML' };
 function batchGuideOptions(insurerName = '', competence = '') {
@@ -606,6 +611,7 @@ function notificationItems() {
   if (userCan('patients')) items.push(...consentAlertItems(patients, patientConsents, Number(clinicSettings.consentRenewalMonths || 0)));
   if (userCan('batches')) batches.filter(batch => !batch.readyForSending && ['draft', 'ready'].includes(batch.status)).forEach(batch => items.push({ level: 'warning', title: `Lote ${batch.id} com pendências`, detail: `${batch.insurer} · ${batch.missingSignedPdfs || 0} PDF(s) pendente(s)${batch.xmlPending ? ' · XML pendente' : ''}.`, view: 'batches' }));
   if (userCan('batches')) items.push(...batchFollowupAlertItems(batches, today));
+  if (userCan('financeiro')) items.push(...batchPaymentAlertItems(batches, today));
   if (userCan('financeiro')) guides.filter(guide => guide.status === 'error').forEach(guide => items.push({ level: 'critical', title: `Guia ${guide.id} com glosa`, detail: `${guide.patient} · ${guide.insurer}`, view: 'guides' }));
   if (userCan('agenda')) appointments.forEach(item => { const days = daysUntil(item.date); if (days >= 0 && days <= 1 && !['completed', 'cancelled'].includes(item.status)) items.push({ level: 'info', title: days === 0 ? 'Atendimento hoje' : 'Atendimento amanhã', detail: `${item.start} · ${item.patient} · ${item.professional}`, view: 'agenda' }); });
   const priority = { critical: 0, warning: 1, info: 2 };
@@ -622,14 +628,15 @@ function financeView() {
   const pendingCount = invoices.filter(invoice => invoice.status === 'pending').length;
   const receivedCount = invoices.filter(invoice => invoice.status === 'received').length;
   const totalExpected = invoices.reduce((sum, invoice) => sum + Number(invoice.amount || 0), 0);
-  const insurerBilled = batches.reduce((sum, batch) => sum + Number(batch.totalValue || 0), 0);
   const insurerReceived = batches.reduce((sum, batch) => sum + Number(batch.receivedCents || 0) / 100, 0);
   const insurerGlosa = batches.reduce((sum, batch) => sum + (batch.returnItems || []).reduce((itemSum, item) => itemSum + Number(item.glosaCents || 0), 0) / 100, 0);
+  const receivables = batchReceivablesSummary(batches);
+  const receivableStateLabels = { paid: 'Quitado', overdue: 'Atrasado', upcoming: 'Vence em breve', partial: 'Pagamento parcial', pending: 'A receber' };
 
   const billableGuides = guides.filter(guide => ['sent', 'approved'].includes(guide.status));
 
   return `<div class="page-heading"><div><p class="eyebrow">Fluxo de caixa</p><h1>Financeiro</h1><p class="heading-copy">Vincule notas fiscais às guias enviadas e acompanhe a previsão de pagamento.</p></div><button class="primary-button" data-action="new-invoice">＋ Nova nota</button></div>
-  <div class="panel insurer-receivables"><div class="panel-header"><div><h2 class="panel-title">Recebimentos dos convênios</h2><p class="panel-subtitle">Consolidado dos lotes TISS, separado das notas fiscais.</p></div></div><div class="finance-summary"><div class="finance-summary-card"><span>Faturado em lotes</span><strong>${formatMoney(insurerBilled)}</strong><small>${batches.length} lote(s)</small></div><div class="finance-summary-card"><span>Recebido</span><strong>${formatMoney(insurerReceived)}</strong><small>Créditos conciliados</small></div><div class="finance-summary-card"><span>Glosado nos retornos</span><strong>${formatMoney(insurerGlosa)}</strong><small>Importado das operadoras</small></div></div><div class="insurer-receivable-list">${batches.length ? batches.map(batch => `<div><span><strong>${batch.id} · ${batch.insurer}</strong><small>${batch.competence} · ${reconciliationLabels[batch.reconciliationStatus] || reconciliationLabels.pending}</small></span><span><strong>${formatMoney(Number(batch.receivedCents || 0) / 100)}</strong><small>de ${formatMoney(batch.totalValue)}</small></span></div>`).join('') : '<small>Nenhum lote de faturamento cadastrado.</small>'}</div></div>
+  <div class="panel insurer-receivables"><div class="panel-header"><div><h2 class="panel-title">Recebimentos dos convênios</h2><p class="panel-subtitle">Consolidado dos lotes enviados, separado das notas fiscais.</p></div></div><div class="finance-summary"><div class="finance-summary-card"><span>Total a receber</span><strong>${formatMoney(receivables.pendingCents / 100)}</strong><small>${receivables.items.filter(item => item.pendingCents > 0).length} lote(s) em aberto</small></div><div class="finance-summary-card"><span>Atrasado</span><strong>${formatMoney(receivables.overdueCents / 100)}</strong><small>Previsões vencidas</small></div><div class="finance-summary-card"><span>Próximos 5 dias</span><strong>${formatMoney(receivables.upcomingCents / 100)}</strong><small>Créditos esperados</small></div><div class="finance-summary-card"><span>Saldo após parcial</span><strong>${formatMoney(receivables.partialCents / 100)}</strong><small>Pagamentos incompletos</small></div><div class="finance-summary-card"><span>Recebido</span><strong>${formatMoney(insurerReceived)}</strong><small>Créditos conciliados</small></div><div class="finance-summary-card"><span>Glosado</span><strong>${formatMoney(insurerGlosa)}</strong><small>Retornos das operadoras</small></div></div><div class="insurer-receivable-list">${receivables.items.length ? receivables.items.sort((a, b) => (a.expectedPaymentDate || '9999').localeCompare(b.expectedPaymentDate || '9999')).map(batch => `<div><span><strong>${batch.id} · ${batch.insurer}</strong><small>${batch.competence} · ${receivableStateLabels[batch.state]}${batch.expectedPaymentDate ? ` · previsão ${new Date(`${batch.expectedPaymentDate}T12:00:00`).toLocaleDateString('pt-BR')}` : ' · sem previsão'}</small></span><span><strong>${formatMoney(batch.pendingCents / 100)}</strong><small>pendente de ${formatMoney(batch.totalCents / 100)}</small></span></div>`).join('') : '<small>Nenhum lote enviado para acompanhar.</small>'}</div></div>
   <div class="finance-summary"><div class="finance-summary-card"><span>Valor total previsto</span><strong>${formatMoney(totalExpected)}</strong><small>${invoices.length} notas cadastradas</small></div><div class="finance-summary-card"><span>Notas pendentes</span><strong>${pendingCount}</strong><small>Esperando entrada</small></div><div class="finance-summary-card"><span>Recebidas</span><strong>${receivedCount}</strong><small>Entradas confirmadas</small></div></div>
   <div class="panel"><div class="panel-header"><div><h2 class="panel-title">Notas fiscais</h2><p class="panel-subtitle">Acompanhamento das entradas previstas e guias relacionadas</p></div><select class="finance-filter" id="invoice-filter"><option value="all">Todas</option><option value="pending">Pendentes</option><option value="received">Recebidas</option></select></div><table><thead><tr><th>Nota</th><th>Guia TISS</th><th>Fornecedor</th><th>Valor</th><th>Previsão de pagamento</th><th>Status</th><th></th></tr></thead><tbody>${invoices.map(invoice => `<tr data-invoice-status="${invoice.status}"><td><strong>${invoice.id}</strong><small>${invoice.description}</small></td><td>${invoice.guideId || 'Sem vínculo'}</td><td>${invoice.provider}</td><td><strong>${formatMoney(invoice.amount)}</strong></td><td>${new Date(`${invoice.expectedDate}T12:00:00`).toLocaleDateString('pt-BR')}</td><td><button class="finance-status ${invoice.status}" data-action="mark-received" data-invoice-id="${invoice.id}">${invoice.status === 'received' ? 'Recebida' : 'Marcar recebimento'}</button></td><td><button class="finance-delete" data-delete-invoice-id="${invoice.id}" aria-label="Excluir ${invoice.id}">Excluir</button></td></tr>`).join('')}</tbody></table></div>
   <form class="panel invoice-form" id="invoice-form"><div class="panel-header"><div><h2 class="panel-title">Registrar nota fiscal</h2><p class="panel-subtitle">Associe a nota a uma guia enviada e informe a previsão de pagamento.</p></div></div><div class="form-section"><div class="form-grid"><div class="field"><label for="invoice-guide">Guia TISS enviada *</label><select id="invoice-guide" name="guideId" required><option value="">Selecione a guia</option>${billableGuides.map(guide => `<option value="${guide.id}">${guide.id} · ${guide.patient} · ${guide.label}</option>`).join('')}</select></div><div class="field"><label for="invoice-number">Número da nota *</label><input id="invoice-number" name="number" required placeholder="NF-2026-010" /></div><div class="field"><label for="invoice-provider">Fornecedor *</label><input id="invoice-provider" name="provider" required placeholder="Nome da empresa" /></div><div class="field"><label for="invoice-description">Descrição *</label><input id="invoice-description" name="description" required placeholder="Material ou serviço" /></div><div class="field"><label for="invoice-amount">Valor *</label><input id="invoice-amount" name="amount" type="number" min="0.01" step="0.01" required placeholder="0,00" /></div><div class="field"><label for="invoice-date">Previsão de pagamento *</label><input id="invoice-date" name="expectedDate" type="date" required /></div></div><div class="form-footer"><button type="button" class="secondary-button" data-view="financeiro">Cancelar</button><button class="primary-button" type="submit">Salvar nota vinculada</button></div></div></form>`;
@@ -791,6 +798,19 @@ document.addEventListener('submit', async event => {
     appView.innerHTML = patientFolderView(form.dataset.patientId); showToast('Solicitação de privacidade registrada.');
   } catch (error) { showToast(error.message); }
 }, true);
+
+document.addEventListener('click', async event => {
+  const button = event.target.closest('[data-action="reverse-batch-payment"]');
+  if (!button) return;
+  const reason = window.prompt('Informe o motivo do estorno (mínimo de 5 caracteres):');
+  if (reason === null) return;
+  if (reason.trim().length < 5) return showToast('Informe uma justificativa com pelo menos 5 caracteres.');
+  button.disabled = true;
+  try {
+    await apiRequest(`/batches/${encodeURIComponent(button.dataset.batchId)}/payments/${encodeURIComponent(button.dataset.paymentId)}/reverse`, { method: 'POST', body: JSON.stringify({ reason: reason.trim() }) });
+    await refreshBatches(); render('batches'); showToast('Crédito estornado e saldo do lote recalculado.');
+  } catch (error) { showToast(error.message); button.disabled = false; }
+});
 
 document.addEventListener('click', async event => {
   const exportButton = event.target.closest('[data-action="export-patient-privacy"]');
@@ -1400,6 +1420,17 @@ document.addEventListener('submit', async event => {
   } catch (error) { showToast(error.message); button.disabled = false; }
 }, true);
 
+document.addEventListener('submit', async event => {
+  if (!event.target.classList.contains('batch-payment-form')) return;
+  event.preventDefault(); event.stopImmediatePropagation();
+  const form = event.target, data = Object.fromEntries(new FormData(form));
+  const button = form.querySelector('button[type="submit"]'); button.disabled = true;
+  try {
+    await apiRequest(`/batches/${encodeURIComponent(form.dataset.batchId)}/payments`, { method: 'POST', body: JSON.stringify(data) });
+    await refreshBatches(); render('batches'); showToast('Crédito registrado no histórico do lote.');
+  } catch (error) { showToast(error.message); button.disabled = false; }
+}, true);
+
 function showBackupPreview(result) {
   document.querySelector('.backup-preview-overlay')?.remove();
   const labels = { patients: 'Pacientes', guides: 'Guias', patientDocuments: 'Documentos', billingBatchDocuments: 'Retornos de lote', billingBatchStatusHistory: 'Histórico dos lotes', billingBatchReturnItems: 'Resultados das operadoras', billingDeliveryPackages: 'Pacotes preservados', billingBatchFollowups: 'Contatos com operadoras', privacyRequests: 'Solicitações de privacidade', feedbacks: 'Feedbacks', authorizations: 'Autorizações', billingBatches: 'Lotes', appointments: 'Atendimentos', insurers: 'Convênios' };
@@ -1485,18 +1516,16 @@ document.addEventListener('click', async event => {
   const protocol = card.querySelector('[data-batch-protocol]').value.trim();
   const packageId = card.querySelector('[data-batch-package]').value;
   const expectedPaymentDate = card.querySelector('[data-batch-expected-payment]').value;
-  const receivedAmount = card.querySelector('[data-batch-received-amount]').value;
-  const receivedAt = card.querySelector('[data-batch-received-at]').value;
   const reconciliationNotes = card.querySelector('[data-batch-reconciliation-notes]').value.trim();
   try {
     if (activeSession?.token) {
-      await apiRequest(`/batches/${batchId}`, { method: 'PATCH', body: JSON.stringify({ status, protocol, packageId, expectedPaymentDate, receivedAmount, receivedAt, reconciliationNotes }) });
+      await apiRequest(`/batches/${batchId}`, { method: 'PATCH', body: JSON.stringify({ status, protocol, packageId, expectedPaymentDate, reconciliationNotes }) });
       await refreshBatches();
     } else {
       const batch = batches.find(item => item.id === batchId);
-      const receivedCents = Math.max(0, Math.round(Number(String(receivedAmount || '0').replace(',', '.')) * 100) || 0);
+      const receivedCents = Number(batch.receivedCents || 0);
       const totalCents = Math.round(Number(batch.totalValue || 0) * 100);
-      Object.assign(batch, { status, protocol, expectedPaymentDate, receivedCents, receivedAt, reconciliationNotes, reconciliationStatus: receivedCents === 0 ? 'pending' : receivedCents < totalCents ? 'partial' : 'paid' });
+      Object.assign(batch, { status, protocol, expectedPaymentDate, receivedCents, reconciliationNotes, reconciliationStatus: receivedCents === 0 ? 'pending' : receivedCents < totalCents ? 'partial' : 'paid' });
       saveBatches();
     }
     render('batches');
@@ -1993,6 +2022,19 @@ document.addEventListener('click', async event => {
   } catch (error) {
     showToast(error.message);
   }
+}, true);
+
+document.addEventListener('submit', async event => {
+  if (!event.target.classList.contains('glosa-recovery-form') || !activeSession?.token) return;
+  event.preventDefault(); event.stopImmediatePropagation();
+  const form = event.target;
+  const button = form.querySelector('button[type="submit"]'); button.disabled = true;
+  try {
+    await apiRequest(`/glosas/${encodeURIComponent(form.dataset.glosaId)}/recovery`, { method: 'POST', body: JSON.stringify(Object.fromEntries(new FormData(form))) });
+    glosas = (await apiRequest('/glosas')).map(normalizeGlosa);
+    appView.innerHTML = guideFolderView(form.dataset.guideId);
+    showToast('Recuperação da glosa registrada.');
+  } catch (error) { showToast(error.message); button.disabled = false; }
 }, true);
 
 document.addEventListener('submit', async event => {

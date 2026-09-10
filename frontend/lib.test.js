@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { nextSequentialId, timeToMinutes, hasScheduleConflictWith, escapeXml, findSessionOutsidePlanValidity, exceedsAuthorizedQuantity, findCidIncompatibility, filterGuides, filterPatients, filterPatientsByStatus, paginateItems, filterInsurers, filterFeedbacks, isActivePatient, planValidityAlertItems, consentAlertItems, clinicOnboardingChecklist, batchFollowupAlertItems } = require('./lib.js');
+const { nextSequentialId, timeToMinutes, hasScheduleConflictWith, escapeXml, findSessionOutsidePlanValidity, exceedsAuthorizedQuantity, findCidIncompatibility, filterGuides, filterPatients, filterPatientsByStatus, paginateItems, filterInsurers, filterFeedbacks, isActivePatient, planValidityAlertItems, consentAlertItems, clinicOnboardingChecklist, batchFollowupAlertItems, batchPaymentAlertItems, batchReceivablesSummary } = require('./lib.js');
 
 test('isActivePatient trata booleanos locais e inteiros vindos do SQLite', () => {
   assert.equal(isActivePatient({ active: true }), true);
@@ -294,4 +294,35 @@ test('batchFollowupAlertItems prioriza a próxima cobrança agendada', () => {
   assert.match(todayAlert.title, /hoje/);
   assert.equal(todayAlert.level, 'warning');
   assert.equal(lateAlert.level, 'critical');
+});
+
+test('batchPaymentAlertItems avisa pagamento próximo, parcial e atrasado', () => {
+  const base = { insurer: 'Unimed', status: 'approved', totalValueCents: 100000, expectedPaymentDate: '2026-09-20' };
+  const upcoming = batchPaymentAlertItems([{ ...base, id: 'L-1', receivedCents: 0 }], new Date('2026-09-17T12:00:00'))[0];
+  const partial = batchPaymentAlertItems([{ ...base, id: 'L-2', receivedCents: 40000 }], new Date('2026-09-20T12:00:00'))[0];
+  const overdue = batchPaymentAlertItems([{ ...base, id: 'L-3', receivedCents: 0 }], new Date('2026-09-23T12:00:00'))[0];
+  assert.equal(upcoming.level, 'info');
+  assert.equal(partial.level, 'warning');
+  assert.match(partial.detail, /R\$\s*600,00/);
+  assert.equal(overdue.level, 'critical');
+});
+
+test('batchPaymentAlertItems ignora lote quitado ou sem previsão', () => {
+  const paid = { id: 'L-1', insurer: 'Amil', status: 'approved', totalValueCents: 50000, receivedCents: 50000, expectedPaymentDate: '2026-09-01' };
+  assert.equal(batchPaymentAlertItems([paid], new Date('2026-09-20T12:00:00')).length, 0);
+  assert.equal(batchPaymentAlertItems([{ ...paid, receivedCents: 0, expectedPaymentDate: null }], new Date('2026-09-20T12:00:00')).length, 0);
+});
+
+test('batchReceivablesSummary consolida saldos por vencimento', () => {
+  const summary = batchReceivablesSummary([
+    { id: 'L-1', status: 'approved', totalValueCents: 100000, receivedCents: 20000, expectedPaymentDate: '2026-09-10' },
+    { id: 'L-2', status: 'sent', totalValueCents: 50000, receivedCents: 0, expectedPaymentDate: '2026-09-23' },
+    { id: 'L-3', status: 'approved', totalValueCents: 30000, receivedCents: 30000, expectedPaymentDate: '2026-09-01' },
+    { id: 'L-4', status: 'draft', totalValueCents: 90000, receivedCents: 0 }
+  ], new Date('2026-09-20T12:00:00'));
+  assert.equal(summary.pendingCents, 130000);
+  assert.equal(summary.overdueCents, 80000);
+  assert.equal(summary.upcomingCents, 50000);
+  assert.equal(summary.partialCents, 80000);
+  assert.equal(summary.items.length, 3);
 });

@@ -716,7 +716,7 @@ function buildClinicBackup(clinicId) {
     clinicSettings: db.prepare('SELECT * FROM clinic_settings WHERE clinic_id = ?').get(clinicId) || null,
     users, patients: byClinic('patients'), guides: byClinic('guides'), insurers: byClinic('insurers'), invoices: byClinic('invoices'),
     glosas: byClinic('glosas'), authorizations: byClinic('authorizations'), billingBatches: byClinic('billing_batches'),
-    billingBatchGuides: batchGuides, billingBatchDocuments: batchDocuments, billingBatchStatusHistory: batchStatusHistory, billingBatchReturnItems: batchReturnItems, billingDeliveryPackages: deliveryPackages, billingBatchFollowups: byClinic('billing_batch_followups'), feedbacks: byClinic('feedbacks'), patientDocuments: documents,
+    billingBatchGuides: batchGuides, billingBatchDocuments: batchDocuments, billingBatchStatusHistory: batchStatusHistory, billingBatchReturnItems: batchReturnItems, billingDeliveryPackages: deliveryPackages, billingBatchFollowups: byClinic('billing_batch_followups'), billingBatchPayments: byClinic('billing_batch_payments'), feedbacks: byClinic('feedbacks'), patientDocuments: documents,
     patientConsents: byClinic('patient_consents'), privacyRequests, appointments: byClinic('appointments'), auditLogs: byClinic('audit_logs')
   } });
 }
@@ -769,7 +769,7 @@ app.get('/api/backup', auth, requireRole('admin'), (req, res) => {
       clinicSettings: db.prepare('SELECT * FROM clinic_settings WHERE clinic_id = ?').get(clinicId) || null,
       users, patients: byClinic('patients'), guides: byClinic('guides'), insurers: byClinic('insurers'),
       invoices: byClinic('invoices'), glosas: byClinic('glosas'), authorizations: byClinic('authorizations'),
-      billingBatches: byClinic('billing_batches'), billingBatchGuides: batchGuides, billingBatchDocuments: batchDocuments, billingBatchStatusHistory: batchStatusHistory, billingBatchReturnItems: batchReturnItems, billingDeliveryPackages: deliveryPackages, billingBatchFollowups: byClinic('billing_batch_followups'), feedbacks: byClinic('feedbacks'),
+      billingBatches: byClinic('billing_batches'), billingBatchGuides: batchGuides, billingBatchDocuments: batchDocuments, billingBatchStatusHistory: batchStatusHistory, billingBatchReturnItems: batchReturnItems, billingDeliveryPackages: deliveryPackages, billingBatchFollowups: byClinic('billing_batch_followups'), billingBatchPayments: byClinic('billing_batch_payments'), feedbacks: byClinic('feedbacks'),
       patientDocuments: documents, patientConsents: byClinic('patient_consents'), privacyRequests, appointments: byClinic('appointments'), auditLogs: byClinic('audit_logs')
     }
   });
@@ -1528,6 +1528,15 @@ function batchDetails(batch) {
     users.name AS createdBy FROM billing_batch_followups JOIN users ON users.id = billing_batch_followups.created_by
     WHERE billing_batch_followups.batch_id = ? AND billing_batch_followups.clinic_id = ?
     ORDER BY billing_batch_followups.contact_date DESC, billing_batch_followups.created_at DESC`).all(batch.id, batch.clinicId);
+  const payments = db.prepare(`SELECT billing_batch_payments.id, billing_batch_payments.payment_date AS paymentDate,
+    billing_batch_payments.amount_cents AS amountCents, billing_batch_payments.reference, billing_batch_payments.notes,
+    billing_batch_payments.created_at AS createdAt, creator.name AS createdBy,
+    billing_batch_payments.reversed_at AS reversedAt, reverser.name AS reversedBy,
+    billing_batch_payments.reversal_reason AS reversalReason
+    FROM billing_batch_payments JOIN users creator ON creator.id = billing_batch_payments.created_by
+    LEFT JOIN users reverser ON reverser.id = billing_batch_payments.reversed_by
+    WHERE billing_batch_payments.batch_id = ? AND billing_batch_payments.clinic_id = ?
+    ORDER BY billing_batch_payments.payment_date DESC, billing_batch_payments.created_at DESC`).all(batch.id, batch.clinicId);
   const missingSignedPdfs = requiresPdf ? guides.filter(guide => !signedPdfRequirementMet(guide)).length : 0;
   const xmlPending = requiresXml && (!batch.xmlGenerated || !batch.xmlValid);
   const totalValueCents = guides.reduce((sum, guide) => sum + Number(guide.valueCents || 0), 0);
@@ -1547,6 +1556,7 @@ function batchDetails(batch) {
     returnItems,
     deliveryPackages,
     followups,
+    payments,
     guides: guides.map(guide => ({ ...guide, signedPdfReceived: Boolean(guide.signedDocumentId) }))
   };
 }
@@ -1826,6 +1836,53 @@ app.post('/api/batches/:id/followups', auth, requireRole('admin', 'faturamento')
   res.status(201).json({ id });
 });
 
+app.post('/api/batches/:id/payments', auth, requireRole('admin', 'faturamento'), (req, res) => {
+  const batch = db.prepare('SELECT id, status, received_cents AS receivedCents FROM billing_batches WHERE id = ? AND clinic_id = ?').get(req.params.id, req.session.clinicId);
+  if (!batch) return res.status(404).json({ error: 'Lote não encontrado.' });
+  if (!['sent', 'processing', 'approved', 'error'].includes(batch.status)) return res.status(409).json({ error: 'O lote precisa ter sido enviado antes de receber um crédito.' });
+  const { paymentDate, amount, reference = '', notes = '' } = req.body || {};
+  let amountCents;
+  try { amountCents = parseReceivedAmount(amount); } catch (error) { return res.status(400).json({ error: error.message }); }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(paymentDate || '') || amountCents <= 0) return res.status(400).json({ error: 'Informe uma data e um valor de crédito maior que zero.' });
+  const totalValueCents = db.prepare('SELECT COALESCE(SUM(guides.value_cents), 0) AS total FROM billing_batch_guides JOIN guides ON guides.id = billing_batch_guides.guide_id WHERE billing_batch_guides.batch_id = ?').get(batch.id).total;
+  const outstanding = Math.max(0, Number(totalValueCents) - Number(batch.receivedCents || 0));
+  if (amountCents > outstanding) return res.status(400).json({ error: `O crédito ultrapassa o saldo pendente de ${(outstanding / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}.` });
+  const id = `BP-${crypto.randomUUID()}`;
+  db.transaction(() => {
+    db.prepare('INSERT INTO billing_batch_payments (id, clinic_id, batch_id, payment_date, amount_cents, reference, notes, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(id, req.session.clinicId, batch.id, paymentDate, amountCents, String(reference).trim().slice(0, 120) || null, String(notes).trim().slice(0, 500) || null, req.session.userId);
+    db.prepare('UPDATE billing_batches SET received_cents = received_cents + ?, received_at = ? WHERE id = ? AND clinic_id = ?').run(amountCents, paymentDate, batch.id, req.session.clinicId);
+  })();
+  req.auditDetails = { batchPayment: true, batchId: batch.id, amountCents, paymentDate };
+  res.status(201).json({ id, receivedCents: Number(batch.receivedCents || 0) + amountCents });
+});
+
+app.post('/api/batches/:id/payments/:paymentId/reverse', auth, requireRole('admin', 'faturamento'), (req, res) => {
+  const reason = String(req.body?.reason || '').trim();
+  if (reason.length < 5 || reason.length > 500) return res.status(400).json({ error: 'Informe uma justificativa entre 5 e 500 caracteres.' });
+  const payment = db.prepare(`SELECT billing_batch_payments.id, billing_batch_payments.amount_cents AS amountCents,
+      billing_batch_payments.reversed_at AS reversedAt, billing_batches.received_cents AS receivedCents,
+      billing_batches.received_at AS receivedAt
+    FROM billing_batch_payments JOIN billing_batches ON billing_batches.id = billing_batch_payments.batch_id
+    WHERE billing_batch_payments.id = ? AND billing_batch_payments.batch_id = ? AND billing_batch_payments.clinic_id = ?`)
+    .get(req.params.paymentId, req.params.id, req.session.clinicId);
+  if (!payment) return res.status(404).json({ error: 'Crédito não encontrado neste lote.' });
+  if (payment.reversedAt) return res.status(409).json({ error: 'Este crédito já foi estornado.' });
+  let receivedCents;
+  db.transaction(() => {
+    db.prepare(`UPDATE billing_batch_payments SET reversed_at = CURRENT_TIMESTAMP, reversed_by = ?, reversal_reason = ?
+      WHERE id = ? AND clinic_id = ? AND reversed_at IS NULL`).run(req.session.userId, reason, payment.id, req.session.clinicId);
+    receivedCents = Math.max(0, Number(payment.receivedCents || 0) - Number(payment.amountCents || 0));
+    const latestPayment = db.prepare(`SELECT payment_date AS paymentDate FROM billing_batch_payments
+      WHERE batch_id = ? AND clinic_id = ? AND reversed_at IS NULL
+      ORDER BY payment_date DESC, created_at DESC LIMIT 1`).get(req.params.id, req.session.clinicId);
+    const receivedAt = latestPayment?.paymentDate || (receivedCents > 0 ? payment.receivedAt : null);
+    db.prepare('UPDATE billing_batches SET received_cents = ?, received_at = ? WHERE id = ? AND clinic_id = ?')
+      .run(receivedCents, receivedAt, req.params.id, req.session.clinicId);
+  })();
+  req.auditDetails = { batchPaymentReversal: true, batchId: req.params.id, paymentId: payment.id, amountCents: payment.amountCents };
+  res.json({ id: payment.id, receivedCents });
+});
+
 app.get('/api/batches/:id/audit-pdf', auth, requireRole('admin', 'faturamento'), (req, res) => {
   const raw = db.prepare(`SELECT billing_batches.id, billing_batches.clinic_id AS clinicId, billing_batches.competence,
     billing_batches.delivery_format AS deliveryFormat, billing_batches.status, billing_batches.protocol,
@@ -1921,7 +1978,13 @@ app.delete('/api/feedbacks/:id', auth, requireRole('admin', 'recepcao', 'medico'
 });
 
 app.get('/api/glosas', auth, requireRole('admin', 'faturamento'), (req, res) => {
-  const glosas = db.prepare('SELECT id, guide_id AS guideId, code, reason, amount_cents AS amountCents, status, justification, created_at AS createdAt, resolved_at AS resolvedAt FROM glosas WHERE clinic_id = ? ORDER BY created_at DESC').all(req.session.clinicId);
+  const glosas = db.prepare(`SELECT glosas.id, glosas.guide_id AS guideId, glosas.code, glosas.reason,
+    glosas.amount_cents AS amountCents, glosas.status, glosas.justification, glosas.created_at AS createdAt,
+    glosas.resolved_at AS resolvedAt, glosas.recovered_cents AS recoveredCents, glosas.recovered_date AS recoveredDate,
+    glosas.recovery_reference AS recoveryReference, glosas.recovery_notes AS recoveryNotes,
+    glosas.recovery_recorded_at AS recoveryRecordedAt, users.name AS recoveredBy
+    FROM glosas LEFT JOIN users ON users.id = glosas.recovered_by
+    WHERE glosas.clinic_id = ? ORDER BY glosas.created_at DESC`).all(req.session.clinicId);
   res.json(glosas);
 });
 
@@ -1966,6 +2029,23 @@ app.post('/api/glosas/:id/resolve', auth, requireRole('admin', 'faturamento'), (
   });
   updateAll();
   res.json({ id: req.params.id, status: outcome });
+});
+
+app.post('/api/glosas/:id/recovery', auth, requireRole('admin', 'faturamento'), (req, res) => {
+  const glosa = db.prepare('SELECT id, status, amount_cents AS amountCents, recovered_cents AS recoveredCents FROM glosas WHERE id = ? AND clinic_id = ?').get(req.params.id, req.session.clinicId);
+  if (!glosa) return res.status(404).json({ error: 'Glosa não encontrada.' });
+  if (glosa.status !== 'revertida') return res.status(409).json({ error: 'A recuperação só pode ser baixada após a reversão da glosa.' });
+  if (glosa.recoveredCents !== null) return res.status(409).json({ error: 'A recuperação desta glosa já foi registrada.' });
+  const { recoveredDate, amount, reference = '', notes = '' } = req.body || {};
+  let recoveredCents;
+  try { recoveredCents = parseReceivedAmount(amount); } catch (error) { return res.status(400).json({ error: error.message }); }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(recoveredDate || '') || recoveredCents <= 0) return res.status(400).json({ error: 'Informe a data e um valor recuperado maior que zero.' });
+  if (recoveredCents > Number(glosa.amountCents || 0)) return res.status(400).json({ error: 'O valor recuperado não pode ultrapassar o valor glosado.' });
+  db.prepare(`UPDATE glosas SET recovered_cents = ?, recovered_date = ?, recovery_reference = ?, recovery_notes = ?,
+    recovered_by = ?, recovery_recorded_at = CURRENT_TIMESTAMP WHERE id = ? AND clinic_id = ?`)
+    .run(recoveredCents, recoveredDate, String(reference).trim().slice(0, 120) || null, String(notes).trim().slice(0, 500) || null, req.session.userId, glosa.id, req.session.clinicId);
+  req.auditDetails = { glosaRecovery: true, glosaId: glosa.id, recoveredCents, recoveredDate };
+  res.status(201).json({ id: glosa.id, recoveredCents });
 });
 
 app.use((error, req, res, next) => {

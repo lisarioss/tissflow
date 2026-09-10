@@ -90,7 +90,13 @@ db.exec(`
     status TEXT NOT NULL DEFAULT 'aberta' CHECK (status IN ('aberta', 'recurso_enviado', 'revertida', 'mantida')),
     justification TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    resolved_at TEXT
+    resolved_at TEXT,
+    recovered_cents INTEGER,
+    recovered_date TEXT,
+    recovery_reference TEXT,
+    recovery_notes TEXT,
+    recovered_by TEXT REFERENCES users(id),
+    recovery_recorded_at TEXT
   );
   CREATE TABLE IF NOT EXISTS insurers (
     id TEXT PRIMARY KEY,
@@ -275,6 +281,21 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
   CREATE INDEX IF NOT EXISTS idx_batch_followups_batch ON billing_batch_followups(clinic_id, batch_id, contact_date DESC);
+  CREATE TABLE IF NOT EXISTS billing_batch_payments (
+    id TEXT PRIMARY KEY,
+    clinic_id TEXT NOT NULL REFERENCES clinics(id),
+    batch_id TEXT NOT NULL REFERENCES billing_batches(id) ON DELETE CASCADE,
+    payment_date TEXT NOT NULL,
+    amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
+    reference TEXT,
+    notes TEXT,
+    created_by TEXT NOT NULL REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    reversed_at TEXT,
+    reversed_by TEXT REFERENCES users(id),
+    reversal_reason TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_batch_payments_batch ON billing_batch_payments(clinic_id, batch_id, payment_date DESC);
   CREATE TABLE IF NOT EXISTS authorizations (
     id TEXT PRIMARY KEY,
     clinic_id TEXT NOT NULL REFERENCES clinics(id),
@@ -504,6 +525,13 @@ if (!insurerColumns.has('delivery_format')) db.exec("ALTER TABLE insurers ADD CO
 if (!insurerColumns.has('provider_code')) db.exec('ALTER TABLE insurers ADD COLUMN provider_code TEXT');
 if (!insurerColumns.has('return_alert_days')) db.exec('ALTER TABLE insurers ADD COLUMN return_alert_days INTEGER NOT NULL DEFAULT 7');
 if (!insurerColumns.has('return_critical_days')) db.exec('ALTER TABLE insurers ADD COLUMN return_critical_days INTEGER NOT NULL DEFAULT 15');
+const glosaColumns = new Set(db.prepare('PRAGMA table_info(glosas)').all().map(column => column.name));
+if (!glosaColumns.has('recovered_cents')) db.exec('ALTER TABLE glosas ADD COLUMN recovered_cents INTEGER');
+if (!glosaColumns.has('recovered_date')) db.exec('ALTER TABLE glosas ADD COLUMN recovered_date TEXT');
+if (!glosaColumns.has('recovery_reference')) db.exec('ALTER TABLE glosas ADD COLUMN recovery_reference TEXT');
+if (!glosaColumns.has('recovery_notes')) db.exec('ALTER TABLE glosas ADD COLUMN recovery_notes TEXT');
+if (!glosaColumns.has('recovered_by')) db.exec('ALTER TABLE glosas ADD COLUMN recovered_by TEXT REFERENCES users(id)');
+if (!glosaColumns.has('recovery_recorded_at')) db.exec('ALTER TABLE glosas ADD COLUMN recovery_recorded_at TEXT');
 const batchColumns = new Set(db.prepare('PRAGMA table_info(billing_batches)').all().map(column => column.name));
 if (!batchColumns.has('xml_valid')) db.exec('ALTER TABLE billing_batches ADD COLUMN xml_valid INTEGER NOT NULL DEFAULT 0');
 if (!batchColumns.has('xml_validation_errors')) db.exec("ALTER TABLE billing_batches ADD COLUMN xml_validation_errors TEXT NOT NULL DEFAULT '[]'");
@@ -516,6 +544,10 @@ if (!batchColumns.has('sent_package_id')) db.exec('ALTER TABLE billing_batches A
 if (!batchColumns.has('sent_by')) db.exec('ALTER TABLE billing_batches ADD COLUMN sent_by TEXT REFERENCES users(id)');
 const batchGuideColumns = new Set(db.prepare('PRAGMA table_info(billing_batch_guides)').all().map(column => column.name));
 if (!batchGuideColumns.has('signed_document_id')) db.exec('ALTER TABLE billing_batch_guides ADD COLUMN signed_document_id TEXT REFERENCES patient_documents(id)');
+const batchPaymentColumns = new Set(db.prepare('PRAGMA table_info(billing_batch_payments)').all().map(column => column.name));
+if (!batchPaymentColumns.has('reversed_at')) db.exec('ALTER TABLE billing_batch_payments ADD COLUMN reversed_at TEXT');
+if (!batchPaymentColumns.has('reversed_by')) db.exec('ALTER TABLE billing_batch_payments ADD COLUMN reversed_by TEXT REFERENCES users(id)');
+if (!batchPaymentColumns.has('reversal_reason')) db.exec('ALTER TABLE billing_batch_payments ADD COLUMN reversal_reason TEXT');
 const appointmentColumns = new Set(db.prepare('PRAGMA table_info(appointments)').all().map(column => column.name));
 if (!appointmentColumns.has('authorization_id')) db.exec('ALTER TABLE appointments ADD COLUMN authorization_id TEXT REFERENCES authorizations(id)');
 if (!appointmentColumns.has('authorization_counted')) db.exec('ALTER TABLE appointments ADD COLUMN authorization_counted INTEGER NOT NULL DEFAULT 0');

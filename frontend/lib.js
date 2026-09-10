@@ -191,8 +191,46 @@ function batchFollowupAlertItems(batches, today = new Date()) {
   });
 }
 
+function batchPaymentAlertItems(batches, today = new Date()) {
+  const referenceDate = new Date(today); referenceDate.setHours(0, 0, 0, 0);
+  return (batches || []).flatMap(batch => {
+    if (!batch.expectedPaymentDate || !['sent', 'processing', 'approved', 'error'].includes(batch.status)) return [];
+    const total = Number(batch.totalValueCents || Math.round(Number(batch.totalValue || 0) * 100));
+    const received = Number(batch.receivedCents || 0);
+    if (total > 0 && received >= total) return [];
+    const dueDate = new Date(`${batch.expectedPaymentDate}T12:00:00`); dueDate.setHours(0, 0, 0, 0);
+    if (Number.isNaN(dueDate.getTime())) return [];
+    const days = Math.ceil((dueDate - referenceDate) / 86400000);
+    if (days > 5) return [];
+    const remaining = Math.max(0, total - received) / 100;
+    const amount = remaining.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+    if (days < 0) return [{ level: 'critical', title: `Pagamento atrasado · lote ${batch.id}`, detail: `${batch.insurer} · ${amount} pendente há ${Math.abs(days)} dia(s).`, view: 'batches', targetId: batch.id }];
+    return [{ level: received > 0 ? 'warning' : 'info', title: days === 0 ? `Pagamento previsto para hoje · lote ${batch.id}` : `Pagamento previsto em ${days} dia(s) · lote ${batch.id}`, detail: `${batch.insurer} · ${amount} ainda pendente${received > 0 ? ' após pagamento parcial' : ''}.`, view: 'batches', targetId: batch.id }];
+  });
+}
+
+function batchReceivablesSummary(batches, today = new Date()) {
+  const referenceDate = new Date(today); referenceDate.setHours(0, 0, 0, 0);
+  const items = (batches || []).filter(batch => ['sent', 'processing', 'approved', 'error'].includes(batch.status)).map(batch => {
+    const totalCents = Number(batch.totalValueCents || Math.round(Number(batch.totalValue || 0) * 100));
+    const receivedCents = Number(batch.receivedCents || 0), pendingCents = Math.max(0, totalCents - receivedCents);
+    const dueDate = batch.expectedPaymentDate ? new Date(`${batch.expectedPaymentDate}T12:00:00`) : null;
+    if (dueDate) dueDate.setHours(0, 0, 0, 0);
+    const days = dueDate && !Number.isNaN(dueDate.getTime()) ? Math.ceil((dueDate - referenceDate) / 86400000) : null;
+    const state = pendingCents === 0 ? 'paid' : days !== null && days < 0 ? 'overdue' : days !== null && days <= 5 ? 'upcoming' : receivedCents > 0 ? 'partial' : 'pending';
+    return { ...batch, totalCents, receivedCents, pendingCents, days, state };
+  });
+  return {
+    items,
+    pendingCents: items.reduce((sum, item) => sum + item.pendingCents, 0),
+    overdueCents: items.filter(item => item.state === 'overdue').reduce((sum, item) => sum + item.pendingCents, 0),
+    upcomingCents: items.filter(item => item.state === 'upcoming').reduce((sum, item) => sum + item.pendingCents, 0),
+    partialCents: items.filter(item => item.pendingCents > 0 && item.receivedCents > 0).reduce((sum, item) => sum + item.pendingCents, 0)
+  };
+}
+
 // Disponibiliza as funções tanto para <script> no navegador (globais em
 // `window`) quanto para `require()` em testes Node — sem precisar de bundler.
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { nextSequentialId, timeToMinutes, hasScheduleConflictWith, escapeXml, findSessionOutsidePlanValidity, exceedsAuthorizedQuantity, findCidIncompatibility, filterGuides, filterPatients, filterPatientsByStatus, paginateItems, filterInsurers, filterFeedbacks, isActivePatient, planValidityAlertItems, consentAlertItems, clinicOnboardingChecklist, batchFollowupAlertItems };
+  module.exports = { nextSequentialId, timeToMinutes, hasScheduleConflictWith, escapeXml, findSessionOutsidePlanValidity, exceedsAuthorizedQuantity, findCidIncompatibility, filterGuides, filterPatients, filterPatientsByStatus, paginateItems, filterInsurers, filterFeedbacks, isActivePatient, planValidityAlertItems, consentAlertItems, clinicOnboardingChecklist, batchFollowupAlertItems, batchPaymentAlertItems, batchReceivablesSummary };
 }

@@ -180,6 +180,7 @@ function generateBatchAuditPDF(clinic, batch, res) {
   const guideRows = (batch.guides || []).map(guide => [guide.id, guide.patient, guide.procedure, money(guide.valueCents), guide.signedDocumentId ? 'Sim' : 'Não']);
   const contactRows = (batch.followups || []).map(item => [ptDate(item.contactDate), item.channel, item.outcome, item.nextFollowupDate ? ptDate(item.nextFollowupDate) : '-']);
   const returnRows = (batch.returnItems || []).map(item => [item.guideId, money(item.releasedCents), money(item.glosaCents), item.glosaCode || '-']);
+  const paymentRows = (batch.payments || []).map(item => [ptDate(item.paymentDate), money(item.amountCents), item.reference || '-', item.reversedAt ? `ESTORNADO por ${item.reversedBy || '-'}: ${item.reversalReason || '-'}` : item.createdBy || '-']);
   const officialPackage = (batch.deliveryPackages || []).find(item => item.id === batch.sentPackageId);
   const definition = {
     pageSize: 'A4', pageMargins: [42, hasLetterhead ? headerSpace + 24 : 44, 42, hasLetterhead ? footerSpace : 44],
@@ -200,6 +201,7 @@ function generateBatchAuditPDF(clinic, batch, res) {
       { text: 'RETORNO E CONCILIAÇÃO', bold: true, color: '#173d30', margin: [0, 0, 0, 6] },
       ...(returnRows.length ? [{ table: { headerRows: 1, widths: ['*', 75, 75, 70], body: [['Guia', 'Liberado', 'Glosado', 'Código'], ...returnRows] }, layout: 'lightHorizontalLines', margin: [0, 0, 0, 10] }] : [{ text: 'Nenhum retorno detalhado recebido.', color: '#718078', margin: [0, 0, 0, 10] }]),
       { columns: [{ text: `Total faturado\n${money(batch.totalValueCents)}`, bold: true }, { text: `Total recebido\n${money(batch.receivedCents)}`, bold: true }, { text: `Diferença\n${money(Math.max(0, Number(batch.totalValueCents || 0) - Number(batch.receivedCents || 0)))}`, bold: true }], columnGap: 12, margin: [0, 4, 0, 16] },
+      ...(paymentRows.length ? [{ text: 'HISTÓRICO DE CRÉDITOS', bold: true, color: '#173d30', margin: [0, 0, 0, 6] }, { table: { headerRows: 1, widths: [70, 80, '*', 100], body: [['Data', 'Valor', 'Referência', 'Responsável / situação'], ...paymentRows] }, layout: 'lightHorizontalLines', margin: [0, 0, 0, 15] }] : []),
       { text: `Documento gerado em ${new Date().toLocaleString('pt-BR')}. Os arquivos originais permanecem preservados no lote.`, fontSize: 7, color: '#718078' }
     ],
     info: { title: `Dossiê de faturamento ${batch.id}`, author: clinic.tradeName || clinic.legalName || clinic.name }

@@ -24,6 +24,7 @@ function backupSummary(backup) {
     billingBatchReturnItems: count('billingBatchReturnItems'),
     billingDeliveryPackages: count('billingDeliveryPackages'),
     billingBatchFollowups: count('billingBatchFollowups'),
+    billingBatchPayments: count('billingBatchPayments'),
     appointments: count('appointments'), insurers: count('insurers'), privacyRequests: count('privacyRequests')
   };
 }

@@ -109,6 +109,7 @@ db.exec(`
     delivery_format TEXT NOT NULL DEFAULT 'both' CHECK (delivery_format IN ('pdf', 'xml', 'both')),
     return_alert_days INTEGER NOT NULL DEFAULT 7,
     return_critical_days INTEGER NOT NULL DEFAULT 15,
+    glosa_alert_rate INTEGER NOT NULL DEFAULT 10,
     accepted_procedures TEXT NOT NULL DEFAULT '[]',
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(clinic_id, name)
@@ -219,6 +220,9 @@ db.exec(`
     received_cents INTEGER NOT NULL DEFAULT 0,
     received_at TEXT,
     reconciliation_notes TEXT,
+    risk_reviewed_at TEXT,
+    risk_reviewed_by TEXT REFERENCES users(id),
+    risk_review_summary TEXT NOT NULL DEFAULT '[]',
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(clinic_id, insurer_id, competence)
   );
@@ -254,6 +258,16 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
   CREATE INDEX IF NOT EXISTS idx_batch_status_history ON billing_batch_status_history(clinic_id, batch_id, created_at DESC);
+  CREATE TABLE IF NOT EXISTS billing_batch_risk_reviews (
+    id TEXT PRIMARY KEY,
+    clinic_id TEXT NOT NULL REFERENCES clinics(id),
+    batch_id TEXT NOT NULL REFERENCES billing_batches(id) ON DELETE CASCADE,
+    review_stage TEXT NOT NULL CHECK (review_stage IN ('creation', 'before-sending')),
+    risks_json TEXT NOT NULL DEFAULT '[]',
+    reviewed_by TEXT NOT NULL REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE INDEX IF NOT EXISTS idx_batch_risk_reviews ON billing_batch_risk_reviews(clinic_id, batch_id, created_at DESC);
   CREATE TABLE IF NOT EXISTS billing_batch_return_items (
     id TEXT PRIMARY KEY,
     clinic_id TEXT NOT NULL REFERENCES clinics(id),
@@ -525,6 +539,7 @@ if (!insurerColumns.has('delivery_format')) db.exec("ALTER TABLE insurers ADD CO
 if (!insurerColumns.has('provider_code')) db.exec('ALTER TABLE insurers ADD COLUMN provider_code TEXT');
 if (!insurerColumns.has('return_alert_days')) db.exec('ALTER TABLE insurers ADD COLUMN return_alert_days INTEGER NOT NULL DEFAULT 7');
 if (!insurerColumns.has('return_critical_days')) db.exec('ALTER TABLE insurers ADD COLUMN return_critical_days INTEGER NOT NULL DEFAULT 15');
+if (!insurerColumns.has('glosa_alert_rate')) db.exec('ALTER TABLE insurers ADD COLUMN glosa_alert_rate INTEGER NOT NULL DEFAULT 10');
 const glosaColumns = new Set(db.prepare('PRAGMA table_info(glosas)').all().map(column => column.name));
 if (!glosaColumns.has('recovered_cents')) db.exec('ALTER TABLE glosas ADD COLUMN recovered_cents INTEGER');
 if (!glosaColumns.has('recovered_date')) db.exec('ALTER TABLE glosas ADD COLUMN recovered_date TEXT');
@@ -540,6 +555,9 @@ if (!batchColumns.has('expected_payment_date')) db.exec('ALTER TABLE billing_bat
 if (!batchColumns.has('received_cents')) db.exec('ALTER TABLE billing_batches ADD COLUMN received_cents INTEGER NOT NULL DEFAULT 0');
 if (!batchColumns.has('received_at')) db.exec('ALTER TABLE billing_batches ADD COLUMN received_at TEXT');
 if (!batchColumns.has('reconciliation_notes')) db.exec('ALTER TABLE billing_batches ADD COLUMN reconciliation_notes TEXT');
+if (!batchColumns.has('risk_reviewed_at')) db.exec('ALTER TABLE billing_batches ADD COLUMN risk_reviewed_at TEXT');
+if (!batchColumns.has('risk_reviewed_by')) db.exec('ALTER TABLE billing_batches ADD COLUMN risk_reviewed_by TEXT REFERENCES users(id)');
+if (!batchColumns.has('risk_review_summary')) db.exec("ALTER TABLE billing_batches ADD COLUMN risk_review_summary TEXT NOT NULL DEFAULT '[]'");
 if (!batchColumns.has('sent_package_id')) db.exec('ALTER TABLE billing_batches ADD COLUMN sent_package_id TEXT');
 if (!batchColumns.has('sent_by')) db.exec('ALTER TABLE billing_batches ADD COLUMN sent_by TEXT REFERENCES users(id)');
 const batchGuideColumns = new Set(db.prepare('PRAGMA table_info(billing_batch_guides)').all().map(column => column.name));

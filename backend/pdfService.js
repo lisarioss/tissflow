@@ -181,6 +181,9 @@ function generateBatchAuditPDF(clinic, batch, res) {
   const contactRows = (batch.followups || []).map(item => [ptDate(item.contactDate), item.channel, item.outcome, item.nextFollowupDate ? ptDate(item.nextFollowupDate) : '-']);
   const returnRows = (batch.returnItems || []).map(item => [item.guideId, money(item.releasedCents), money(item.glosaCents), item.glosaCode || '-']);
   const paymentRows = (batch.payments || []).map(item => [ptDate(item.paymentDate), money(item.amountCents), item.reference || '-', item.reversedAt ? `ESTORNADO por ${item.reversedBy || '-'}: ${item.reversalReason || '-'}` : item.createdBy || '-']);
+  const riskReviewRows = (batch.riskReviews || []).map(review => [review.reviewStage === 'creation' ? 'Criação do lote' : 'Antes do envio', review.reviewedBy || '-', new Date(`${review.createdAt.replace(' ', 'T')}Z`).toLocaleString('pt-BR'), (review.risks || []).join('\n') || 'Nenhum risco']);
+  let reviewedRisks = [];
+  try { reviewedRisks = JSON.parse(batch.riskReviewSummary || '[]'); } catch {}
   const officialPackage = (batch.deliveryPackages || []).find(item => item.id === batch.sentPackageId);
   const definition = {
     pageSize: 'A4', pageMargins: [42, hasLetterhead ? headerSpace + 24 : 44, 42, hasLetterhead ? footerSpace : 44],
@@ -192,6 +195,8 @@ function generateBatchAuditPDF(clinic, batch, res) {
       { text: 'DOSSIÊ DE FATURAMENTO TISS', bold: true, fontSize: 16, color: '#173d30', alignment: 'center' },
       { text: `${batch.id} · competência ${competenceLabel(batch.competence)}`, alignment: 'center', color: '#607168', margin: [0, 4, 0, 18] },
       { table: { widths: ['*', '*'], body: [[field('OPERADORA', batch.insurer), field('STATUS', batch.status)], [field('PROTOCOLO', batch.protocol || 'Não informado'), field('ENVIADO EM', batch.sentAt ? new Date(`${batch.sentAt.replace(' ', 'T')}Z`).toLocaleString('pt-BR') : 'Não enviado')], [field('REMESSA OFICIAL', batch.sentPackageId || 'Não vinculada'), field('RESPONSÁVEL PELO ENVIO', batch.sentBy || 'Não informado')]] }, layout: rule, margin: [0, 0, 0, 15] },
+      ...(batch.riskReviewedAt ? [{ text: `PRÉ-AUDITORIA: riscos históricos revisados por ${batch.riskReviewedBy || 'usuário identificado'} em ${new Date(batch.riskReviewedAt).toLocaleString('pt-BR')}.`, bold: true, color: '#167c5a', margin: [0, 0, 0, reviewedRisks.length ? 4 : 15] }, ...(reviewedRisks.length ? [{ ul: reviewedRisks, color: '#40544b', margin: [12, 0, 0, 15] }] : [])] : []),
+      ...(riskReviewRows.length ? [{ text: 'HISTÓRICO DA PRÉ-AUDITORIA', bold: true, color: '#173d30', margin: [0, 0, 0, 6] }, { table: { headerRows: 1, widths: [70, 85, 90, '*'], body: [['Etapa', 'Responsável', 'Data', 'Riscos revisados'], ...riskReviewRows] }, layout: 'lightHorizontalLines', margin: [0, 0, 0, 15] }] : []),
       { text: 'GUIAS DO LOTE', bold: true, color: '#173d30', margin: [0, 0, 0, 6] },
       { table: { headerRows: 1, widths: [60, '*', '*', 65, 48], body: [['Guia', 'Paciente', 'Procedimento', 'Valor', 'PDF assinado'], ...guideRows] }, layout: 'lightHorizontalLines', margin: [0, 0, 0, 15] },
       { text: 'INTEGRIDADE DA REMESSA', bold: true, color: '#173d30', margin: [0, 0, 0, 6] },

@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { prepareRestorePlan, recoveryPointBelongsToClinic, recoveryPointsToRemove, recoveryPointName, hasDailyRecoveryPoint, backupHealth, latestRecoveryPointName } = require('./backupRestoreService');
 
 test('prepareRestorePlan força a clínica atual e preserva contas de acesso atuais', () => {
-  const backup = { data: { patients: [{ id: 'P-1', clinic_id: 'outra', name: 'Ana' }], glosas: [{ id: 'GL-1', clinic_id: 'outra', recovered_by: 'antigo' }], patientDocuments: [{ id: 'D-1', clinic_id: 'outra', uploaded_by: 'antigo', content_base64: 'abc' }], billingDeliveryPackages: [{ id: 'PKG-1', clinic_id: 'outra', created_by: 'antigo', content_base64: 'zip' }], billingBatchFollowups: [{ id: 'BC-1', clinic_id: 'outra', created_by: 'antigo' }], billingBatchPayments: [{ id: 'BP-1', clinic_id: 'outra', created_by: 'antigo', reversed_by: 'outro-antigo' }] } };
+  const backup = { data: { patients: [{ id: 'P-1', clinic_id: 'outra', name: 'Ana' }], glosas: [{ id: 'GL-1', clinic_id: 'outra', recovered_by: 'antigo' }], billingBatches: [{ id: 'L-1', clinic_id: 'outra', risk_reviewed_by: 'antigo' }], billingBatchRiskReviews: [{ id: 'RR-1', clinic_id: 'outra', batch_id: 'L-1', reviewed_by: 'antigo' }], patientDocuments: [{ id: 'D-1', clinic_id: 'outra', uploaded_by: 'antigo', content_base64: 'abc' }], billingDeliveryPackages: [{ id: 'PKG-1', clinic_id: 'outra', created_by: 'antigo', content_base64: 'zip' }], billingBatchFollowups: [{ id: 'BC-1', clinic_id: 'outra', created_by: 'antigo' }], billingBatchPayments: [{ id: 'BP-1', clinic_id: 'outra', created_by: 'antigo', reversed_by: 'outro-antigo' }] } };
   const plan = prepareRestorePlan(backup, 'sabia', 'admin-atual');
   assert.equal(plan.find(item => item.table === 'patients').rows[0].clinic_id, 'sabia');
   const document = plan.find(item => item.table === 'patient_documents').rows[0];
@@ -18,6 +18,8 @@ test('prepareRestorePlan força a clínica atual e preserva contas de acesso atu
   assert.equal(payment.created_by, 'admin-atual');
   assert.equal(payment.reversed_by, 'admin-atual');
   assert.equal(plan.find(item => item.table === 'glosas').rows[0].recovered_by, 'admin-atual');
+  assert.equal(plan.find(item => item.table === 'billing_batches').rows[0].risk_reviewed_by, 'admin-atual');
+  assert.equal(plan.find(item => item.table === 'billing_batch_risk_reviews').rows[0].reviewed_by, 'admin-atual');
 });
 
 test('recoveryPointBelongsToClinic bloqueia outra clínica e tentativa de caminho', () => {

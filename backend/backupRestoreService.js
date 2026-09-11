@@ -3,6 +3,7 @@ const restoreCollections = [
   ['authorizations', 'authorizations'], ['billing_batches', 'billingBatches'], ['invoices', 'invoices'], ['glosas', 'glosas'],
   ['feedbacks', 'feedbacks'], ['patient_documents', 'patientDocuments'], ['billing_batch_guides', 'billingBatchGuides'],
   ['billing_batch_documents', 'billingBatchDocuments'], ['billing_batch_status_history', 'billingBatchStatusHistory'],
+  ['billing_batch_risk_reviews', 'billingBatchRiskReviews'],
   ['billing_batch_return_items', 'billingBatchReturnItems'], ['billing_delivery_packages', 'billingDeliveryPackages'], ['billing_batch_followups', 'billingBatchFollowups'], ['billing_batch_payments', 'billingBatchPayments'],
   ['patient_consents', 'patientConsents'], ['privacy_requests', 'privacyRequests'], ['appointments', 'appointments']
 ];
@@ -20,7 +21,7 @@ function prepareRestorePlan(backup, clinicId, currentUserId) {
       const row = { ...source };
       delete row.content_base64;
       if ('clinic_id' in row || table !== 'billing_batch_guides') row.clinic_id = clinicId;
-      if (table === 'billing_batches' && row.sent_by) row.sent_by = currentUserId;
+      if (table === 'billing_batches') { if (row.sent_by) row.sent_by = currentUserId; if (row.risk_reviewed_by) row.risk_reviewed_by = currentUserId; }
       if (table === 'glosas' && row.recovered_by) row.recovered_by = currentUserId;
       if (table === 'patient_documents' && row.uploaded_by) row.uploaded_by = currentUserId;
       if (table === 'billing_batch_documents' && row.uploaded_by) row.uploaded_by = currentUserId;
@@ -28,6 +29,7 @@ function prepareRestorePlan(backup, clinicId, currentUserId) {
       if (table === 'billing_batch_followups' && row.created_by) row.created_by = currentUserId;
       if (table === 'billing_batch_payments') { if (row.created_by) row.created_by = currentUserId; if (row.reversed_by) row.reversed_by = currentUserId; }
       if (table === 'billing_batch_status_history' && row.changed_by) row.changed_by = currentUserId;
+      if (table === 'billing_batch_risk_reviews' && row.reviewed_by) row.reviewed_by = currentUserId;
       if (table === 'patient_consents' && row.recorded_by) row.recorded_by = currentUserId;
       if (table === 'privacy_requests') { if (row.created_by) row.created_by = currentUserId; if (row.resolved_by) row.resolved_by = currentUserId; }
       if (table === 'appointments' && row.created_by) row.created_by = currentUserId;

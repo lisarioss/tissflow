@@ -36,6 +36,7 @@ const { asaasConfig, secureTokenMatches, subscriptionStatusForAsaasEvent, extern
 const { commercialMetrics, commercialCsv } = require('./platformCommercialService');
 const { createPasswordReset, hashResetToken, resetTokenIsValid } = require('./passwordResetService');
 const { launchReadiness } = require('./launchReadinessService');
+const { batchRiskReasons, riskReviewIsCurrent } = require('./batchRiskService');
 
 const app = express();
 const port = runtimeConfig.port;
@@ -716,7 +717,7 @@ function buildClinicBackup(clinicId) {
     clinicSettings: db.prepare('SELECT * FROM clinic_settings WHERE clinic_id = ?').get(clinicId) || null,
     users, patients: byClinic('patients'), guides: byClinic('guides'), insurers: byClinic('insurers'), invoices: byClinic('invoices'),
     glosas: byClinic('glosas'), authorizations: byClinic('authorizations'), billingBatches: byClinic('billing_batches'),
-    billingBatchGuides: batchGuides, billingBatchDocuments: batchDocuments, billingBatchStatusHistory: batchStatusHistory, billingBatchReturnItems: batchReturnItems, billingDeliveryPackages: deliveryPackages, billingBatchFollowups: byClinic('billing_batch_followups'), billingBatchPayments: byClinic('billing_batch_payments'), feedbacks: byClinic('feedbacks'), patientDocuments: documents,
+    billingBatchGuides: batchGuides, billingBatchDocuments: batchDocuments, billingBatchStatusHistory: batchStatusHistory, billingBatchRiskReviews: byClinic('billing_batch_risk_reviews'), billingBatchReturnItems: batchReturnItems, billingDeliveryPackages: deliveryPackages, billingBatchFollowups: byClinic('billing_batch_followups'), billingBatchPayments: byClinic('billing_batch_payments'), feedbacks: byClinic('feedbacks'), patientDocuments: documents,
     patientConsents: byClinic('patient_consents'), privacyRequests, appointments: byClinic('appointments'), auditLogs: byClinic('audit_logs')
   } });
 }
@@ -769,7 +770,7 @@ app.get('/api/backup', auth, requireRole('admin'), (req, res) => {
       clinicSettings: db.prepare('SELECT * FROM clinic_settings WHERE clinic_id = ?').get(clinicId) || null,
       users, patients: byClinic('patients'), guides: byClinic('guides'), insurers: byClinic('insurers'),
       invoices: byClinic('invoices'), glosas: byClinic('glosas'), authorizations: byClinic('authorizations'),
-      billingBatches: byClinic('billing_batches'), billingBatchGuides: batchGuides, billingBatchDocuments: batchDocuments, billingBatchStatusHistory: batchStatusHistory, billingBatchReturnItems: batchReturnItems, billingDeliveryPackages: deliveryPackages, billingBatchFollowups: byClinic('billing_batch_followups'), billingBatchPayments: byClinic('billing_batch_payments'), feedbacks: byClinic('feedbacks'),
+      billingBatches: byClinic('billing_batches'), billingBatchGuides: batchGuides, billingBatchDocuments: batchDocuments, billingBatchStatusHistory: batchStatusHistory, billingBatchRiskReviews: byClinic('billing_batch_risk_reviews'), billingBatchReturnItems: batchReturnItems, billingDeliveryPackages: deliveryPackages, billingBatchFollowups: byClinic('billing_batch_followups'), billingBatchPayments: byClinic('billing_batch_payments'), feedbacks: byClinic('feedbacks'),
       patientDocuments: documents, patientConsents: byClinic('patient_consents'), privacyRequests, appointments: byClinic('appointments'), auditLogs: byClinic('audit_logs')
     }
   });
@@ -936,8 +937,8 @@ app.get('/api/reports/:type.csv', auth, requireRole('admin', 'faturamento'), (re
     }));
   }
   if (req.params.type === 'glosas') {
-    const rows = db.prepare(`SELECT glosas.id, glosas.guide_id, guides.patient, guides.competence, glosas.code, glosas.reason, glosas.amount_cents, glosas.status, glosas.justification, glosas.created_at, glosas.resolved_at FROM glosas JOIN guides ON guides.id = glosas.guide_id AND guides.clinic_id = glosas.clinic_id WHERE glosas.clinic_id = ?${competence ? ' AND guides.competence = ?' : ''} ORDER BY glosas.created_at DESC`).all(...params);
-    return sendCsvReport(req, res, 'glosas', ['Glosa', 'Guia', 'Paciente', 'Competência', 'Código', 'Motivo', 'Valor', 'Status', 'Justificativa', 'Criada em', 'Resolvida em'], rows.map(row => [row.id, row.guide_id, row.patient, row.competence, row.code, row.reason, (row.amount_cents / 100).toFixed(2).replace('.', ','), row.status, row.justification, row.created_at, row.resolved_at]));
+    const rows = db.prepare(`SELECT glosas.id, glosas.guide_id, guides.patient, guides.competence, glosas.code, glosas.reason, glosas.amount_cents, glosas.status, glosas.justification, glosas.created_at, glosas.resolved_at, glosas.recovered_cents, glosas.recovered_date, glosas.recovery_reference, glosas.recovery_notes, users.name AS recovered_by FROM glosas JOIN guides ON guides.id = glosas.guide_id AND guides.clinic_id = glosas.clinic_id LEFT JOIN users ON users.id = glosas.recovered_by WHERE glosas.clinic_id = ?${competence ? ' AND guides.competence = ?' : ''} ORDER BY glosas.created_at DESC`).all(...params);
+    return sendCsvReport(req, res, 'glosas', ['Glosa', 'Guia', 'Paciente', 'Competência', 'Código', 'Motivo', 'Valor glosado', 'Status', 'Justificativa', 'Criada em', 'Resolvida em', 'Valor recuperado', 'Data do crédito', 'Referência', 'Registrado por', 'Observações da recuperação'], rows.map(row => [row.id, row.guide_id, row.patient, row.competence, row.code, row.reason, (row.amount_cents / 100).toFixed(2).replace('.', ','), row.status, row.justification, row.created_at, row.resolved_at, row.recovered_cents === null ? '' : (row.recovered_cents / 100).toFixed(2).replace('.', ','), row.recovered_date, row.recovery_reference, row.recovered_by, row.recovery_notes]));
   }
   if (req.params.type === 'authorizations') {
     const rows = db.prepare(`SELECT authorizations.id, patients.name AS patient, insurers.name AS insurer, authorizations.authorization_number, authorizations.valid_from, authorizations.valid_to, authorizations.authorized_quantity, authorizations.used_quantity, authorizations.notes, authorizations.created_at FROM authorizations JOIN patients ON patients.id = authorizations.patient_id AND patients.clinic_id = authorizations.clinic_id JOIN insurers ON insurers.id = authorizations.insurer_id AND insurers.clinic_id = authorizations.clinic_id WHERE authorizations.clinic_id = ?${competence ? " AND substr(authorizations.valid_from, 1, 7) <= ? AND substr(authorizations.valid_to, 1, 7) >= ?" : ''} ORDER BY authorizations.valid_to`).all(...(competence ? [clinicId, competence, competence] : [clinicId]));
@@ -1139,7 +1140,7 @@ app.delete('/api/invoices/:id', auth, requireRole('admin', 'faturamento'), (req,
 });
 
 app.get('/api/insurers', auth, (req, res) => {
-  const insurers = db.prepare('SELECT id, name, ans_code AS ansCode, contact_email AS contactEmail, contact_phone AS contactPhone, provider_code AS providerCode, delivery_format AS deliveryFormat, return_alert_days AS returnAlertDays, return_critical_days AS returnCriticalDays, accepted_procedures AS acceptedProcedures, procedure_rules AS procedureRules FROM insurers WHERE clinic_id = ? ORDER BY name').all(req.session.clinicId);
+  const insurers = db.prepare('SELECT id, name, ans_code AS ansCode, contact_email AS contactEmail, contact_phone AS contactPhone, provider_code AS providerCode, delivery_format AS deliveryFormat, return_alert_days AS returnAlertDays, return_critical_days AS returnCriticalDays, glosa_alert_rate AS glosaAlertRate, accepted_procedures AS acceptedProcedures, procedure_rules AS procedureRules FROM insurers WHERE clinic_id = ? ORDER BY name').all(req.session.clinicId);
   res.json(insurers.map(insurer => ({ ...insurer, acceptedProcedures: JSON.parse(insurer.acceptedProcedures || '[]'), procedureRules: JSON.parse(insurer.procedureRules || '[]') })));
 });
 
@@ -1402,18 +1403,20 @@ function unknownProcedureCodes(rules) {
 }
 
 app.post('/api/insurers', auth, requireRole('admin'), (req, res) => {
-  const { id, name, ansCode, contactEmail, contactPhone, providerCode, deliveryFormat = 'both', returnAlertDays = 7, returnCriticalDays = 15, acceptedProcedures = [], procedureRules = [] } = req.body;
+  const { id, name, ansCode, contactEmail, contactPhone, providerCode, deliveryFormat = 'both', returnAlertDays = 7, returnCriticalDays = 15, glosaAlertRate = 10, acceptedProcedures = [], procedureRules = [] } = req.body;
   if (!id || !name) return res.status(400).json({ error: 'Nome e identificador são obrigatórios.' });
   if (providerCode && String(providerCode).length > 14) return res.status(400).json({ error: 'O código do prestador pode ter no máximo 14 caracteres.' });
   if (!['pdf', 'xml', 'both'].includes(deliveryFormat)) return res.status(400).json({ error: 'Forma de envio inválida.' });
   const alertDays = Number(returnAlertDays), criticalDays = Number(returnCriticalDays);
   if (!Number.isInteger(alertDays) || alertDays < 1 || alertDays > 90 || !Number.isInteger(criticalDays) || criticalDays <= alertDays || criticalDays > 180) return res.status(400).json({ error: 'Defina o primeiro alerta entre 1 e 90 dias e a urgência em um prazo posterior, de até 180 dias.' });
+  const alertRate = Number(glosaAlertRate);
+  if (!Number.isInteger(alertRate) || alertRate < 1 || alertRate > 100) return res.status(400).json({ error: 'A taxa de alerta de glosa deve ficar entre 1% e 100%.' });
   try {
     const rules = normalizeProcedureRules(procedureRules);
     if (rules.some(rule => rule.validFrom && rule.validTo && rule.validFrom > rule.validTo)) return res.status(400).json({ error: 'A data final da vigência não pode ser anterior à data inicial.' });
     const unknownCodes = unknownProcedureCodes(rules);
     if (unknownCodes.length) return res.status(400).json({ error: `Código TUSS não encontrado na versão oficial: ${unknownCodes.join(', ')}.` });
-    db.prepare('INSERT INTO insurers (id, clinic_id, name, ans_code, contact_email, contact_phone, provider_code, delivery_format, return_alert_days, return_critical_days, accepted_procedures, procedure_rules) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, req.session.clinicId, name, ansCode || null, contactEmail || null, contactPhone || null, providerCode || null, deliveryFormat, alertDays, criticalDays, JSON.stringify(rules.length ? [...new Set(rules.map(rule => rule.code))] : acceptedProcedures), JSON.stringify(rules));
+    db.prepare('INSERT INTO insurers (id, clinic_id, name, ans_code, contact_email, contact_phone, provider_code, delivery_format, return_alert_days, return_critical_days, glosa_alert_rate, accepted_procedures, procedure_rules) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, req.session.clinicId, name, ansCode || null, contactEmail || null, contactPhone || null, providerCode || null, deliveryFormat, alertDays, criticalDays, alertRate, JSON.stringify(rules.length ? [...new Set(rules.map(rule => rule.code))] : acceptedProcedures), JSON.stringify(rules));
     res.status(201).json({ id });
   } catch (error) {
     res.status(409).json({ error: error.message });
@@ -1421,19 +1424,21 @@ app.post('/api/insurers', auth, requireRole('admin'), (req, res) => {
 });
 
 app.put('/api/insurers/:id', auth, requireRole('admin'), (req, res) => {
-  const { name, ansCode, contactEmail, contactPhone, providerCode, deliveryFormat = 'both', returnAlertDays = 7, returnCriticalDays = 15, acceptedProcedures = [], procedureRules = [] } = req.body;
+  const { name, ansCode, contactEmail, contactPhone, providerCode, deliveryFormat = 'both', returnAlertDays = 7, returnCriticalDays = 15, glosaAlertRate = 10, acceptedProcedures = [], procedureRules = [] } = req.body;
   if (!name) return res.status(400).json({ error: 'Nome é obrigatório.' });
   if (providerCode && String(providerCode).length > 14) return res.status(400).json({ error: 'O código do prestador pode ter no máximo 14 caracteres.' });
   if (!['pdf', 'xml', 'both'].includes(deliveryFormat)) return res.status(400).json({ error: 'Forma de envio inválida.' });
   const alertDays = Number(returnAlertDays), criticalDays = Number(returnCriticalDays);
   if (!Number.isInteger(alertDays) || alertDays < 1 || alertDays > 90 || !Number.isInteger(criticalDays) || criticalDays <= alertDays || criticalDays > 180) return res.status(400).json({ error: 'Defina o primeiro alerta entre 1 e 90 dias e a urgência em um prazo posterior, de até 180 dias.' });
+  const alertRate = Number(glosaAlertRate);
+  if (!Number.isInteger(alertRate) || alertRate < 1 || alertRate > 100) return res.status(400).json({ error: 'A taxa de alerta de glosa deve ficar entre 1% e 100%.' });
   try {
     const rules = normalizeProcedureRules(procedureRules);
     if (rules.some(rule => rule.validFrom && rule.validTo && rule.validFrom > rule.validTo)) return res.status(400).json({ error: 'A data final da vigência não pode ser anterior à data inicial.' });
     const unknownCodes = unknownProcedureCodes(rules);
     if (unknownCodes.length) return res.status(400).json({ error: `Código TUSS não encontrado na versão oficial: ${unknownCodes.join(', ')}.` });
     const codes = rules.length ? [...new Set(rules.map(rule => rule.code))] : acceptedProcedures;
-    const result = db.prepare('UPDATE insurers SET name = ?, ans_code = ?, contact_email = ?, contact_phone = ?, provider_code = ?, delivery_format = ?, return_alert_days = ?, return_critical_days = ?, accepted_procedures = ?, procedure_rules = ? WHERE id = ? AND clinic_id = ?').run(name, ansCode || null, contactEmail || null, contactPhone || null, providerCode || null, deliveryFormat, alertDays, criticalDays, JSON.stringify(codes), JSON.stringify(rules), req.params.id, req.session.clinicId);
+    const result = db.prepare('UPDATE insurers SET name = ?, ans_code = ?, contact_email = ?, contact_phone = ?, provider_code = ?, delivery_format = ?, return_alert_days = ?, return_critical_days = ?, glosa_alert_rate = ?, accepted_procedures = ?, procedure_rules = ? WHERE id = ? AND clinic_id = ?').run(name, ansCode || null, contactEmail || null, contactPhone || null, providerCode || null, deliveryFormat, alertDays, criticalDays, alertRate, JSON.stringify(codes), JSON.stringify(rules), req.params.id, req.session.clinicId);
     if (!result.changes) return res.status(404).json({ error: 'Convênio não encontrado.' });
     res.json({ id: req.params.id });
   } catch (error) {
@@ -1513,6 +1518,12 @@ function batchDetails(batch) {
     FROM billing_batch_status_history JOIN users ON users.id = billing_batch_status_history.changed_by
     WHERE billing_batch_status_history.batch_id = ? AND billing_batch_status_history.clinic_id = ?
     ORDER BY billing_batch_status_history.created_at DESC, billing_batch_status_history.rowid DESC`).all(batch.id, batch.clinicId);
+  const riskReviews = db.prepare(`SELECT billing_batch_risk_reviews.id, billing_batch_risk_reviews.review_stage AS reviewStage,
+      billing_batch_risk_reviews.risks_json AS risksJson, billing_batch_risk_reviews.created_at AS createdAt,
+      users.name AS reviewedBy FROM billing_batch_risk_reviews JOIN users ON users.id = billing_batch_risk_reviews.reviewed_by
+    WHERE billing_batch_risk_reviews.batch_id = ? AND billing_batch_risk_reviews.clinic_id = ?
+    ORDER BY billing_batch_risk_reviews.created_at DESC, billing_batch_risk_reviews.rowid DESC`).all(batch.id, batch.clinicId)
+    .map(review => { try { return { ...review, risks: JSON.parse(review.risksJson || '[]') }; } catch { return { ...review, risks: [] }; } });
   const returnItems = db.prepare(`SELECT billing_batch_return_items.id, billing_batch_return_items.guide_id AS guideId,
       billing_batch_return_items.released_cents AS releasedCents, billing_batch_return_items.glosa_cents AS glosaCents,
       billing_batch_return_items.glosa_code AS glosaCode, billing_batch_return_items.created_at AS createdAt,
@@ -1540,6 +1551,10 @@ function batchDetails(batch) {
   const missingSignedPdfs = requiresPdf ? guides.filter(guide => !signedPdfRequirementMet(guide)).length : 0;
   const xmlPending = requiresXml && (!batch.xmlGenerated || !batch.xmlValid);
   const totalValueCents = guides.reduce((sum, guide) => sum + Number(guide.valueCents || 0), 0);
+  let currentRisks = [];
+  let reviewedRisks = [];
+  try { reviewedRisks = JSON.parse(batch.riskReviewSummary || '[]'); } catch {}
+  if (batch.insurerId && ['draft', 'ready'].includes(batch.status)) currentRisks = currentBatchRisks(batch.clinicId, { id: batch.insurerId, name: batch.insurer, glosaAlertRate: batch.glosaAlertRate }, guides);
   return {
     ...batch,
     guideCount: guides.length,
@@ -1551,14 +1566,32 @@ function batchDetails(batch) {
     xmlValid: Boolean(batch.xmlValid),
     xmlValidationErrors: Array.isArray(batch.xmlValidationErrors) ? batch.xmlValidationErrors : JSON.parse(batch.xmlValidationErrors || '[]'),
     readyForSending: guides.length > 0 && missingSignedPdfs === 0 && !xmlPending,
+    currentRisks,
+    riskReviewRequired: currentRisks.length > 0 && !riskReviewIsCurrent(reviewedRisks, currentRisks, batch.riskReviewedAt),
     documents,
     statusHistory,
+    riskReviews,
     returnItems,
     deliveryPackages,
     followups,
     payments,
     guides: guides.map(guide => ({ ...guide, signedPdfReceived: Boolean(guide.signedDocumentId) }))
   };
+}
+
+function currentBatchRisks(clinicId, insurer, selectedGuides) {
+  const billedCents = db.prepare(`SELECT COALESCE(SUM(guides.value_cents), 0) AS total
+    FROM billing_batch_guides JOIN billing_batches ON billing_batches.id = billing_batch_guides.batch_id
+    JOIN guides ON guides.id = billing_batch_guides.guide_id
+    WHERE billing_batches.clinic_id = ? AND billing_batches.insurer_id = ?
+      AND billing_batches.status IN ('sent', 'processing', 'approved', 'error')`).get(clinicId, insurer.id).total;
+  const glosaCents = db.prepare(`SELECT COALESCE(SUM(glosas.amount_cents), 0) AS total FROM glosas
+    JOIN guides ON guides.id = glosas.guide_id
+    WHERE glosas.clinic_id = ? AND guides.insurer = ?`).get(clinicId, insurer.name).total;
+  const selectedProcedures = [...new Set(selectedGuides.map(guide => guide.procedure).filter(Boolean))];
+  const procedureGlosaCounts = Object.fromEntries(selectedProcedures.map(procedure => [procedure, db.prepare(`SELECT COUNT(*) AS total FROM glosas
+    JOIN guides ON guides.id = glosas.guide_id WHERE glosas.clinic_id = ? AND guides.procedure = ?`).get(clinicId, procedure).total]));
+  return batchRiskReasons({ billedCents, glosaCents, threshold: insurer.glosaAlertRate, procedureGlosaCounts });
 }
 
 app.get('/api/batches', auth, requireRole('admin', 'faturamento'), (req, res) => {
@@ -1568,11 +1601,15 @@ app.get('/api/batches', auth, requireRole('admin', 'faturamento'), (req, res) =>
       billing_batches.sent_package_id AS sentPackageId,
       (SELECT users.name FROM users WHERE users.id = billing_batches.sent_by) AS sentBy,
       insurers.return_alert_days AS returnAlertDays, insurers.return_critical_days AS returnCriticalDays,
+      insurers.glosa_alert_rate AS glosaAlertRate,
       insurers.contact_email AS insurerContactEmail, insurers.contact_phone AS insurerContactPhone,
       billing_batches.xml_valid AS xmlValid, billing_batches.xml_validation_errors AS xmlValidationErrors,
       billing_batches.tiss_version AS tissVersion,
       billing_batches.expected_payment_date AS expectedPaymentDate, billing_batches.received_cents AS receivedCents,
       billing_batches.received_at AS receivedAt, billing_batches.reconciliation_notes AS reconciliationNotes,
+      billing_batches.risk_reviewed_at AS riskReviewedAt,
+      billing_batches.risk_review_summary AS riskReviewSummary,
+      (SELECT users.name FROM users WHERE users.id = billing_batches.risk_reviewed_by) AS riskReviewedBy,
       billing_batches.created_at AS createdAt
     FROM billing_batches
     JOIN insurers ON insurers.id = billing_batches.insurer_id
@@ -1582,31 +1619,37 @@ app.get('/api/batches', auth, requireRole('admin', 'faturamento'), (req, res) =>
 });
 
 app.post('/api/batches', auth, requireRole('admin', 'faturamento'), (req, res) => {
-  const { insurerId, competence, guideIds = [] } = req.body;
+  const { insurerId, competence, guideIds = [], riskAcknowledged = false } = req.body;
   if (!insurerId || !/^\d{4}-\d{2}$/.test(competence || '') || !Array.isArray(guideIds) || !guideIds.length) {
     return res.status(400).json({ error: 'Informe convênio, competência e pelo menos uma guia.' });
   }
-  const insurer = db.prepare('SELECT id, name, delivery_format AS deliveryFormat FROM insurers WHERE id = ? AND clinic_id = ?').get(insurerId, req.session.clinicId);
+  const insurer = db.prepare('SELECT id, name, delivery_format AS deliveryFormat, glosa_alert_rate AS glosaAlertRate FROM insurers WHERE id = ? AND clinic_id = ?').get(insurerId, req.session.clinicId);
   if (!insurer) return res.status(404).json({ error: 'Convênio não encontrado.' });
   const uniqueGuideIds = [...new Set(guideIds.map(String))];
   const placeholders = uniqueGuideIds.map(() => '?').join(',');
-  const guides = db.prepare(`SELECT id, insurer, competence, sessions_json FROM guides WHERE clinic_id = ? AND id IN (${placeholders})`).all(req.session.clinicId, ...uniqueGuideIds);
+  const guides = db.prepare(`SELECT id, insurer, competence, procedure, sessions_json FROM guides WHERE clinic_id = ? AND id IN (${placeholders})`).all(req.session.clinicId, ...uniqueGuideIds);
   if (guides.length !== uniqueGuideIds.length) return res.status(400).json({ error: 'Uma ou mais guias não pertencem à clínica.' });
   if (guides.some(guide => guide.insurer !== insurer.name || guideCompetence(guide) !== competence)) return res.status(400).json({ error: 'Todas as guias devem pertencer ao convênio e à competência do lote.' });
   const alreadyAssigned = db.prepare(`SELECT guide_id AS guideId FROM billing_batch_guides WHERE guide_id IN (${placeholders})`).all(...uniqueGuideIds);
   if (alreadyAssigned.length) return res.status(409).json({ error: `Guia já incluída em outro lote: ${alreadyAssigned.map(item => item.guideId).join(', ')}.` });
+  const reviewedRisks = currentBatchRisks(req.session.clinicId, insurer, guides);
+  if (reviewedRisks.length && !riskAcknowledged) return res.status(409).json({ error: 'Este lote possui riscos históricos. Revise os alertas e confirme novamente.', risks: reviewedRisks });
+  const riskReviewConfirmed = reviewedRisks.length > 0 && Boolean(riskAcknowledged);
   const year = competence.slice(0, 4);
   const lastId = db.prepare("SELECT id FROM billing_batches WHERE clinic_id = ? AND id LIKE ? ORDER BY id DESC LIMIT 1").get(req.session.clinicId, `L-${year}-%`)?.id;
   const nextNumber = Number(lastId?.split('-').pop() || 0) + 1;
   const id = `L-${year}-${String(nextNumber).padStart(4, '0')}`;
   try {
     db.transaction(() => {
-      db.prepare('INSERT INTO billing_batches (id, clinic_id, insurer_id, competence, delivery_format) VALUES (?, ?, ?, ?, ?)').run(id, req.session.clinicId, insurer.id, competence, insurer.deliveryFormat);
+      db.prepare('INSERT INTO billing_batches (id, clinic_id, insurer_id, competence, delivery_format, risk_reviewed_at, risk_reviewed_by, risk_review_summary) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(id, req.session.clinicId, insurer.id, competence, insurer.deliveryFormat, riskReviewConfirmed ? new Date().toISOString() : null, riskReviewConfirmed ? req.session.userId : null, JSON.stringify(riskReviewConfirmed ? reviewedRisks : []));
       const insertGuide = db.prepare('INSERT INTO billing_batch_guides (batch_id, guide_id) VALUES (?, ?)');
       uniqueGuideIds.forEach(guideId => insertGuide.run(id, guideId));
       db.prepare(`INSERT INTO billing_batch_status_history (id, clinic_id, batch_id, previous_status, new_status, changed_by)
         VALUES (?, ?, ?, NULL, 'draft', ?)`).run(crypto.randomUUID(), req.session.clinicId, id, req.session.userId);
+      if (riskReviewConfirmed) db.prepare(`INSERT INTO billing_batch_risk_reviews (id, clinic_id, batch_id, review_stage, risks_json, reviewed_by)
+        VALUES (?, ?, ?, 'creation', ?, ?)`).run(crypto.randomUUID(), req.session.clinicId, id, JSON.stringify(reviewedRisks), req.session.userId);
     })();
+    req.auditDetails = { guideCount: uniqueGuideIds.length, competence, riskAcknowledged: riskReviewConfirmed, reviewedRisks };
     res.status(201).json({ id });
   } catch (error) {
     res.status(409).json({ error: error.message.includes('UNIQUE') ? 'Já existe um lote para esse convênio e competência.' : error.message });
@@ -1890,6 +1933,9 @@ app.get('/api/batches/:id/audit-pdf', auth, requireRole('admin', 'faturamento'),
     billing_batches.xml_generated AS xmlGenerated, billing_batches.xml_valid AS xmlValid,
     billing_batches.xml_validation_errors AS xmlValidationErrors, billing_batches.tiss_version AS tissVersion,
     billing_batches.received_cents AS receivedCents, insurers.name AS insurer,
+    billing_batches.risk_reviewed_at AS riskReviewedAt,
+    billing_batches.risk_review_summary AS riskReviewSummary,
+    (SELECT users.name FROM users WHERE users.id = billing_batches.risk_reviewed_by) AS riskReviewedBy,
     (SELECT users.name FROM users WHERE users.id = billing_batches.sent_by) AS sentBy
     FROM billing_batches JOIN insurers ON insurers.id = billing_batches.insurer_id WHERE billing_batches.id = ? AND billing_batches.clinic_id = ?`).get(req.params.id, req.session.clinicId);
   if (!raw) return res.status(404).json({ error: 'Lote não encontrado.' });
@@ -1899,15 +1945,42 @@ app.get('/api/batches/:id/audit-pdf', auth, requireRole('admin', 'faturamento'),
   generateBatchAuditPDF(mapClinicSettings(settings, clinic), batchDetails({ ...raw, xmlGenerated: Boolean(raw.xmlGenerated) }), res);
 });
 
+app.post('/api/batches/:id/risk-review', auth, requireRole('admin', 'faturamento'), (req, res) => {
+  const batch = db.prepare(`SELECT billing_batches.id, billing_batches.status, insurers.id AS insurerId, insurers.name,
+    insurers.glosa_alert_rate AS glosaAlertRate FROM billing_batches
+    JOIN insurers ON insurers.id = billing_batches.insurer_id
+    WHERE billing_batches.id = ? AND billing_batches.clinic_id = ?`).get(req.params.id, req.session.clinicId);
+  if (!batch) return res.status(404).json({ error: 'Lote não encontrado.' });
+  if (!['draft', 'ready'].includes(batch.status)) return res.status(409).json({ error: 'Somente lotes em preparação podem receber uma nova pré-auditoria.' });
+  if (!req.body?.acknowledged) return res.status(400).json({ error: 'Confirme a revisão dos riscos atuais.' });
+  const selectedGuides = db.prepare(`SELECT guides.procedure FROM billing_batch_guides
+    JOIN guides ON guides.id = billing_batch_guides.guide_id WHERE billing_batch_guides.batch_id = ?`).all(batch.id);
+  const risks = currentBatchRisks(req.session.clinicId, { id: batch.insurerId, name: batch.name, glosaAlertRate: batch.glosaAlertRate }, selectedGuides);
+  if (!risks.length) return res.status(409).json({ error: 'O lote não possui riscos atuais que exijam confirmação.' });
+  const reviewedAt = new Date().toISOString();
+  db.transaction(() => {
+    db.prepare(`UPDATE billing_batches SET risk_reviewed_at = ?, risk_reviewed_by = ?, risk_review_summary = ?
+      WHERE id = ? AND clinic_id = ?`).run(reviewedAt, req.session.userId, JSON.stringify(risks), batch.id, req.session.clinicId);
+    db.prepare(`INSERT INTO billing_batch_risk_reviews (id, clinic_id, batch_id, review_stage, risks_json, reviewed_by, created_at)
+      VALUES (?, ?, ?, 'before-sending', ?, ?, ?)`).run(crypto.randomUUID(), req.session.clinicId, batch.id, JSON.stringify(risks), req.session.userId, reviewedAt);
+  })();
+  req.auditDetails = { reviewedRisks: risks, reviewMoment: 'before-sending' };
+  res.json({ riskReviewedAt: reviewedAt, risks });
+});
+
 app.patch('/api/batches/:id', auth, requireRole('admin', 'faturamento'), (req, res) => {
   const allowedStatuses = ['draft', 'ready', 'sent', 'processing', 'approved', 'error'];
   const status = allowedStatuses.includes(req.body.status) ? req.body.status : 'draft';
   const protocol = String(req.body.protocol || '').trim();
   const requestedPackageId = String(req.body.packageId || '').trim();
-  const batch = db.prepare(`SELECT id, status, delivery_format AS deliveryFormat, xml_generated AS xmlGenerated, xml_valid AS xmlValid,
+  const batch = db.prepare(`SELECT billing_batches.id, billing_batches.status, billing_batches.delivery_format AS deliveryFormat,
+    billing_batches.insurer_id AS insurerId, insurers.name AS insurerName, insurers.glosa_alert_rate AS glosaAlertRate,
+    billing_batches.xml_generated AS xmlGenerated, billing_batches.xml_valid AS xmlValid,
     xml_validation_errors AS xmlValidationErrors, expected_payment_date AS expectedPaymentDate, received_cents AS receivedCents,
-    received_at AS receivedAt, reconciliation_notes AS reconciliationNotes, sent_package_id AS sentPackageId
-    FROM billing_batches WHERE id = ? AND clinic_id = ?`).get(req.params.id, req.session.clinicId);
+    received_at AS receivedAt, reconciliation_notes AS reconciliationNotes, sent_package_id AS sentPackageId,
+    risk_reviewed_at AS riskReviewedAt, risk_review_summary AS riskReviewSummary
+    FROM billing_batches JOIN insurers ON insurers.id = billing_batches.insurer_id
+    WHERE billing_batches.id = ? AND billing_batches.clinic_id = ?`).get(req.params.id, req.session.clinicId);
   if (!batch) return res.status(404).json({ error: 'Lote não encontrado.' });
   let receivedCents;
   try { receivedCents = Object.hasOwn(req.body, 'receivedAmount') ? parseReceivedAmount(req.body.receivedAmount) : Number(batch.receivedCents || 0); } catch (error) { return res.status(400).json({ error: error.message }); }
@@ -1919,6 +1992,16 @@ app.patch('/api/batches/:id', auth, requireRole('admin', 'faturamento'), (req, r
   const readiness = batchDetails({ ...batch, clinicId: req.session.clinicId, xmlGenerated: Boolean(batch.xmlGenerated) });
   if (['ready', 'sent', 'processing', 'approved'].includes(status) && !readiness.readyForSending) return res.status(409).json({ error: 'Conclua os PDFs assinados e/ou gere o XML antes de liberar o lote.' });
   if (['sent', 'processing', 'approved'].includes(status) && !protocol) return res.status(400).json({ error: 'Informe o protocolo da operadora para esse status.' });
+  if (status === 'sent' && currentStatus !== 'sent') {
+    const selectedGuides = db.prepare(`SELECT guides.procedure FROM billing_batch_guides JOIN guides ON guides.id = billing_batch_guides.guide_id
+      WHERE billing_batch_guides.batch_id = ?`).all(batch.id);
+    const currentRisks = currentBatchRisks(req.session.clinicId, { id: batch.insurerId, name: batch.insurerName, glosaAlertRate: batch.glosaAlertRate }, selectedGuides);
+    let reviewedRisks = [];
+    try { reviewedRisks = JSON.parse(batch.riskReviewSummary || '[]'); } catch {}
+    if (currentRisks.length && !riskReviewIsCurrent(reviewedRisks, currentRisks, batch.riskReviewedAt)) {
+      return res.status(409).json({ error: 'Os riscos do lote mudaram desde a última revisão. Confirme a pré-auditoria atualizada antes do envio.', risks: currentRisks });
+    }
+  }
   let sentPackageId = batch.sentPackageId;
   if (status === 'sent' && currentStatus !== 'sent') {
     const selectedPackage = db.prepare('SELECT id FROM billing_delivery_packages WHERE id = ? AND batch_id = ? AND clinic_id = ?').get(requestedPackageId, batch.id, req.session.clinicId);

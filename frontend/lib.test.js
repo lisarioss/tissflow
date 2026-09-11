@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { nextSequentialId, timeToMinutes, hasScheduleConflictWith, escapeXml, findSessionOutsidePlanValidity, exceedsAuthorizedQuantity, findCidIncompatibility, filterGuides, filterPatients, filterPatientsByStatus, paginateItems, filterInsurers, filterFeedbacks, isActivePatient, planValidityAlertItems, consentAlertItems, clinicOnboardingChecklist, batchFollowupAlertItems, batchPaymentAlertItems, batchReceivablesSummary } = require('./lib.js');
+const { nextSequentialId, timeToMinutes, hasScheduleConflictWith, escapeXml, findSessionOutsidePlanValidity, exceedsAuthorizedQuantity, findCidIncompatibility, filterGuides, filterPatients, filterPatientsByStatus, paginateItems, filterInsurers, filterFeedbacks, isActivePatient, planValidityAlertItems, consentAlertItems, clinicOnboardingChecklist, batchFollowupAlertItems, batchPaymentAlertItems, batchPaymentTiming, batchPaymentAgeBucket, batchPaymentDueInfo, batchReceivablesSummary, receivablesToCsv, receivablesAging, glosaRecoverySummary, insurerFinancialPerformance, glosaCauseAnalysis, glosaPreventionAlertItems, guideBillingRisk, filterBatches, sortBatches, safeCsvCell, batchesToCsv, normalizeBatchPreferences, financeBatchShortcutFilters } = require('./lib.js');
 
 test('isActivePatient trata booleanos locais e inteiros vindos do SQLite', () => {
   assert.equal(isActivePatient({ active: true }), true);
@@ -313,6 +313,36 @@ test('batchPaymentAlertItems ignora lote quitado ou sem previsão', () => {
   assert.equal(batchPaymentAlertItems([{ ...paid, receivedCents: 0, expectedPaymentDate: null }], new Date('2026-09-20T12:00:00')).length, 0);
 });
 
+test('batchPaymentTiming classifica o prazo somente de lotes em aberto', () => {
+  const today = new Date('2026-09-20T12:00:00');
+  const base = { status: 'sent', totalValueCents: 10000, receivedCents: 0, reconciliationStatus: 'pending' };
+  assert.equal(batchPaymentTiming({ ...base, expectedPaymentDate: '2026-09-19' }, today), 'overdue');
+  assert.equal(batchPaymentTiming({ ...base, expectedPaymentDate: '2026-09-24' }, today), 'upcoming');
+  assert.equal(batchPaymentTiming({ ...base, expectedPaymentDate: '2026-10-10' }, today), 'scheduled');
+  assert.equal(batchPaymentTiming(base, today), 'unscheduled');
+  assert.equal(batchPaymentTiming({ ...base, reconciliationStatus: 'paid', receivedCents: 10000 }, today), 'inactive');
+});
+
+test('batchPaymentAgeBucket respeita as faixas de 30 e 60 dias', () => {
+  const today = new Date('2026-09-20T12:00:00');
+  const base = { status: 'sent', totalValueCents: 10000, receivedCents: 0, reconciliationStatus: 'pending' };
+  assert.equal(batchPaymentAgeBucket({ ...base, expectedPaymentDate: '2026-09-25' }, today), 'notDue');
+  assert.equal(batchPaymentAgeBucket({ ...base, expectedPaymentDate: '2026-08-21' }, today), 'overdue30');
+  assert.equal(batchPaymentAgeBucket({ ...base, expectedPaymentDate: '2026-07-22' }, today), 'overdue60');
+  assert.equal(batchPaymentAgeBucket({ ...base, expectedPaymentDate: '2026-07-01' }, today), 'overdueMore');
+  assert.equal(batchPaymentAgeBucket(base, today), 'unscheduled');
+});
+
+test('batchPaymentDueInfo descreve o prazo de recebimento do lote', () => {
+  const today = new Date('2026-09-20T12:00:00');
+  const base = { status: 'sent', totalValueCents: 10000, receivedCents: 0, reconciliationStatus: 'pending' };
+  assert.deepEqual(batchPaymentDueInfo({ ...base, expectedPaymentDate: '2026-09-15' }, today), { state: 'overdue', label: '5 dia(s) em atraso', days: -5 });
+  assert.deepEqual(batchPaymentDueInfo({ ...base, expectedPaymentDate: '2026-09-20' }, today), { state: 'upcoming', label: 'Previsto para hoje', days: 0 });
+  assert.deepEqual(batchPaymentDueInfo({ ...base, expectedPaymentDate: '2026-09-23' }, today), { state: 'upcoming', label: 'Previsto em 3 dia(s)', days: 3 });
+  assert.deepEqual(batchPaymentDueInfo(base, today), { state: 'unscheduled', label: 'Sem previsão', days: null });
+  assert.deepEqual(batchPaymentDueInfo({ ...base, reconciliationStatus: 'paid', receivedCents: 10000 }, today), { state: 'inactive', label: 'Quitado', days: null });
+});
+
 test('batchReceivablesSummary consolida saldos por vencimento', () => {
   const summary = batchReceivablesSummary([
     { id: 'L-1', status: 'approved', totalValueCents: 100000, receivedCents: 20000, expectedPaymentDate: '2026-09-10' },
@@ -325,4 +355,196 @@ test('batchReceivablesSummary consolida saldos por vencimento', () => {
   assert.equal(summary.upcomingCents, 50000);
   assert.equal(summary.partialCents, 80000);
   assert.equal(summary.items.length, 3);
+});
+
+test('receivablesToCsv exporta saldos e neutraliza fórmulas do Excel', () => {
+  const csv = receivablesToCsv([{
+    id: 'L-1', insurer: '=PLANO', competence: '2026-09', expectedPaymentDate: '2026-09-25',
+    days: -12, totalCents: 15050, receivedCents: 5000, pendingCents: 10050, state: 'partial'
+  }], { partial: 'Pagamento parcial' });
+  assert.match(csv, /"Lote";"Convênio";"Competência";"Previsão de pagamento";"Dias em atraso";"Faixa de atraso"/);
+  assert.match(csv, /"L-1";"'=PLANO";"2026-09";"2026-09-25";"12";"1 a 30 dias";"150,50";"50,00";"100,50";"Pagamento parcial"/);
+  const paidCsv = receivablesToCsv([{ id: 'L-2', pendingCents: 0, days: -90, state: 'paid' }], { paid: 'Quitado' });
+  assert.match(paidCsv, /"L-2";"";"";"";"";"Quitado"/);
+});
+
+test('receivablesAging distribui somente saldos em aberto por faixa de atraso', () => {
+  const aging = receivablesAging([
+    { pendingCents: 10000, days: 4 },
+    { pendingCents: 20000, days: -10 },
+    { pendingCents: 30000, days: -45 },
+    { pendingCents: 40000, days: -90 },
+    { pendingCents: 50000, days: null },
+    { pendingCents: 0, days: -120 }
+  ]);
+  assert.deepEqual(aging, {
+    notDue: { count: 1, cents: 10000 }, overdue30: { count: 1, cents: 20000 },
+    overdue60: { count: 1, cents: 30000 }, overdueMore: { count: 1, cents: 40000 },
+    unscheduled: { count: 1, cents: 50000 }
+  });
+});
+
+test('glosaRecoverySummary separa contestação, crédito aguardado, recuperação e perda', () => {
+  const summary = glosaRecoverySummary([
+    { status: 'aberta', amountCents: 10000 },
+    { status: 'recurso_enviado', amountCents: 20000 },
+    { status: 'revertida', amountCents: 30000, recoveredCents: null },
+    { status: 'revertida', amountCents: 40000, recoveredCents: 35000 },
+    { status: 'mantida', amountCents: 50000 }
+  ]);
+  assert.deepEqual(summary, { totalCents: 150000, contestedCents: 30000, awaitingCreditCents: 30000, recoveredCents: 35000, lossCents: 55000 });
+});
+
+test('insurerFinancialPerformance compara faturamento e glosas por convênio', () => {
+  const rows = insurerFinancialPerformance([
+    { insurer: 'Plano A', status: 'approved', totalValueCents: 100000, receivedCents: 80000 },
+    { insurer: 'Plano B', status: 'sent', totalValueCents: 200000, receivedCents: 100000 }
+  ], [
+    { guideId: 'G-1', status: 'revertida', amountCents: 20000, recoveredCents: 15000 },
+    { guideId: 'G-2', status: 'mantida', amountCents: 10000, recoveredCents: null }
+  ], [{ id: 'G-1', insurer: 'Plano A' }, { id: 'G-2', insurer: 'Plano B' }]);
+  assert.equal(rows[0].insurer, 'Plano A');
+  assert.equal(rows[0].glosaRate, 20);
+  assert.equal(rows[0].recoveredCents, 15000);
+  assert.equal(rows[0].lossCents, 5000);
+  assert.equal(rows[1].glosaRate, 5);
+  assert.equal(rows[1].lossCents, 10000);
+});
+
+test('glosaCauseAnalysis ordena causas e procedimentos pelo impacto financeiro', () => {
+  const analysis = glosaCauseAnalysis([
+    { guideId: 'G-1', code: 'GL02', reason: 'Sem autorização', status: 'mantida', amountCents: 20000 },
+    { guideId: 'G-2', code: 'GL02', reason: 'Sem autorização', status: 'revertida', amountCents: 10000, recoveredCents: 10000 },
+    { guideId: 'G-3', code: 'GL03', reason: 'Valor divergente', status: 'mantida', amountCents: 5000 }
+  ], [{ id: 'G-1', procedure: 'Terapia ABA' }, { id: 'G-2', procedure: 'Terapia ABA' }, { id: 'G-3', procedure: 'Consulta' }]);
+  assert.equal(analysis.byReason[0].label, 'GL02 · Sem autorização');
+  assert.equal(analysis.byReason[0].count, 2);
+  assert.equal(analysis.byReason[0].amountCents, 30000);
+  assert.equal(analysis.byReason[0].lossCents, 20000);
+  assert.equal(analysis.byProcedure[0].label, 'Terapia ABA');
+});
+
+test('glosaPreventionAlertItems sinaliza taxa alta e padrões recorrentes', () => {
+  const alerts = glosaPreventionAlertItems([{ insurer: 'Plano A', status: 'approved', totalValueCents: 100000 }], [
+    { guideId: 'G-1', code: 'GL02', reason: 'Sem autorização', amountCents: 12000, status: 'aberta' },
+    { guideId: 'G-2', code: 'GL02', reason: 'Sem autorização', amountCents: 10000, status: 'mantida' }
+  ], [{ id: 'G-1', insurer: 'Plano A', procedure: 'Terapia ABA' }, { id: 'G-2', insurer: 'Plano A', procedure: 'Terapia ABA' }]);
+  assert.equal(alerts.filter(item => item.view === 'reports').length, 3);
+  assert.equal(alerts[0].level, 'critical');
+  assert.match(alerts[1].title, /recorrente/);
+});
+
+test('glosaPreventionAlertItems não alerta taxa abaixo do limite nem ocorrência isolada', () => {
+  const alerts = glosaPreventionAlertItems([{ insurer: 'Plano A', status: 'approved', totalValueCents: 100000 }], [
+    { guideId: 'G-1', code: 'GL03', reason: 'Valor', amountCents: 5000, status: 'aberta' }
+  ], [{ id: 'G-1', insurer: 'Plano A', procedure: 'Consulta' }]);
+  assert.equal(alerts.length, 0);
+});
+
+test('glosaPreventionAlertItems respeita o limite específico do convênio', () => {
+  const batches = [{ insurer: 'Plano rigoroso', status: 'approved', totalValueCents: 100000 }];
+  const glosas = [{ guideId: 'G-1', amountCents: 7000, status: 'aberta' }];
+  const guides = [{ id: 'G-1', insurer: 'Plano rigoroso', procedure: 'Consulta' }];
+  assert.equal(glosaPreventionAlertItems(batches, glosas, guides).length, 0);
+  assert.equal(glosaPreventionAlertItems(batches, glosas, guides, [{ name: 'Plano rigoroso', glosaAlertRate: 5 }]).length, 1);
+  assert.match(glosaPreventionAlertItems(batches, glosas, guides, [{ name: 'Plano rigoroso', glosaAlertRate: 5 }])[0].detail, /5%/);
+});
+
+test('guideBillingRisk avisa antes do lote sobre convênio e procedimento recorrente', () => {
+  const guide = { id: 'G-3', insurer: 'Plano A', procedure: 'Terapia ABA' };
+  const guides = [{ id: 'G-1', insurer: 'Plano A', procedure: 'Terapia ABA' }, { id: 'G-2', insurer: 'Plano A', procedure: 'Terapia ABA' }, guide];
+  const risks = guideBillingRisk(guide, [{ insurer: 'Plano A', status: 'approved', totalValueCents: 100000 }], [{ guideId: 'G-1', amountCents: 8000 }, { guideId: 'G-2', amountCents: 7000 }], guides, [{ name: 'Plano A', glosaAlertRate: 10 }]);
+  assert.equal(risks.length, 2);
+  assert.match(risks[0], /15%/);
+  assert.match(risks[1], /2 glosas/);
+});
+
+test('guideBillingRisk não bloqueia guia sem histórico de risco', () => {
+  assert.deepEqual(guideBillingRisk({ id: 'G-1', insurer: 'Plano B', procedure: 'Consulta' }, [], [], [], []), []);
+});
+
+test('filterBatches combina competência, convênio, status e risco pendente', () => {
+  const batches = [
+    { id: 'L-1', competence: '2026-08', insurerId: 'I-1', insurer: 'Unimed', protocol: 'PROTO-123', status: 'draft', reconciliationStatus: 'pending', riskReviewRequired: true, guides: [{ id: 'G-1', patient: 'Ana Lima', procedure: 'Psicoterapia' }] },
+    { id: 'L-2', competence: '2026-08', insurerId: 'I-2', insurer: 'Amil', status: 'sent', reconciliationStatus: 'partial', expectedPaymentDate: '2026-09-24', totalValueCents: 10000, receivedCents: 5000, riskReviewRequired: false },
+    { id: 'L-3', competence: '2026-09', insurerId: 'I-1', status: 'draft', reconciliationStatus: 'paid', riskReviewRequired: false }
+  ];
+  assert.deepEqual(filterBatches(batches, { competence: '2026-08' }).map(item => item.id), ['L-1', 'L-2']);
+  assert.deepEqual(filterBatches(batches, { insurerId: 'I-1', status: 'draft', riskPending: true }).map(item => item.id), ['L-1']);
+  assert.deepEqual(filterBatches(batches, { reconciliationStatus: 'partial' }).map(item => item.id), ['L-2']);
+  assert.deepEqual(filterBatches(batches, { paymentTiming: 'upcoming', today: new Date('2026-09-20T12:00:00') }).map(item => item.id), ['L-2']);
+  assert.equal(filterBatches(batches).length, 3);
+  assert.deepEqual(filterBatches(batches, { query: 'ana lima' }).map(item => item.id), ['L-1']);
+  assert.deepEqual(filterBatches(batches, { query: 'proto-123' }).map(item => item.id), ['L-1']);
+  assert.deepEqual(filterBatches(batches, { query: 'psicoterapia', competence: '2026-08' }).map(item => item.id), ['L-1']);
+});
+
+test('sortBatches ordena por data, valor e risco sem alterar a lista original', () => {
+  const batches = [
+    { id: 'L-1', createdAt: '2026-08-01T10:00:00Z', totalValueCents: 10000, riskReviewRequired: false },
+    { id: 'L-2', createdAt: '2026-09-01T10:00:00Z', totalValueCents: 5000, riskReviewRequired: true },
+    { id: 'L-3', createdAt: '2026-07-01T10:00:00Z', totalValueCents: 20000, riskReviewRequired: false }
+  ];
+  assert.deepEqual(sortBatches(batches, 'newest').map(item => item.id), ['L-2', 'L-1', 'L-3']);
+  assert.deepEqual(sortBatches(batches, 'oldest').map(item => item.id), ['L-3', 'L-1', 'L-2']);
+  assert.deepEqual(sortBatches(batches, 'highest-value').map(item => item.id), ['L-3', 'L-1', 'L-2']);
+  assert.deepEqual(sortBatches(batches, 'risk-first').map(item => item.id), ['L-2', 'L-1', 'L-3']);
+  assert.deepEqual(batches.map(item => item.id), ['L-1', 'L-2', 'L-3']);
+});
+
+test('sortBatches ordena cobranças pelo maior atraso e deixa quitados no final', () => {
+  const batches = [
+    { id: 'L-RECENTE', status: 'sent', reconciliationStatus: 'pending', totalValueCents: 10000, expectedPaymentDate: '2026-09-10' },
+    { id: 'L-ANTIGO', status: 'approved', reconciliationStatus: 'partial', totalValueCents: 20000, receivedCents: 5000, expectedPaymentDate: '2026-07-01' },
+    { id: 'L-QUITADO', status: 'approved', reconciliationStatus: 'paid', totalValueCents: 10000, receivedCents: 10000, expectedPaymentDate: '2026-06-01' },
+    { id: 'L-SEM-DATA', status: 'sent', reconciliationStatus: 'pending', totalValueCents: 10000 }
+  ];
+  assert.deepEqual(sortBatches(batches, 'most-overdue').map(item => item.id), ['L-ANTIGO', 'L-RECENTE', 'L-QUITADO', 'L-SEM-DATA']);
+});
+
+test('sortBatches ordena pelo saldo restante após pagamentos parciais', () => {
+  const batches = [
+    { id: 'L-ALTO-QUASE-PAGO', totalValueCents: 100000, receivedCents: 95000, createdAt: '2026-09-03T10:00:00Z' },
+    { id: 'L-MAIOR-SALDO', totalValueCents: 60000, receivedCents: 10000, createdAt: '2026-09-01T10:00:00Z' },
+    { id: 'L-MEDIO', totalValueCents: 30000, receivedCents: 0, createdAt: '2026-09-02T10:00:00Z' }
+  ];
+  assert.deepEqual(sortBatches(batches, 'highest-balance').map(item => item.id), ['L-MAIOR-SALDO', 'L-MEDIO', 'L-ALTO-QUASE-PAGO']);
+});
+
+test('batchesToCsv exporta valores e neutraliza fórmulas para o Excel', () => {
+  assert.equal(safeCsvCell('=HYPERLINK("x")'), '"\'=HYPERLINK(""x"")"');
+  const csv = batchesToCsv([{ id: 'L-1', insurer: 'Unimed', competence: '2026-09', status: 'sent', protocol: '+123', guideCount: 2, totalValueCents: 12345, receivedCents: 10000, reconciliationStatus: 'partial', riskReviewRequired: true }], { sent: 'Enviado' });
+  assert.match(csv, /"L-1";"Unimed";"2026-09";"Enviado";"'\+123"/);
+  assert.match(csv, /"123,45";"100,00";"partial";"Sim"/);
+});
+
+test('normalizeBatchPreferences recupera filtros e ordenação válidos', () => {
+  const preferences = normalizeBatchPreferences(JSON.stringify({
+    filters: { query: 'Helena', competence: '2026-08', insurerId: 'INS-001', status: 'sent', reconciliationStatus: 'partial', paymentTiming: 'upcoming', agingBucket: 'overdue30', riskPending: true },
+    sortOrder: 'risk-first'
+  }));
+  assert.deepEqual(preferences, {
+    filters: { query: 'Helena', competence: '2026-08', insurerId: 'INS-001', status: 'sent', reconciliationStatus: 'partial', paymentTiming: 'upcoming', agingBucket: 'overdue30', riskPending: true },
+    sortOrder: 'risk-first'
+  });
+});
+
+test('normalizeBatchPreferences usa valores seguros para preferência inválida', () => {
+  assert.deepEqual(normalizeBatchPreferences('{conteudo-invalido'), {
+    filters: { query: '', competence: '', insurerId: '', status: '', reconciliationStatus: '', paymentTiming: '', agingBucket: '', riskPending: false },
+    sortOrder: 'newest'
+  });
+  assert.deepEqual(normalizeBatchPreferences({ filters: { competence: 'agosto', riskPending: 'sim' }, sortOrder: 'desconhecida' }), {
+    filters: { query: '', competence: '', insurerId: '', status: '', reconciliationStatus: '', paymentTiming: '', agingBucket: '', riskPending: false },
+    sortOrder: 'newest'
+  });
+});
+
+test('financeBatchShortcutFilters abre uma consulta financeira limpa', () => {
+  assert.deepEqual(financeBatchShortcutFilters({ paymentTiming: 'overdue' }), {
+    query: '', competence: '', insurerId: '', status: '', reconciliationStatus: '', paymentTiming: 'overdue', agingBucket: '', riskPending: false
+  });
+  assert.deepEqual(financeBatchShortcutFilters({ reconciliationStatus: 'partial' }), {
+    query: '', competence: '', insurerId: '', status: '', reconciliationStatus: 'partial', paymentTiming: '', agingBucket: '', riskPending: false
+  });
 });

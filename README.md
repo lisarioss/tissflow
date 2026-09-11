@@ -77,6 +77,7 @@ Protótipo de portfólio para operação de faturamento clínico. Demonstra o ci
 - **Agenda compartilhada**: horários persistidos no servidor, checagem de conflitos, recorrência semanal de até 24 semanas e controle de confirmação, presença, falta e cancelamento. A presença consome uma sessão da autorização válida e libera o feedback já pré-preenchido.
 - **Busca/filtro** nas listagens de guias, pacientes, convênios e feedbacks.
 - **Relatórios**: distribuição de guias por status (incluindo em recurso), valor pendente/recebido e valor em glosa aberta.
+- **Produção assistencial**: consolida quantidade de atendimentos, guias e valores por profissional e paciente, respeitando a competência selecionada, e exporta cada sessão em CSV para conferência e repasse.
 - **Exportação para Excel**: gera relatórios CSV de guias, financeiro, glosas e autorizações, com filtro por competência, isolamento por clínica e registro de download na auditoria.
 - **Modo somente-visual**: guias, agenda, pacientes, convênios, feedbacks e notas fiscais funcionam offline via `localStorage` (ver limitações abaixo).
 - **PDF da pasta da guia**: gera um arquivo A4 com a capa de atendimentos e a guia SP/SADT na página seguinte. A capa usa o timbrado, os responsáveis e os profissionais cadastrados em Configurações.

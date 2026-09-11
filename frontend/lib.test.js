@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { nextSequentialId, timeToMinutes, hasScheduleConflictWith, escapeXml, findSessionOutsidePlanValidity, exceedsAuthorizedQuantity, findCidIncompatibility, filterGuides, filterPatients, filterPatientsByStatus, paginateItems, filterInsurers, filterFeedbacks, isActivePatient, planValidityAlertItems, consentAlertItems, clinicOnboardingChecklist, batchFollowupAlertItems, batchPaymentAlertItems, batchPaymentTiming, batchPaymentAgeBucket, batchPaymentDueInfo, batchReceivablesSummary, receivablesToCsv, receivablesAging, glosaRecoverySummary, insurerFinancialPerformance, glosaCauseAnalysis, glosaPreventionAlertItems, guideBillingRisk, filterBatches, sortBatches, safeCsvCell, batchesToCsv, normalizeBatchPreferences, financeBatchShortcutFilters } = require('./lib.js');
+const { nextSequentialId, timeToMinutes, hasScheduleConflictWith, escapeXml, findSessionOutsidePlanValidity, exceedsAuthorizedQuantity, findCidIncompatibility, filterGuides, filterPatients, filterPatientsByStatus, paginateItems, filterInsurers, filterFeedbacks, isActivePatient, planValidityAlertItems, consentAlertItems, clinicOnboardingChecklist, batchFollowupAlertItems, batchPaymentAlertItems, batchPaymentTiming, batchPaymentAgeBucket, batchPaymentDueInfo, batchReceivablesSummary, receivablesToCsv, receivablesAging, glosaRecoverySummary, insurerFinancialPerformance, glosaCauseAnalysis, glosaPreventionAlertItems, guideBillingRisk, filterBatches, sortBatches, safeCsvCell, batchesToCsv, normalizeBatchPreferences, financeBatchShortcutFilters, guideProductionSummary } = require('./lib.js');
 
 test('isActivePatient trata booleanos locais e inteiros vindos do SQLite', () => {
   assert.equal(isActivePatient({ active: true }), true);
@@ -547,4 +547,17 @@ test('financeBatchShortcutFilters abre uma consulta financeira limpa', () => {
   assert.deepEqual(financeBatchShortcutFilters({ reconciliationStatus: 'partial' }), {
     query: '', competence: '', insurerId: '', status: '', reconciliationStatus: 'partial', paymentTiming: '', agingBucket: '', riskPending: false
   });
+});
+
+test('guideProductionSummary consolida sessões por profissional e paciente', () => {
+  const summary = guideProductionSummary([
+    { id: 'G-1', patient: 'Ana', professional: 'Dra. Lia', quantity: 2, unitValueCents: 10000, valueCents: 20000, sessions: [{ date: '2026-09-01', professional: 'Dra. Lia' }, { date: '2026-09-08', professional: 'Dra. Bia' }] },
+    { id: 'G-2', patient: 'Ana', professional: 'Dra. Lia', quantity: 1, unitValueCents: 15000, valueCents: 15000, sessions: [{ date: '2026-09-02' }] },
+    { id: 'G-3', patient: 'Caio', professional: '', quantity: 1, valueCents: 9000, sessions: [] }
+  ]);
+  assert.equal(summary.guides, 3);
+  assert.equal(summary.sessions, 4);
+  assert.equal(summary.valueCents, 44000);
+  assert.deepEqual(summary.byProfessional.map(item => [item.label, item.sessions, item.guides, item.valueCents]), [['Dra. Lia', 2, 2, 25000], ['Dra. Bia', 1, 1, 10000], ['Não informado', 1, 1, 9000]]);
+  assert.deepEqual(summary.byPatient.map(item => [item.label, item.sessions, item.guides]), [['Ana', 3, 2], ['Caio', 1, 1]]);
 });

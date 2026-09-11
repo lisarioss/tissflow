@@ -141,6 +141,15 @@
 .report-payment-row:last-child { border-bottom:0; }
 .report-payment-row strong { font-size:11px; }
 .report-payment-row time { color:var(--muted); font-size:10px; }
+.production-grid { margin-top:18px; }
+.production-ranking { display:grid; gap:10px; }
+.production-ranking-row { display:grid; grid-template-columns:30px minmax(0,1fr) auto; align-items:center; gap:12px; padding:11px 0; border-bottom:1px solid var(--line); }
+.production-ranking-row:last-child { border-bottom:0; }
+.production-ranking-row div { min-width:0; }
+.production-ranking-row strong,.production-ranking-row small { display:block; }
+.production-ranking-row small { margin-top:3px; color:var(--muted); }
+.production-ranking-row > b { color:var(--green-dark); font-size:11px; text-align:right; }
+.production-ranking-position { display:grid; place-items:center; width:28px; height:28px; border-radius:8px; background:var(--mint); color:var(--green-dark); font-weight:800; }
 .guide-plan-header { display:flex; align-items:center; gap:13px; padding:16px 18px; margin:-24px -24px 24px; border-bottom:1px solid var(--line); background:#f7faf8; }
 .plan-logo { min-width:112px; max-width:180px; padding:10px 12px; border-radius:6px; background:var(--green); color:white; text-align:center; font-size:12px; font-weight:800; letter-spacing:.4px; }
 .plan-logo img { display:block; width:150px; height:50px; object-fit:contain; border-radius:5px; }

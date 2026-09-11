@@ -473,8 +473,29 @@ function financeBatchShortcutFilters({ paymentTiming = '', reconciliationStatus 
   return { query: '', competence: '', insurerId: '', status: '', reconciliationStatus, paymentTiming, agingBucket: '', riskPending: false };
 }
 
+function guideProductionSummary(guides = []) {
+  const group = key => {
+    const items = new Map();
+    for (const guide of guides || []) {
+      const sessions = Array.isArray(guide.sessions) && guide.sessions.length ? guide.sessions : Array.from({ length: Math.max(1, Number(guide.quantity || 1)) }, () => ({}));
+      const unitValueCents = Number(guide.unitValueCents || 0) || Math.round(Number(guide.valueCents || 0) / sessions.length);
+      for (const session of sessions) {
+        const label = String(key === 'professional' ? (session.professional || guide.professional || 'Não informado') : (guide.patient || 'Não informado')).trim() || 'Não informado';
+        const current = items.get(label) || { label, sessions: 0, guideIds: new Set(), valueCents: 0 };
+        current.sessions += 1;
+        current.guideIds.add(guide.id);
+        current.valueCents += unitValueCents;
+        items.set(label, current);
+      }
+    }
+    return [...items.values()].map(item => ({ ...item, guides: item.guideIds.size, guideIds: undefined })).sort((first, second) => second.sessions - first.sessions || second.valueCents - first.valueCents || first.label.localeCompare(second.label, 'pt-BR'));
+  };
+  const sessions = (guides || []).reduce((sum, guide) => sum + (Array.isArray(guide.sessions) && guide.sessions.length ? guide.sessions.length : Math.max(1, Number(guide.quantity || 1))), 0);
+  return { guides: (guides || []).length, sessions, valueCents: (guides || []).reduce((sum, guide) => sum + Number(guide.valueCents || 0), 0), byProfessional: group('professional'), byPatient: group('patient') };
+}
+
 // Disponibiliza as funções tanto para <script> no navegador (globais em
 // `window`) quanto para `require()` em testes Node — sem precisar de bundler.
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { nextSequentialId, timeToMinutes, hasScheduleConflictWith, escapeXml, findSessionOutsidePlanValidity, exceedsAuthorizedQuantity, findCidIncompatibility, filterGuides, filterPatients, filterPatientsByStatus, paginateItems, filterInsurers, filterFeedbacks, isActivePatient, planValidityAlertItems, consentAlertItems, clinicOnboardingChecklist, batchFollowupAlertItems, batchPaymentAlertItems, batchPaymentTiming, batchPaymentAgeBucket, batchPaymentDueInfo, batchReceivablesSummary, receivablesToCsv, receivablesAging, glosaRecoverySummary, insurerFinancialPerformance, glosaCauseAnalysis, glosaPreventionAlertItems, guideBillingRisk, filterBatches, sortBatches, safeCsvCell, batchesToCsv, normalizeBatchPreferences, financeBatchShortcutFilters };
+  module.exports = { nextSequentialId, timeToMinutes, hasScheduleConflictWith, escapeXml, findSessionOutsidePlanValidity, exceedsAuthorizedQuantity, findCidIncompatibility, filterGuides, filterPatients, filterPatientsByStatus, paginateItems, filterInsurers, filterFeedbacks, isActivePatient, planValidityAlertItems, consentAlertItems, clinicOnboardingChecklist, batchFollowupAlertItems, batchPaymentAlertItems, batchPaymentTiming, batchPaymentAgeBucket, batchPaymentDueInfo, batchReceivablesSummary, receivablesToCsv, receivablesAging, glosaRecoverySummary, insurerFinancialPerformance, glosaCauseAnalysis, glosaPreventionAlertItems, guideBillingRisk, filterBatches, sortBatches, safeCsvCell, batchesToCsv, normalizeBatchPreferences, financeBatchShortcutFilters, guideProductionSummary };
 }

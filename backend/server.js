@@ -898,7 +898,11 @@ app.get('/api/backup/recovery-points/:name', auth, requireRole('admin'), (req, r
   res.download(filePath, name);
 });
 
-function csvCell(value) { return `"${String(value ?? '').replace(/"/g, '""')}"`; }
+function csvCell(value) {
+  let text = String(value ?? '');
+  if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
+  return `"${text.replace(/"/g, '""')}"`;
+}
 function sendCsvReport(req, res, name, headers, rows) {
   const csv = `\uFEFF${headers.map(csvCell).join(';')}\r\n${rows.map(row => row.map(csvCell).join(';')).join('\r\n')}`;
   recordAudit(req, 'download', 'reports', name, { document: 'csv-report', competence: req.query.competence || 'all' });
@@ -917,6 +921,16 @@ app.get('/api/reports/:type.csv', auth, requireRole('admin', 'faturamento'), (re
   if (req.params.type === 'guides') {
     const rows = db.prepare(`SELECT id, patient, insurer, competence, service_code, procedure, quantity, value_cents, status, created_at FROM guides WHERE clinic_id = ?${suffix} ORDER BY created_at DESC`).all(...params);
     return sendCsvReport(req, res, 'guias', ['Guia', 'Paciente', 'Convênio', 'Competência', 'Código TUSS', 'Procedimento', 'Quantidade', 'Valor', 'Status', 'Criada em'], rows.map(row => [row.id, row.patient, row.insurer, row.competence, row.service_code, row.procedure, row.quantity, (row.value_cents / 100).toFixed(2).replace('.', ','), row.status, row.created_at]));
+  }
+  if (req.params.type === 'production') {
+    const rows = db.prepare(`SELECT id, patient, insurer, competence, service_code, procedure, professional, quantity, unit_value_cents, value_cents, sessions_json, status FROM guides WHERE clinic_id = ?${suffix} ORDER BY competence DESC, patient, id`).all(...params);
+    const productionRows = rows.flatMap(row => {
+      const sessions = parseJsonArray(row.sessions_json);
+      const items = sessions.length ? sessions : Array.from({ length: Math.max(1, Number(row.quantity || 1)) }, () => ({}));
+      const unitValueCents = Number(row.unit_value_cents || 0) || Math.round(Number(row.value_cents || 0) / items.length);
+      return items.map((session, index) => [row.competence, row.id, row.patient, row.insurer, session.date || '', session.start || '', session.end || '', session.professional || row.professional || '', row.service_code, session.procedure || row.procedure, index + 1, (unitValueCents / 100).toFixed(2).replace('.', ','), row.status]);
+    });
+    return sendCsvReport(req, res, 'producao', ['Competência', 'Guia', 'Paciente', 'Convênio', 'Data', 'Início', 'Fim', 'Profissional', 'Código TUSS', 'Procedimento', 'Sessão', 'Valor unitário', 'Status da guia'], productionRows);
   }
   if (req.params.type === 'invoices') {
     const rows = db.prepare(`SELECT id, guide_id, provider, description, amount_cents, expected_date, status, created_at FROM invoices WHERE clinic_id = ?${competence ? " AND substr(expected_date, 1, 7) = ?" : ''} ORDER BY expected_date DESC`).all(...params);
